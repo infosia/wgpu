@@ -296,6 +296,45 @@ impl Display for TypeContext<'_> {
                 arrayed,
                 class,
             } => {
+                // tiled-fork: begin arm (ImageClass::Subpass type emission)
+                // Subpass inputs are not represented as MSL texture types: in
+                // Metal both subpass-input reads and framebuffer-fetch reads
+                // come from a fragment-stage argument declared with
+                // `[[color(N)]]`, whose type is the underlying scalar/vector.
+                if class.is_subpass_input() {
+                    match class {
+                        crate::ImageClass::Subpass {
+                            aspect: crate::SubpassAspect::Color { kind },
+                            ..
+                        } => {
+                            put_numeric_type(
+                                out,
+                                crate::Scalar { kind, width: 4 },
+                                &[crate::VectorSize::Quad],
+                            )?;
+                        }
+                        crate::ImageClass::Subpass {
+                            aspect: crate::SubpassAspect::Depth,
+                            ..
+                        } => {
+                            put_numeric_type(out, crate::Scalar::F32, &[])?;
+                        }
+                        crate::ImageClass::Subpass {
+                            aspect: crate::SubpassAspect::Stencil,
+                            ..
+                        } => {
+                            put_numeric_type(out, crate::Scalar::U32, &[])?;
+                        }
+                        _ => {
+                            // SubpassAspect is #[non_exhaustive]; a future
+                            // variant added to the IR enum needs explicit
+                            // MSL handling. Fail loudly rather than panic.
+                            return Err(FmtError);
+                        }
+                    }
+                    return Ok(());
+                }
+                // tiled-fork: end arm (ImageClass::Subpass type emission)
                 let dim_str = match dim {
                     crate::ImageDimension::D1 => "1d",
                     crate::ImageDimension::D2 => "2d",
@@ -324,12 +363,14 @@ impl Display for TypeContext<'_> {
                         };
                         ("depth", msaa_str, scalar, access)
                     }
-                    // tiled-fork: begin arm (ImageClass::Subpass)
-                    #[allow(clippy::todo)]
-                    crate::ImageClass::Subpass { .. } => {
-                        todo!("Phase 6b: subpass-input image emission for the MSL backend")
-                    }
-                    // tiled-fork: end arm (ImageClass::Subpass)
+                    // tiled-fork: begin arm (ImageClass::Subpass unreachable)
+                    // The early-return above handles every Subpass case.
+                    // This arm exists only so the outer match is exhaustive.
+                    // Per CLAUDE.md (no unreachable!() in library code) we
+                    // return a fmt error rather than panic if control ever
+                    // reaches here.
+                    crate::ImageClass::Subpass { .. } => return Err(FmtError),
+                    // tiled-fork: end arm (ImageClass::Subpass unreachable)
                     crate::ImageClass::Storage { format, .. } => {
                         let access = if self
                             .access
@@ -405,6 +446,25 @@ impl TypedGlobalVariable<'_> {
     fn try_fmt<W: Write>(&self, out: &mut W) -> BackendResult {
         let var = &self.module.global_variables[self.handle];
         let name = &self.names[&NameKey::GlobalVariable(self.handle)];
+
+        // tiled-fork: begin global subpass-input rejection
+        // Subpass-input globals (`var s: subpass_input<T>;`) should be lifted
+        // to a fragment-stage `[[color(N)]]` argument by an Options mapping
+        // that Phase 6d does not yet wire (see Phase 6d Phase Review C2).
+        // Until that's plumbed, refuse to emit them rather than producing
+        // invalid MSL like `metal::float4 s [[texture(0)]]`.
+        if let crate::TypeInner::Image { class, .. } = self.module.types[var.ty].inner {
+            if class.is_subpass_input() {
+                return Err(Error::FeatureNotImplemented(
+                    "subpass-input globals on MSL: Phase 6d does not yet lift these \
+                     to [[color(N)]] fragment arguments. Use the entry-point \
+                     `@color(N)` framebuffer-fetch path instead, or wait for the \
+                     follow-up plumbing."
+                        .into(),
+                ));
+            }
+        }
+        // tiled-fork: end global subpass-input rejection
 
         let storage_access = match var.space {
             crate::AddressSpace::Storage { access } => access,
@@ -1401,6 +1461,18 @@ impl<W: Write> Writer<W> {
         mut address: TexelAddress,
         context: &ExpressionContext,
     ) -> BackendResult {
+        // tiled-fork: begin guard (subpass-input rejection)
+        // Subpass-input images must be read with `Expression::SubpassLoad`,
+        // never with `ImageLoad`; reject the path explicitly so we don't emit
+        // a `texture::read` against an attribute-typed argument.
+        if let crate::TypeInner::Image { class, .. } = *context.resolve_type(image) {
+            if class.is_subpass_input() {
+                return Err(Error::GenericValidation(
+                    "subpass input image used with ImageLoad".into(),
+                ));
+            }
+        }
+        // tiled-fork: end guard (subpass-input rejection)
         if let crate::TypeInner::Image {
             class: crate::ImageClass::External,
             ..
@@ -1445,6 +1517,58 @@ impl<W: Write> Writer<W> {
 
         Ok(())
     }
+
+    // tiled-fork: begin helper (put_subpass_load)
+    /// Emit a subpass-input read.
+    ///
+    /// In MSL there is no dedicated subpass-input texture type: the global is
+    /// surfaced as a fragment-stage argument with `[[color(N)]]`. The "load"
+    /// is therefore a direct read of the argument's name, with no
+    /// `texture::read` call.
+    ///
+    /// MSAA subpass inputs (`subpass_input_multisampled`) require sample-rate
+    /// shading and per-sample reads; MSL exposes that via `[[sample_id]]`
+    /// fragment input, which Phase 6d does not yet wire through. Reject for
+    /// now rather than silently drop the user's `sample_index` expression.
+    fn put_subpass_load(
+        &mut self,
+        image: Handle<crate::Expression>,
+        sample_index: Option<Handle<crate::Expression>>,
+        context: &ExpressionContext,
+    ) -> BackendResult {
+        let class = match *context.resolve_type(image) {
+            crate::TypeInner::Image { class, .. } => class,
+            _ => {
+                return Err(Error::GenericValidation(
+                    "subpass load image type".into(),
+                ))
+            }
+        };
+        if !class.is_subpass_input() {
+            return Err(Error::GenericValidation(
+                "non-subpass image used with SubpassLoad".into(),
+            ));
+        }
+        match (class.is_multisampled(), sample_index) {
+            (false, None) => {}
+            (false, Some(_)) => {
+                return Err(Error::GenericValidation(
+                    "non-MSAA subpass input must not carry a sample_index operand"
+                        .into(),
+                ));
+            }
+            (true, _) => {
+                return Err(Error::FeatureNotImplemented(
+                    "MSAA subpass-input loads on MSL (sample-rate shading via \
+                     [[sample_id]] not yet wired)"
+                        .into(),
+                ));
+            }
+        }
+        self.put_expression(image, context, false)?;
+        Ok(())
+    }
+    // tiled-fork: end helper (put_subpass_load)
 
     fn put_unchecked_image_load(
         &mut self,
@@ -2938,9 +3062,11 @@ impl<W: Write> Writer<W> {
                 write!(self.out, ")")?;
             }
             // tiled-fork: begin arm (SubpassLoad)
-            #[allow(clippy::todo)]
-            crate::Expression::SubpassLoad { .. } => {
-                todo!("Phase 6b: subpass-input emission for the MSL backend")
+            crate::Expression::SubpassLoad {
+                image,
+                sample_index,
+            } => {
+                self.put_subpass_load(image, sample_index, context)?;
             }
             // tiled-fork: end arm (SubpassLoad)
         }
@@ -7069,7 +7195,14 @@ template <typename A>
                             ));
                             let name_key = NameKey::StructMember(arg.ty, member_index);
                             let name = match member.binding {
-                                Some(crate::Binding::Location { .. }) => {
+                                // tiled-fork: begin arm (Binding::ColorAttachmentRead namer)
+                                // Group `@color(N)` with regular locations so
+                                // it goes through the same varyings-namer path.
+                                Some(
+                                    crate::Binding::Location { .. }
+                                    | crate::Binding::ColorAttachmentRead { .. },
+                                ) => {
+                                // tiled-fork: end arm (Binding::ColorAttachmentRead namer)
                                     if do_vertex_pulling {
                                         self.namer.call(&self.names[&name_key])
                                     } else {
@@ -7118,14 +7251,16 @@ template <typename A>
                     let resolved = options.resolve_local_binding(binding, in_mode)?;
                     let location = match *binding {
                         crate::Binding::Location { location, .. } => Some(location),
+                        // tiled-fork: begin arm (Binding::ColorAttachmentRead location)
+                        // Treat `@color(N)` like a regular fragment-stage
+                        // location for the purposes of the varyings-struct
+                        // emission. `resolve_local_binding` above already
+                        // mapped it to `ResolvedBinding::Color` so the
+                        // emitted attribute is `[[color(N)]]`.
+                        crate::Binding::ColorAttachmentRead { attachment, .. } => Some(attachment),
+                        // tiled-fork: end arm (Binding::ColorAttachmentRead location)
                         crate::Binding::BuiltIn(crate::BuiltIn::Barycentric { .. }) => None,
                         crate::Binding::BuiltIn(_) => continue,
-                        // tiled-fork: begin arm (Binding::ColorAttachmentRead)
-                        #[allow(clippy::todo)]
-                        crate::Binding::ColorAttachmentRead { .. } => {
-                            todo!("Phase 6b: framebuffer-fetch (@color) emission for the MSL backend")
-                        }
-                        // tiled-fork: end arm (Binding::ColorAttachmentRead)
                     };
                     if do_vertex_pulling {
                         let Some(location) = location else {
@@ -7444,12 +7579,19 @@ template <typename A>
                                             "external textures".to_string(),
                                         ));
                                     }
-                                    // tiled-fork: begin arm (ImageClass::Subpass)
-                                    #[allow(clippy::todo)]
+                                    // tiled-fork: begin arm (ImageClass::Subpass binding-array)
+                                    // A binding-array of subpass inputs is
+                                    // fundamentally invalid in MSL: subpass
+                                    // inputs are surfaced as `[[color(N)]]`
+                                    // fragment arguments, not as resource
+                                    // textures, so they cannot live inside an
+                                    // argument-buffer wrapper.
                                     crate::ImageClass::Subpass { .. } => {
-                                        todo!("Phase 6b: subpass-input image emission for the MSL backend")
+                                        return Err(Error::UnsupportedArrayOf(
+                                            "subpass inputs".to_string(),
+                                        ));
                                     }
-                                    // tiled-fork: end arm (ImageClass::Subpass)
+                                    // tiled-fork: end arm (ImageClass::Subpass binding-array)
                                 },
                                 _ => {
                                     return Err(Error::UnsupportedArrayOfType(base));
@@ -7876,17 +8018,28 @@ template <typename A>
                             {
                                 write!(self.out, "{{}}, ")?;
                             }
-                            if let Some(crate::Binding::Location { .. }) = member.binding {
+                            // tiled-fork: begin arm (Binding::ColorAttachmentRead varyings)
+                            // `@color(N)` arrives via the varyings struct, just
+                            // like a regular `Location` input.
+                            if let Some(
+                                crate::Binding::Location { .. }
+                                | crate::Binding::ColorAttachmentRead { .. },
+                            ) = member.binding
+                            {
                                 if has_varyings {
                                     write!(self.out, "{varyings_member_name}.")?;
                                 }
                             }
+                            // tiled-fork: end arm (Binding::ColorAttachmentRead varyings)
                             write!(self.out, "{name}")?;
                         }
                         writeln!(self.out, " }};")?;
                     }
                     _ => match arg.binding {
                         Some(crate::Binding::Location { .. })
+                        // tiled-fork: begin arm (Binding::ColorAttachmentRead arg)
+                        | Some(crate::Binding::ColorAttachmentRead { .. })
+                        // tiled-fork: end arm (Binding::ColorAttachmentRead arg)
                         | Some(crate::Binding::BuiltIn(crate::BuiltIn::Barycentric { .. })) => {
                             if has_varyings {
                                 writeln!(

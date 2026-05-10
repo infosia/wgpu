@@ -588,10 +588,18 @@ impl Options {
                 ))),
             },
             // tiled-fork: begin arm (Binding::ColorAttachmentRead)
-            #[allow(clippy::todo)]
-            crate::Binding::ColorAttachmentRead { .. } => {
-                todo!("Phase 6b: framebuffer-fetch (@color) emission for the MSL backend")
-            }
+            crate::Binding::ColorAttachmentRead { attachment, .. } => match mode {
+                LocationMode::FragmentInput => Ok(ResolvedBinding::Color {
+                    location: attachment,
+                    blend_src: None,
+                }),
+                LocationMode::VertexInput
+                | LocationMode::VertexOutput
+                | LocationMode::FragmentOutput
+                | LocationMode::Uniform => Err(Error::GenericValidation(format!(
+                    "Unexpected Binding::ColorAttachmentRead({attachment}) for the {mode:?} mode"
+                ))),
+            },
             // tiled-fork: end arm (Binding::ColorAttachmentRead)
         }
     }
