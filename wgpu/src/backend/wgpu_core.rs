@@ -4002,6 +4002,216 @@ impl dispatch::SubpassRenderPassInterface for CoreSubpassRenderPass {
         // Mark the pass as ended so subsequent calls are no-ops.
         self.pass = None;
     }
+
+    // tiled-fork: begin draw-machinery (CoreSubpassRenderPass)
+    fn set_pipeline(&mut self, pipeline: &dispatch::DispatchRenderPipeline) {
+        let (Some(context), Some(pass), Some(sink)) = (
+            self.context.as_ref(),
+            self.pass.as_mut(),
+            self.error_sink.as_ref(),
+        ) else {
+            self.report_unsupported_or_ended("SubpassRenderPass::set_pipeline");
+            return;
+        };
+        let pipeline = pipeline.as_core();
+        if let Err(cause) = context
+            .0
+            .subpass_render_pass_set_pipeline(pass, pipeline.id)
+        {
+            context.handle_error(
+                sink,
+                cause,
+                self.label.as_deref(),
+                "SubpassRenderPass::set_pipeline",
+            );
+        }
+    }
+
+    fn set_bind_group(
+        &mut self,
+        index: u32,
+        bind_group: Option<&dispatch::DispatchBindGroup>,
+        offsets: &[crate::DynamicOffset],
+    ) {
+        let (Some(context), Some(pass), Some(sink)) = (
+            self.context.as_ref(),
+            self.pass.as_mut(),
+            self.error_sink.as_ref(),
+        ) else {
+            self.report_unsupported_or_ended("SubpassRenderPass::set_bind_group");
+            return;
+        };
+        let bg = bind_group.map(|bg| bg.as_core().id);
+        if let Err(cause) =
+            context
+                .0
+                .subpass_render_pass_set_bind_group(pass, index, bg, offsets)
+        {
+            context.handle_error(
+                sink,
+                cause,
+                self.label.as_deref(),
+                "SubpassRenderPass::set_bind_group",
+            );
+        }
+    }
+
+    fn set_vertex_buffer(
+        &mut self,
+        slot: u32,
+        buffer: &dispatch::DispatchBuffer,
+        offset: crate::BufferAddress,
+        size: Option<crate::BufferSize>,
+    ) {
+        let (Some(context), Some(pass), Some(sink)) = (
+            self.context.as_ref(),
+            self.pass.as_mut(),
+            self.error_sink.as_ref(),
+        ) else {
+            self.report_unsupported_or_ended("SubpassRenderPass::set_vertex_buffer");
+            return;
+        };
+        let buffer = buffer.as_core();
+        if let Err(cause) = context.0.subpass_render_pass_set_vertex_buffer(
+            pass, slot, buffer.id, offset, size,
+        ) {
+            context.handle_error(
+                sink,
+                cause,
+                self.label.as_deref(),
+                "SubpassRenderPass::set_vertex_buffer",
+            );
+        }
+    }
+
+    fn set_index_buffer(
+        &mut self,
+        buffer: &dispatch::DispatchBuffer,
+        index_format: crate::IndexFormat,
+        offset: crate::BufferAddress,
+        size: Option<crate::BufferSize>,
+    ) {
+        let (Some(context), Some(pass), Some(sink)) = (
+            self.context.as_ref(),
+            self.pass.as_mut(),
+            self.error_sink.as_ref(),
+        ) else {
+            self.report_unsupported_or_ended("SubpassRenderPass::set_index_buffer");
+            return;
+        };
+        let buffer = buffer.as_core();
+        if let Err(cause) = context.0.subpass_render_pass_set_index_buffer(
+            pass,
+            buffer.id,
+            index_format,
+            offset,
+            size,
+        ) {
+            context.handle_error(
+                sink,
+                cause,
+                self.label.as_deref(),
+                "SubpassRenderPass::set_index_buffer",
+            );
+        }
+    }
+
+    fn draw(&mut self, vertices: Range<u32>, instances: Range<u32>) {
+        let (Some(context), Some(pass), Some(sink)) = (
+            self.context.as_ref(),
+            self.pass.as_mut(),
+            self.error_sink.as_ref(),
+        ) else {
+            self.report_unsupported_or_ended("SubpassRenderPass::draw");
+            return;
+        };
+        if let Err(cause) = context
+            .0
+            .subpass_render_pass_draw(pass, vertices, instances)
+        {
+            context.handle_error(
+                sink,
+                cause,
+                self.label.as_deref(),
+                "SubpassRenderPass::draw",
+            );
+        }
+    }
+
+    fn draw_indexed(&mut self, indices: Range<u32>, base_vertex: i32, instances: Range<u32>) {
+        let (Some(context), Some(pass), Some(sink)) = (
+            self.context.as_ref(),
+            self.pass.as_mut(),
+            self.error_sink.as_ref(),
+        ) else {
+            self.report_unsupported_or_ended("SubpassRenderPass::draw_indexed");
+            return;
+        };
+        if let Err(cause) =
+            context
+                .0
+                .subpass_render_pass_draw_indexed(pass, indices, base_vertex, instances)
+        {
+            context.handle_error(
+                sink,
+                cause,
+                self.label.as_deref(),
+                "SubpassRenderPass::draw_indexed",
+            );
+        }
+    }
+
+    fn set_viewport(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        min_depth: f32,
+        max_depth: f32,
+    ) {
+        let (Some(context), Some(pass), Some(sink)) = (
+            self.context.as_ref(),
+            self.pass.as_mut(),
+            self.error_sink.as_ref(),
+        ) else {
+            self.report_unsupported_or_ended("SubpassRenderPass::set_viewport");
+            return;
+        };
+        if let Err(cause) = context.0.subpass_render_pass_set_viewport(
+            pass, x, y, width, height, min_depth, max_depth,
+        ) {
+            context.handle_error(
+                sink,
+                cause,
+                self.label.as_deref(),
+                "SubpassRenderPass::set_viewport",
+            );
+        }
+    }
+
+    fn set_scissor_rect(&mut self, x: u32, y: u32, width: u32, height: u32) {
+        let (Some(context), Some(pass), Some(sink)) = (
+            self.context.as_ref(),
+            self.pass.as_mut(),
+            self.error_sink.as_ref(),
+        ) else {
+            self.report_unsupported_or_ended("SubpassRenderPass::set_scissor_rect");
+            return;
+        };
+        if let Err(cause) = context
+            .0
+            .subpass_render_pass_set_scissor_rect(pass, x, y, width, height)
+        {
+            context.handle_error(
+                sink,
+                cause,
+                self.label.as_deref(),
+                "SubpassRenderPass::set_scissor_rect",
+            );
+        }
+    }
+    // tiled-fork: end draw-machinery (CoreSubpassRenderPass)
 }
 
 impl CoreSubpassRenderPass {

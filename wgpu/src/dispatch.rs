@@ -563,8 +563,10 @@ pub trait RenderPassInterface: CommonTraits + Drop {
 // tiled-fork: begin subpass-interface
 /// Interface for an in-progress multi-subpass render pass.
 ///
-/// Mirrors `RenderPassInterface` but exposes only the Phase-11d3 method
-/// set. Per-subpass `set_pipeline`/`draw`/etc. methods land in Phase 11d4.
+/// Mirrors `RenderPassInterface` but exposes a strict subset of methods
+/// matching the current fork phase. Per-subpass `set_pipeline`/`draw`/etc.
+/// methods are added in Phase 11d4 (this commit) with default no-op impls
+/// so out-of-tree custom backends keep building.
 ///
 /// `Drop` is a supertrait so each backend is required to define an end
 /// behavior, mirroring the convention used for `RenderPassInterface` and
@@ -578,6 +580,69 @@ pub trait SubpassRenderPassInterface: CommonTraits + Drop {
     /// End the pass. Must be idempotent: calling `end` on an already-ended
     /// pass must not panic.
     fn end(&mut self);
+
+    // Phase 11d4 draw machinery. Default impls log + no-op so existing
+    // out-of-tree custom backends compile against the expanded trait.
+    fn set_pipeline(&mut self, _pipeline: &DispatchRenderPipeline) {
+        log::trace!("tiled-fork: SubpassRenderPassInterface::set_pipeline default impl: no-op");
+    }
+    fn set_bind_group(
+        &mut self,
+        _index: u32,
+        _bind_group: Option<&DispatchBindGroup>,
+        _offsets: &[crate::DynamicOffset],
+    ) {
+        log::trace!("tiled-fork: SubpassRenderPassInterface::set_bind_group default impl: no-op");
+    }
+    fn set_vertex_buffer(
+        &mut self,
+        _slot: u32,
+        _buffer: &DispatchBuffer,
+        _offset: crate::BufferAddress,
+        _size: Option<crate::BufferSize>,
+    ) {
+        log::trace!(
+            "tiled-fork: SubpassRenderPassInterface::set_vertex_buffer default impl: no-op"
+        );
+    }
+    fn set_index_buffer(
+        &mut self,
+        _buffer: &DispatchBuffer,
+        _index_format: crate::IndexFormat,
+        _offset: crate::BufferAddress,
+        _size: Option<crate::BufferSize>,
+    ) {
+        log::trace!(
+            "tiled-fork: SubpassRenderPassInterface::set_index_buffer default impl: no-op"
+        );
+    }
+    fn draw(&mut self, _vertices: Range<u32>, _instances: Range<u32>) {
+        log::trace!("tiled-fork: SubpassRenderPassInterface::draw default impl: no-op");
+    }
+    fn draw_indexed(
+        &mut self,
+        _indices: Range<u32>,
+        _base_vertex: i32,
+        _instances: Range<u32>,
+    ) {
+        log::trace!("tiled-fork: SubpassRenderPassInterface::draw_indexed default impl: no-op");
+    }
+    fn set_viewport(
+        &mut self,
+        _x: f32,
+        _y: f32,
+        _width: f32,
+        _height: f32,
+        _min_depth: f32,
+        _max_depth: f32,
+    ) {
+        log::trace!("tiled-fork: SubpassRenderPassInterface::set_viewport default impl: no-op");
+    }
+    fn set_scissor_rect(&mut self, _x: u32, _y: u32, _width: u32, _height: u32) {
+        log::trace!(
+            "tiled-fork: SubpassRenderPassInterface::set_scissor_rect default impl: no-op"
+        );
+    }
 }
 // tiled-fork: end subpass-interface
 

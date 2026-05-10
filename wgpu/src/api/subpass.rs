@@ -9,14 +9,17 @@
 //! it to [`crate::CommandEncoder::begin_subpass_render_pass`] to obtain a
 //! [`SubpassRenderPass`] handle.
 //!
-//! After begin, only [`SubpassRenderPass::next_subpass`],
-//! [`SubpassRenderPass::current_subpass_index`], and
-//! [`SubpassRenderPass::end`] (or `Drop`) are valid; per-subpass
-//! `set_pipeline`/`draw`/etc. commands arrive in Phase 11d4.
+//! Per-subpass draw machinery (`set_pipeline`, `set_bind_group`,
+//! `set_vertex_buffer`, `set_index_buffer`, `draw`, `draw_indexed`,
+//! `set_viewport`, `set_scissor_rect`) was wired in Phase 11d4. See
+//! the `wgpu-core::command::subpass` module docs for the known
+//! validation/tracker gaps in that path (callers are currently
+//! responsible for keeping resource handles alive until submission).
 //!
 //! [`wgc::command::SubpassRenderPassDescriptor`]: wgc::command::SubpassRenderPassDescriptor
 
 use core::num::NonZeroU32;
+use core::ops::Range;
 
 use crate::*;
 
@@ -189,6 +192,84 @@ impl SubpassRenderPass<'_> {
     pub fn end(&mut self) {
         self.inner.end();
     }
+
+    // tiled-fork: begin draw-machinery (api)
+    /// Sets the active render pipeline.
+    ///
+    /// Subsequent draw calls will exhibit the behavior defined by `pipeline`.
+    /// Mirrors [`RenderPass::set_pipeline`].
+    pub fn set_pipeline(&mut self, pipeline: &RenderPipeline) {
+        self.inner.set_pipeline(&pipeline.inner);
+    }
+
+    /// Sets the active bind group for a given bind group index.
+    ///
+    /// Mirrors [`RenderPass::set_bind_group`]. Note: the active pipeline
+    /// must already have been set with [`Self::set_pipeline`] when this is
+    /// called, because the eager-dispatch HAL backend needs the pipeline
+    /// layout from the most recently bound pipeline.
+    pub fn set_bind_group<'a, BG>(&mut self, index: u32, bind_group: BG, offsets: &[DynamicOffset])
+    where
+        Option<&'a BindGroup>: From<BG>,
+    {
+        let bg: Option<&'a BindGroup> = bind_group.into();
+        let bg = bg.map(|bg| &bg.inner);
+        self.inner.set_bind_group(index, bg, offsets);
+    }
+
+    /// Assigns a vertex buffer to a slot.
+    ///
+    /// Mirrors [`RenderPass::set_vertex_buffer`].
+    pub fn set_vertex_buffer(&mut self, slot: u32, buffer_slice: BufferSlice<'_>) {
+        self.inner.set_vertex_buffer(
+            slot,
+            &buffer_slice.buffer.inner,
+            buffer_slice.offset,
+            Some(buffer_slice.size),
+        );
+    }
+
+    /// Sets the active index buffer.
+    ///
+    /// Mirrors [`RenderPass::set_index_buffer`].
+    pub fn set_index_buffer(&mut self, buffer_slice: BufferSlice<'_>, index_format: IndexFormat) {
+        self.inner.set_index_buffer(
+            &buffer_slice.buffer.inner,
+            index_format,
+            buffer_slice.offset,
+            Some(buffer_slice.size),
+        );
+    }
+
+    /// Draws primitives from the active vertex buffer(s).
+    ///
+    /// Mirrors [`RenderPass::draw`].
+    pub fn draw(&mut self, vertices: Range<u32>, instances: Range<u32>) {
+        self.inner.draw(vertices, instances);
+    }
+
+    /// Draws indexed primitives using the active index buffer and the
+    /// active vertex buffers.
+    ///
+    /// Mirrors [`RenderPass::draw_indexed`].
+    pub fn draw_indexed(&mut self, indices: Range<u32>, base_vertex: i32, instances: Range<u32>) {
+        self.inner.draw_indexed(indices, base_vertex, instances);
+    }
+
+    /// Sets the viewport used during the rasterization stage.
+    ///
+    /// Mirrors [`RenderPass::set_viewport`].
+    pub fn set_viewport(&mut self, x: f32, y: f32, w: f32, h: f32, min_depth: f32, max_depth: f32) {
+        self.inner.set_viewport(x, y, w, h, min_depth, max_depth);
+    }
+
+    /// Sets the scissor rectangle used during the rasterization stage.
+    ///
+    /// Mirrors [`RenderPass::set_scissor_rect`].
+    pub fn set_scissor_rect(&mut self, x: u32, y: u32, width: u32, height: u32) {
+        self.inner.set_scissor_rect(x, y, width, height);
+    }
+    // tiled-fork: end draw-machinery (api)
 
     /// Returns the custom backend implementation of this subpass render
     /// pass, if any.

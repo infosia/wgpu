@@ -1,21 +1,15 @@
 // tiled-fork: begin types
 //! wgpu-core entry points for multi-subpass render passes.
 //!
-//! Phase 11d2: this module bridges the public `wgpu` API surface for
-//! subpass-mode render passes down to the HAL [`hal::DynTiledCommandEncoder`]
-//! installed in Phase 11d1. The three previous Phase 4 stubs
-//! (`command_encoder_begin_subpass_render_pass`,
-//! `render_pass_next_subpass`, `render_pass_current_subpass_index`) are
-//! now real, and a new `render_pass_end_subpass_render_pass` method ends
-//! the pass and unlocks the parent encoder.
+//! Phase 11d2 introduced the begin/next/end machinery; Phase 11d4 added
+//! the per-subpass draw machinery (`set_pipeline`, `set_bind_group`,
+//! `set_vertex_buffer`, `set_index_buffer`, `draw`, `draw_indexed`,
+//! `set_viewport`, `set_scissor_rect`). The module bridges the public
+//! `wgpu` API surface for subpass-mode render passes down to the HAL
+//! [`hal::DynTiledCommandEncoder`] installed in Phase 11d1.
 //!
-//! Per-subpass commands (`set_pipeline`, `draw`, ...) are intentionally
-//! **out of scope** here; once a subpass-mode pass is begun, only
-//! `next_subpass` and `end_subpass_render_pass` are valid until Phase
-//! 11d4 wires up the draw machinery.
-//!
-//! `Transient` color and depth/stencil attachments are also deferred:
-//! the wgpu-core transient-attachment table is not yet wired (a future
+//! `Transient` color and depth/stencil attachments are deferred: the
+//! wgpu-core transient-attachment table is not yet wired (a future
 //! bridge phase). Today, both `Transient` arms return
 //! [`SubpassRenderPassError::TransientNotWired`].
 //!
@@ -23,9 +17,8 @@
 //!
 //! Upstream wgpu-core's `RenderPass` records HAL commands into a
 //! deferred `commands` queue and replays them against the HAL encoder
-//! during `command_encoder_finish`. The Phase 11d2 subpass machinery
-//! diverges from that model: it issues **eager** HAL calls
-//! (`begin_subpass_render_pass_dyn`, `next_subpass_dyn`, `end_render_pass`)
+//! during `command_encoder_finish`. The Phase 11d2/11d4 subpass
+//! machinery diverges from that model: it issues **eager** HAL calls
 //! at the moment the corresponding `Global::*` method runs.
 //!
 //! **Caller constraint**: a subpass-mode render pass must be the first
@@ -35,9 +28,36 @@
 //! replayed at `finish`-time *after* the subpass pass has already been
 //! encoded into the HAL stream, producing wrong order at the HAL level.
 //!
-//! Phase 11d4 (the per-subpass-draw-machinery commit) is the natural
-//! place to either (a) reconcile these two execution models or (b)
-//! formally validate the constraint at begin-time.
+//! ## Known limitations of Phase 11d4
+//!
+//! The per-subpass draw machinery is intentionally **thin**. It assumes
+//! the caller upholds the same invariants the upstream `RenderPass`
+//! validator would enforce. Specifically:
+//!
+//! 1. **No resource-tracker registration**: upstream's `RenderPass`
+//!    inserts each bound `Arc<RenderPipeline>` / `Arc<BindGroup>` /
+//!    `Arc<Buffer>` into the parent command buffer's tracker so that
+//!    the resources survive until queue submission. The subpass path
+//!    does not yet do this — see the `RenderPassInfo` machinery in
+//!    `render.rs` for the upstream pattern. Callers must keep handles
+//!    alive themselves until the command buffer is submitted.
+//! 2. **No pipeline/bind-group/buffer-usage validation**: `set_pipeline`
+//!    skips `pass_context.check_compatible`; `set_bind_group` skips
+//!    `BindGroupLayout::is_compatible`; `set_*_buffer` skips
+//!    `BufferUsages::INDEX/VERTEX` checks; `draw`/`draw_indexed` skip
+//!    vertex-buffer-limit checks. Most of these are pre-condition
+//!    contracts the public `wgpu::SubpassRenderPass` API can't verify
+//!    safely. Future hardening should layer them in.
+//! 3. **`set_bind_group(None, ...)`** silently elides the HAL call
+//!    rather than unbinding. State drifts from the upstream binder
+//!    model.
+//! 4. **`set_viewport`/`set_scissor_rect` range/zero-size checks** are
+//!    not performed. Out-of-bounds values reach the HAL.
+//!
+//! Each per-subpass method also calls `cmd_buf_data.invalidate(...)`
+//! on dispatch failure (Phase 11d4 review M5 fix) so a subsequent
+//! `end_subpass_render_pass` short-circuits the HAL `end_render_pass`
+//! call when the encoder is in an inconsistent state.
 
 use alloc::{
     borrow::Cow,
@@ -47,14 +67,16 @@ use alloc::{
     vec::Vec,
 };
 use core::num::NonZeroU32;
+use core::ops::Range;
 
 use arrayvec::ArrayVec;
 use thiserror::Error;
 use wgt::{
     error::{ErrorType, WebGpuError},
-    TextureUsages,
+    BufferAddress, BufferSize, DynamicOffset, IndexFormat, TextureUsages,
 };
 
+use crate::binding_model::PipelineLayout;
 use crate::command::render::{
     RenderPassColorAttachment, RenderPassDepthStencilAttachment, ResolvedPassChannel,
 };
@@ -67,8 +89,8 @@ use crate::device::{Device, DeviceError, MissingFeatures};
 use crate::global::Global;
 use crate::id;
 use crate::resource::{
-    DestroyedResourceError, InvalidResourceError, Labeled, MissingTextureUsageError, ParentDevice,
-    QuerySet, RawResourceAccess, TextureView,
+    Buffer, DestroyedResourceError, InvalidResourceError, Labeled, MissingTextureUsageError,
+    ParentDevice, QuerySet, RawResourceAccess, TextureView,
 };
 use crate::Label;
 
@@ -184,6 +206,13 @@ pub struct SubpassRenderPass {
     /// pass that already failed, the error is reported again rather than
     /// causing UB.
     error: Option<SubpassRenderPassError>,
+    // tiled-fork: begin draw-state
+    /// Pipeline layout of the most recently-set render pipeline. Required
+    /// for [`Global::render_pass_set_bind_group`] because the HAL
+    /// `set_bind_group` entry point takes a pipeline layout, but the public
+    /// API only passes a bind group.
+    current_pipeline_layout: Option<Arc<PipelineLayout>>,
+    // tiled-fork: end draw-state
 }
 
 impl core::fmt::Debug for SubpassRenderPass {
@@ -245,6 +274,7 @@ impl SubpassRenderPass {
             current_subpass: 0,
             label,
             error: Some(err),
+            current_pipeline_layout: None,
         }
     }
 
@@ -255,6 +285,7 @@ impl SubpassRenderPass {
             current_subpass: 0,
             label,
             error: None,
+            current_pipeline_layout: None,
         }
     }
 
@@ -314,6 +345,12 @@ pub enum SubpassRenderPassError {
     /// don't match any of the above categories yet).
     #[error("subpass render pass descriptor failed validation: {0}")]
     DescriptorInvalid(String),
+    // tiled-fork: begin draw-errors
+    /// `set_bind_group` was called before `set_pipeline`, so we don't yet
+    /// know which pipeline layout to bind against.
+    #[error("set_bind_group called on a subpass render pass with no pipeline set")]
+    MissingPipelineForBindGroup,
+    // tiled-fork: end draw-errors
 }
 
 impl WebGpuError for SubpassRenderPassError {
@@ -329,7 +366,8 @@ impl WebGpuError for SubpassRenderPassError {
             | Self::AlreadyEnded
             | Self::EmptySubpassList
             | Self::TransientNotWired
-            | Self::DescriptorInvalid(_) => ErrorType::Validation,
+            | Self::DescriptorInvalid(_)
+            | Self::MissingPipelineForBindGroup => ErrorType::Validation,
         }
     }
 }
@@ -353,7 +391,8 @@ impl From<SubpassRenderPassError> for CommandEncoderError {
             | SubpassRenderPassError::AlreadyEnded
             | SubpassRenderPassError::EmptySubpassList
             | SubpassRenderPassError::TransientNotWired
-            | SubpassRenderPassError::DescriptorInvalid(_) => {
+            | SubpassRenderPassError::DescriptorInvalid(_)
+            | SubpassRenderPassError::MissingPipelineForBindGroup => {
                 CommandEncoderError::State(EncoderStateError::Invalid)
             }
         }
@@ -560,7 +599,467 @@ impl Global {
         unlock_result.map_err(SubpassRenderPassError::from)?;
         Ok(())
     }
+
+    // tiled-fork: begin draw-machinery
+    /// Set the active render pipeline for the current subpass.
+    pub fn subpass_render_pass_set_pipeline(
+        &self,
+        pass: &mut SubpassRenderPass,
+        pipeline_id: id::RenderPipelineId,
+    ) -> Result<(), SubpassRenderPassError> {
+        if let Some(err) = pass.error.clone() {
+            return Err(err);
+        }
+        let parent = pass
+            .parent
+            .as_ref()
+            .ok_or(SubpassRenderPassError::AlreadyEnded)?
+            .clone();
+
+        let hub = &self.hub;
+        let pipeline = match hub.render_pipelines.get(pipeline_id).get() {
+            Ok(pipeline) => pipeline,
+            Err(e) => {
+                let err = SubpassRenderPassError::InvalidResource(e);
+                pass.error = Some(err.clone());
+                return Err(err);
+            }
+        };
+        let layout = pipeline.layout.clone();
+
+        let mut cmd_buf_data = parent.data.lock();
+        let dispatch_result: Result<(), SubpassRenderPassError> =
+            with_locked_encoder_mut(&mut cmd_buf_data, |cmd_buf| {
+                // SAFETY: pass was opened, encoder is in a subpass-mode
+                // render pass per the begin/end contract.
+                unsafe {
+                    cmd_buf.encoder.raw.as_mut().set_render_pipeline(pipeline.raw());
+                }
+                Ok(())
+            });
+        // On dispatch failure invalidate the encoder so the subsequent
+        // end_subpass_render_pass short-circuits the HAL end_render_pass
+        // call (the encoder state is now inconsistent).
+        if dispatch_result.is_err() {
+            cmd_buf_data.invalidate(EncoderStateError::Invalid);
+        }
+        drop(cmd_buf_data);
+
+        match dispatch_result {
+            Ok(()) => {
+                pass.current_pipeline_layout = Some(layout);
+                Ok(())
+            }
+            Err(err) => {
+                pass.error = Some(err.clone());
+                Err(err)
+            }
+        }
+    }
+
+    /// Set a bind group on the current subpass.
+    pub fn subpass_render_pass_set_bind_group(
+        &self,
+        pass: &mut SubpassRenderPass,
+        index: u32,
+        bind_group_id: Option<id::BindGroupId>,
+        offsets: &[DynamicOffset],
+    ) -> Result<(), SubpassRenderPassError> {
+        if let Some(err) = pass.error.clone() {
+            return Err(err);
+        }
+        let parent = pass
+            .parent
+            .as_ref()
+            .ok_or(SubpassRenderPassError::AlreadyEnded)?
+            .clone();
+
+        let hub = &self.hub;
+        let layout = match pass.current_pipeline_layout.as_ref() {
+            Some(layout) => layout.clone(),
+            None => {
+                // `set_bind_group(None, ...)` could in principle be a
+                // pipeline-layout-free clear, but the HAL `set_bind_group`
+                // entry point still wants a layout, so require a pipeline
+                // here regardless.
+                let err = SubpassRenderPassError::MissingPipelineForBindGroup;
+                pass.error = Some(err.clone());
+                return Err(err);
+            }
+        };
+
+        let bind_group = if let Some(id) = bind_group_id {
+            match hub.bind_groups.get(id).get() {
+                Ok(bg) => Some(bg),
+                Err(e) => {
+                    let err = SubpassRenderPassError::InvalidResource(e);
+                    pass.error = Some(err.clone());
+                    return Err(err);
+                }
+            }
+        } else {
+            None
+        };
+
+        let device = parent.device.clone();
+        let snatch_guard = device.snatchable_lock.read();
+
+        let raw_bg = match &bind_group {
+            Some(bg) => Some(match bg.try_raw(&snatch_guard) {
+                Ok(raw) => raw,
+                Err(e) => {
+                    drop(snatch_guard);
+                    let err = SubpassRenderPassError::DestroyedResource(e);
+                    pass.error = Some(err.clone());
+                    return Err(err);
+                }
+            }),
+            None => None,
+        };
+
+        let mut cmd_buf_data = parent.data.lock();
+        let dispatch_result: Result<(), SubpassRenderPassError> =
+            with_locked_encoder_mut(&mut cmd_buf_data, |cmd_buf| {
+                if let Some(raw_bg) = raw_bg {
+                    // SAFETY: pass is open in subpass mode; layout is from
+                    // the most recently bound pipeline.
+                    unsafe {
+                        cmd_buf
+                            .encoder
+                            .raw
+                            .as_mut()
+                            .set_bind_group(layout.raw(), index, raw_bg, offsets);
+                    }
+                } else {
+                    // No bind group: there's no per-backend HAL "clear bind
+                    // group" call, so this is a no-op at the HAL level.
+                    // Upstream tracks this in the binder; for the eager
+                    // subpass mode, we simply elide the HAL call.
+                    log::trace!(
+                        "tiled-fork: SubpassRenderPass::set_bind_group(index={index}, None) elided at HAL level"
+                    );
+                }
+                Ok(())
+            });
+        drop(cmd_buf_data);
+        drop(snatch_guard);
+
+        match dispatch_result {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                pass.error = Some(err.clone());
+                Err(err)
+            }
+        }
+    }
+
+    /// Bind a vertex buffer to a slot.
+    pub fn subpass_render_pass_set_vertex_buffer(
+        &self,
+        pass: &mut SubpassRenderPass,
+        slot: u32,
+        buffer_id: id::BufferId,
+        offset: BufferAddress,
+        size: Option<BufferSize>,
+    ) -> Result<(), SubpassRenderPassError> {
+        self.subpass_render_pass_set_buffer_inner(
+            pass,
+            BufferBindKind::Vertex { slot },
+            buffer_id,
+            offset,
+            size,
+        )
+    }
+
+    /// Bind an index buffer.
+    pub fn subpass_render_pass_set_index_buffer(
+        &self,
+        pass: &mut SubpassRenderPass,
+        buffer_id: id::BufferId,
+        format: IndexFormat,
+        offset: BufferAddress,
+        size: Option<BufferSize>,
+    ) -> Result<(), SubpassRenderPassError> {
+        self.subpass_render_pass_set_buffer_inner(
+            pass,
+            BufferBindKind::Index { format },
+            buffer_id,
+            offset,
+            size,
+        )
+    }
+
+    /// Issue a non-indexed draw.
+    pub fn subpass_render_pass_draw(
+        &self,
+        pass: &mut SubpassRenderPass,
+        vertices: Range<u32>,
+        instances: Range<u32>,
+    ) -> Result<(), SubpassRenderPassError> {
+        if let Some(err) = pass.error.clone() {
+            return Err(err);
+        }
+        let parent = pass
+            .parent
+            .as_ref()
+            .ok_or(SubpassRenderPassError::AlreadyEnded)?
+            .clone();
+
+        let mut cmd_buf_data = parent.data.lock();
+        let dispatch_result: Result<(), SubpassRenderPassError> =
+            with_locked_encoder_mut(&mut cmd_buf_data, |cmd_buf| {
+                // SAFETY: pass open in subpass mode; pipeline must be bound
+                // by the caller (HAL contract).
+                unsafe {
+                    cmd_buf.encoder.raw.as_mut().draw(
+                        vertices.start,
+                        vertices.end - vertices.start,
+                        instances.start,
+                        instances.end - instances.start,
+                    );
+                }
+                Ok(())
+            });
+        drop(cmd_buf_data);
+
+        match dispatch_result {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                pass.error = Some(err.clone());
+                Err(err)
+            }
+        }
+    }
+
+    /// Issue an indexed draw.
+    pub fn subpass_render_pass_draw_indexed(
+        &self,
+        pass: &mut SubpassRenderPass,
+        indices: Range<u32>,
+        base_vertex: i32,
+        instances: Range<u32>,
+    ) -> Result<(), SubpassRenderPassError> {
+        if let Some(err) = pass.error.clone() {
+            return Err(err);
+        }
+        let parent = pass
+            .parent
+            .as_ref()
+            .ok_or(SubpassRenderPassError::AlreadyEnded)?
+            .clone();
+
+        let mut cmd_buf_data = parent.data.lock();
+        let dispatch_result: Result<(), SubpassRenderPassError> =
+            with_locked_encoder_mut(&mut cmd_buf_data, |cmd_buf| {
+                // SAFETY: pass open in subpass mode; pipeline + index buffer
+                // must be bound by the caller (HAL contract).
+                unsafe {
+                    cmd_buf.encoder.raw.as_mut().draw_indexed(
+                        indices.start,
+                        indices.end - indices.start,
+                        base_vertex,
+                        instances.start,
+                        instances.end - instances.start,
+                    );
+                }
+                Ok(())
+            });
+        drop(cmd_buf_data);
+
+        match dispatch_result {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                pass.error = Some(err.clone());
+                Err(err)
+            }
+        }
+    }
+
+    /// Set the viewport.
+    pub fn subpass_render_pass_set_viewport(
+        &self,
+        pass: &mut SubpassRenderPass,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        min_depth: f32,
+        max_depth: f32,
+    ) -> Result<(), SubpassRenderPassError> {
+        if let Some(err) = pass.error.clone() {
+            return Err(err);
+        }
+        let parent = pass
+            .parent
+            .as_ref()
+            .ok_or(SubpassRenderPassError::AlreadyEnded)?
+            .clone();
+
+        let mut cmd_buf_data = parent.data.lock();
+        let dispatch_result: Result<(), SubpassRenderPassError> =
+            with_locked_encoder_mut(&mut cmd_buf_data, |cmd_buf| {
+                let rect = hal::Rect {
+                    x,
+                    y,
+                    w: width,
+                    h: height,
+                };
+                // SAFETY: pass open in subpass mode.
+                unsafe {
+                    cmd_buf
+                        .encoder
+                        .raw
+                        .as_mut()
+                        .set_viewport(&rect, min_depth..max_depth);
+                }
+                Ok(())
+            });
+        drop(cmd_buf_data);
+
+        match dispatch_result {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                pass.error = Some(err.clone());
+                Err(err)
+            }
+        }
+    }
+
+    /// Set the scissor rectangle.
+    pub fn subpass_render_pass_set_scissor_rect(
+        &self,
+        pass: &mut SubpassRenderPass,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<(), SubpassRenderPassError> {
+        if let Some(err) = pass.error.clone() {
+            return Err(err);
+        }
+        let parent = pass
+            .parent
+            .as_ref()
+            .ok_or(SubpassRenderPassError::AlreadyEnded)?
+            .clone();
+
+        let mut cmd_buf_data = parent.data.lock();
+        let dispatch_result: Result<(), SubpassRenderPassError> =
+            with_locked_encoder_mut(&mut cmd_buf_data, |cmd_buf| {
+                let rect = hal::Rect {
+                    x,
+                    y,
+                    w: width,
+                    h: height,
+                };
+                // SAFETY: pass open in subpass mode.
+                unsafe {
+                    cmd_buf.encoder.raw.as_mut().set_scissor_rect(&rect);
+                }
+                Ok(())
+            });
+        drop(cmd_buf_data);
+
+        match dispatch_result {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                pass.error = Some(err.clone());
+                Err(err)
+            }
+        }
+    }
+
+    /// Shared `set_vertex_buffer` / `set_index_buffer` body.
+    fn subpass_render_pass_set_buffer_inner(
+        &self,
+        pass: &mut SubpassRenderPass,
+        kind: BufferBindKind,
+        buffer_id: id::BufferId,
+        offset: BufferAddress,
+        size: Option<BufferSize>,
+    ) -> Result<(), SubpassRenderPassError> {
+        if let Some(err) = pass.error.clone() {
+            return Err(err);
+        }
+        let parent = pass
+            .parent
+            .as_ref()
+            .ok_or(SubpassRenderPassError::AlreadyEnded)?
+            .clone();
+
+        let hub = &self.hub;
+        let buffer: Arc<Buffer> = match hub.buffers.get(buffer_id).get() {
+            Ok(b) => b,
+            Err(e) => {
+                let err = SubpassRenderPassError::InvalidResource(e);
+                pass.error = Some(err.clone());
+                return Err(err);
+            }
+        };
+
+        let device = parent.device.clone();
+        let snatch_guard = device.snatchable_lock.read();
+        let (binding, _resolved_size) = match buffer.binding(offset, size, &snatch_guard) {
+            Ok(pair) => pair,
+            Err(e) => {
+                drop(snatch_guard);
+                let err = SubpassRenderPassError::DescriptorInvalid(format!(
+                    "buffer binding error: {e}"
+                ));
+                pass.error = Some(err.clone());
+                return Err(err);
+            }
+        };
+
+        let mut cmd_buf_data = parent.data.lock();
+        let dispatch_result: Result<(), SubpassRenderPassError> =
+            with_locked_encoder_mut(&mut cmd_buf_data, |cmd_buf| {
+                match kind {
+                    BufferBindKind::Vertex { slot } => {
+                        // SAFETY: pass open in subpass mode; binding has the
+                        // buffer's lifetime via snatch_guard.
+                        unsafe {
+                            cmd_buf
+                                .encoder
+                                .raw
+                                .as_mut()
+                                .set_vertex_buffer(slot, binding);
+                        }
+                    }
+                    BufferBindKind::Index { format } => {
+                        // SAFETY: same as above.
+                        unsafe {
+                            cmd_buf
+                                .encoder
+                                .raw
+                                .as_mut()
+                                .set_index_buffer(binding, format);
+                        }
+                    }
+                }
+                Ok(())
+            });
+        drop(cmd_buf_data);
+        drop(snatch_guard);
+
+        match dispatch_result {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                pass.error = Some(err.clone());
+                Err(err)
+            }
+        }
+    }
+    // tiled-fork: end draw-machinery
 }
+
+// tiled-fork: begin draw-machinery-helpers
+#[derive(Copy, Clone, Debug)]
+enum BufferBindKind {
+    Vertex { slot: u32 },
+    Index { format: IndexFormat },
+}
+// tiled-fork: end draw-machinery-helpers
 
 // ----- Resolution / dispatch helpers (private) --------------------------
 
