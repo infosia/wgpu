@@ -85,12 +85,25 @@ impl super::DeviceShared {
                     ref depth_stencil,
                     sample_count,
                     multiview_mask,
+                    // tiled-fork: begin destructure-subpass-fields
+                    ref subpasses,
+                    ref subpass_dependencies,
+                    // tiled-fork: end destructure-subpass-fields
                 } = *e.key();
 
                 let mut vk_attachments = Vec::new();
+                // tiled-fork: begin attachment-layouts
+                // Layouts captured per-attachment so multi-subpass bookkeeping
+                // can build `VkAttachmentReference`s for arbitrary indices
+                // (color/resolve/input/depth) without re-parsing the keys.
+                let mut attachment_layouts: Vec<vk::ImageLayout> = Vec::new();
+                // tiled-fork: end attachment-layouts
                 let mut color_refs = Vec::with_capacity(colors.len());
                 let mut resolve_refs = Vec::with_capacity(color_refs.capacity());
                 let mut ds_ref = None;
+                // tiled-fork: begin ds-attachment-index
+                let mut ds_attachment_index: Option<u32> = None;
+                // tiled-fork: end ds-attachment-index
                 let samples = vk::SampleCountFlags::from_raw(sample_count);
                 let unused = vk::AttachmentReference {
                     attachment: vk::ATTACHMENT_UNUSED,
@@ -119,6 +132,9 @@ impl super::DeviceShared {
                                     .initial_layout(layout)
                                     .final_layout(layout)
                             });
+                            // tiled-fork: begin track-color-layout
+                            attachment_layouts.push(layout);
+                            // tiled-fork: end track-color-layout
                             let resolve_ref = if let Some(rat) = resolve {
                                 let super::AttachmentKey {
                                     format,
@@ -135,6 +151,9 @@ impl super::DeviceShared {
                                     .initial_layout(layout)
                                     .final_layout(layout);
                                 vk_attachments.push(vk_attachment);
+                                // tiled-fork: begin track-resolve-layout
+                                attachment_layouts.push(layout);
+                                // tiled-fork: end track-resolve-layout
 
                                 vk::AttachmentReference {
                                     attachment: vk_attachments.len() as u32 - 1,
@@ -165,10 +184,11 @@ impl super::DeviceShared {
                         ops,
                     } = *base;
 
-                    ds_ref = Some(vk::AttachmentReference {
-                        attachment: vk_attachments.len() as u32,
-                        layout,
-                    });
+                    // tiled-fork: begin ds-attachment-tracking
+                    let attachment = vk_attachments.len() as u32;
+                    ds_attachment_index = Some(attachment);
+                    ds_ref = Some(vk::AttachmentReference { attachment, layout });
+                    // tiled-fork: end ds-attachment-tracking
                     let (load_op, store_op) = conv::map_attachment_ops(ops);
                     let (stencil_load_op, stencil_store_op) = conv::map_attachment_ops(stencil_ops);
                     let vk_attachment = vk::AttachmentDescription::default()
@@ -181,9 +201,24 @@ impl super::DeviceShared {
                         .initial_layout(layout)
                         .final_layout(layout);
                     vk_attachments.push(vk_attachment);
+                    // tiled-fork: begin track-ds-layout
+                    attachment_layouts.push(layout);
+                    // tiled-fork: end track-ds-layout
                 }
 
-                let vk_subpasses = [{
+                // tiled-fork: begin multi-subpass-build
+                // `vk_subpasses` and the per-subpass reference vectors must
+                // outlive the `RenderPassCreateInfo` pointers below; collect
+                // them once so the `&[…]` borrows stay valid.
+                let mut vk_subpasses: Vec<vk::SubpassDescription> = Vec::new();
+                let mut color_refs_per_subpass: Vec<Vec<vk::AttachmentReference>> = Vec::new();
+                let mut resolve_refs_per_subpass: Vec<Vec<vk::AttachmentReference>> = Vec::new();
+                let mut input_refs_per_subpass: Vec<Vec<vk::AttachmentReference>> = Vec::new();
+                let mut depth_refs_per_subpass: Vec<Option<vk::AttachmentReference>> = Vec::new();
+                let mut preserve_refs_per_subpass: Vec<Vec<u32>> = Vec::new();
+
+                if subpasses.is_empty() {
+                    // Legacy single-subpass path (unchanged behaviour).
                     let mut vk_subpass = vk::SubpassDescription::default()
                         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
                         .color_attachments(&color_refs)
@@ -198,14 +233,208 @@ impl super::DeviceShared {
                     }
 
                     if let Some(ref reference) = ds_ref {
-                        vk_subpass = vk_subpass.depth_stencil_attachment(reference)
+                        vk_subpass = vk_subpass.depth_stencil_attachment(reference);
                     }
-                    vk_subpass
-                }];
+                    vk_subpasses.push(vk_subpass);
+                } else {
+                    // Multi-subpass path (Phase 9a2).
+                    let make_attachment_ref = |attachment: u32| {
+                        // `VK_ATTACHMENT_UNUSED` is `u32::MAX`; the
+                        // out-of-range lookup intentionally collapses to
+                        // `unused`.
+                        attachment_layouts.get(attachment as usize).copied().map_or(
+                            unused,
+                            |layout| vk::AttachmentReference { attachment, layout },
+                        )
+                    };
+
+                    color_refs_per_subpass.reserve(subpasses.len());
+                    resolve_refs_per_subpass.reserve(subpasses.len());
+                    input_refs_per_subpass.reserve(subpasses.len());
+                    depth_refs_per_subpass.reserve(subpasses.len());
+
+                    for subpass in subpasses {
+                        let color_refs = subpass
+                            .color_attachment_indices
+                            .iter()
+                            .map(|attachment| {
+                                attachment.map_or(unused, &make_attachment_ref)
+                            })
+                            .collect::<Vec<_>>();
+                        let resolve_refs = (0..color_refs.len())
+                            .map(|index| {
+                                let attachment = subpass
+                                    .resolve_attachment_indices
+                                    .get(index)
+                                    .copied()
+                                    .unwrap_or(vk::ATTACHMENT_UNUSED);
+                                if attachment == vk::ATTACHMENT_UNUSED {
+                                    unused
+                                } else {
+                                    make_attachment_ref(attachment)
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        let input_refs = subpass
+                            .input_attachment_indices
+                            .iter()
+                            .map(|&attachment| {
+                                if attachment == vk::ATTACHMENT_UNUSED {
+                                    unused
+                                } else {
+                                    let layout = if ds_attachment_index == Some(attachment) {
+                                        vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                                    } else {
+                                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+                                    };
+                                    vk::AttachmentReference { attachment, layout }
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        let depth_ref = subpass
+                            .depth_stencil_index
+                            .map(make_attachment_ref)
+                            .filter(|reference| reference.attachment != vk::ATTACHMENT_UNUSED);
+
+                        color_refs_per_subpass.push(color_refs);
+                        resolve_refs_per_subpass.push(resolve_refs);
+                        input_refs_per_subpass.push(input_refs);
+                        depth_refs_per_subpass.push(depth_ref);
+                    }
+
+                    let attachment_count = vk_attachments.len();
+                    let used_attachments_per_subpass = (0..subpasses.len())
+                        .map(|index| {
+                            let mut used = vec![false; attachment_count];
+                            for reference in color_refs_per_subpass[index]
+                                .iter()
+                                .chain(resolve_refs_per_subpass[index].iter())
+                                .chain(input_refs_per_subpass[index].iter())
+                            {
+                                if reference.attachment == vk::ATTACHMENT_UNUSED {
+                                    continue;
+                                }
+                                if let Some(is_used) =
+                                    used.get_mut(reference.attachment as usize)
+                                {
+                                    *is_used = true;
+                                }
+                            }
+                            if let Some(reference) = depth_refs_per_subpass[index].as_ref() {
+                                if let Some(is_used) =
+                                    used.get_mut(reference.attachment as usize)
+                                {
+                                    *is_used = true;
+                                }
+                            }
+                            used
+                        })
+                        .collect::<Vec<_>>();
+                    preserve_refs_per_subpass.extend((0..subpasses.len()).map(|index| {
+                        (0..attachment_count)
+                            .filter(|&attachment_index| {
+                                if used_attachments_per_subpass[index][attachment_index] {
+                                    return false;
+                                }
+                                let used_before = used_attachments_per_subpass[..index]
+                                    .iter()
+                                    .any(|used| used[attachment_index]);
+                                let used_after = used_attachments_per_subpass[index + 1..]
+                                    .iter()
+                                    .any(|used| used[attachment_index]);
+                                used_before && used_after
+                            })
+                            .map(|attachment_index| attachment_index as u32)
+                            .collect::<Vec<_>>()
+                    }));
+
+                    vk_subpasses.reserve(subpasses.len());
+                    for index in 0..subpasses.len() {
+                        let color_refs = &color_refs_per_subpass[index];
+                        let resolve_refs = &resolve_refs_per_subpass[index];
+                        let input_refs = &input_refs_per_subpass[index];
+                        let preserve_refs = &preserve_refs_per_subpass[index];
+                        let mut vk_subpass = vk::SubpassDescription::default()
+                            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+                            .color_attachments(color_refs);
+                        if !resolve_refs.is_empty() {
+                            vk_subpass = vk_subpass.resolve_attachments(resolve_refs);
+                        } else if self
+                            .workarounds
+                            .contains(super::Workarounds::EMPTY_RESOLVE_ATTACHMENT_LISTS)
+                        {
+                            vk_subpass.p_resolve_attachments = ptr::null();
+                        }
+                        if !input_refs.is_empty() {
+                            vk_subpass = vk_subpass.input_attachments(input_refs);
+                        }
+                        if !preserve_refs.is_empty() {
+                            vk_subpass = vk_subpass.preserve_attachments(preserve_refs);
+                        }
+                        if let Some(ref reference) = depth_refs_per_subpass[index] {
+                            vk_subpass = vk_subpass.depth_stencil_attachment(reference);
+                        }
+                        vk_subpasses.push(vk_subpass);
+                    }
+                }
+
+                let dependency_dst_stage_mask = vk::PipelineStageFlags::FRAGMENT_SHADER
+                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS;
+                let vk_subpass_dependencies: Vec<vk::SubpassDependency> = subpass_dependencies
+                    .iter()
+                    .map(|dependency| {
+                        let (src_stage_mask, src_access_mask) = match dependency.dependency_type {
+                            wgt::SubpassDependencyType::ColorToInput => (
+                                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                                vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                            ),
+                            wgt::SubpassDependencyType::DepthToInput => (
+                                vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+                                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                                vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                            ),
+                            wgt::SubpassDependencyType::ColorDepthToInput => (
+                                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+                                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                                vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                            ),
+                            // `SubpassDependencyType` is `#[non_exhaustive]`;
+                            // unknown variants conservatively block the full
+                            // pipeline, matching what GLES/Metal would do.
+                            _ => (
+                                vk::PipelineStageFlags::ALL_GRAPHICS,
+                                vk::AccessFlags::MEMORY_WRITE,
+                            ),
+                        };
+
+                        vk::SubpassDependency::default()
+                            .src_subpass(dependency.src_subpass.0)
+                            .dst_subpass(dependency.dst_subpass.0)
+                            .src_stage_mask(src_stage_mask)
+                            .src_access_mask(src_access_mask)
+                            .dst_stage_mask(dependency_dst_stage_mask)
+                            .dst_access_mask(vk::AccessFlags::INPUT_ATTACHMENT_READ)
+                            .dependency_flags(if dependency.by_region {
+                                vk::DependencyFlags::BY_REGION
+                            } else {
+                                vk::DependencyFlags::empty()
+                            })
+                    })
+                    .collect();
+                // tiled-fork: end multi-subpass-build
 
                 let mut vk_info = vk::RenderPassCreateInfo::default()
                     .attachments(&vk_attachments)
                     .subpasses(&vk_subpasses);
+                // tiled-fork: begin attach-dependencies
+                if !vk_subpass_dependencies.is_empty() {
+                    vk_info = vk_info.dependencies(&vk_subpass_dependencies);
+                }
+                // tiled-fork: end attach-dependencies
 
                 let mut multiview_info;
                 let mask;
@@ -1283,6 +1512,9 @@ impl crate::Device for super::Device {
             temp_texture_views: Default::default(),
             counters: Arc::clone(&self.counters),
             current_pipeline_is_multiview: false,
+            // tiled-fork: begin subpass-state-init
+            subpass_state: None,
+            // tiled-fork: end subpass-state-init
         })
     }
 

@@ -463,12 +463,38 @@ struct DepthStencilAttachmentKey {
     stencil_ops: crate::AttachmentOps,
 }
 
+// tiled-fork: begin subpass-key
+/// Per-subpass attachment indices used to build a `VkSubpassDescription`.
+///
+/// Each `Vec<u32>` entry refers to an index in the parent
+/// `RenderPassKey::vk_attachments` (i.e. the `VkAttachmentDescription`
+/// array constructed by `make_render_pass`). `vk::ATTACHMENT_UNUSED`
+/// (`u32::MAX`) is allowed in `input_attachment_indices` and
+/// `resolve_attachment_indices` to denote "no attachment at this slot".
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct SubpassKey {
+    color_attachment_indices: Vec<Option<u32>>,
+    input_attachment_indices: Vec<u32>,
+    depth_stencil_index: Option<u32>,
+    resolve_attachment_indices: Vec<u32>,
+}
+// tiled-fork: end subpass-key
+
 #[derive(Clone, Eq, Default, Hash, PartialEq)]
 struct RenderPassKey {
     colors: ArrayVec<Option<ColorAttachmentKey>, { crate::MAX_COLOR_ATTACHMENTS }>,
     depth_stencil: Option<DepthStencilAttachmentKey>,
     sample_count: u32,
     multiview_mask: Option<NonZeroU32>,
+    // tiled-fork: begin subpass-fields
+    /// Empty when this render pass uses a single-subpass legacy layout.
+    /// Non-empty for multi-subpass passes built via
+    /// `begin_subpass_render_pass`.
+    subpasses: Vec<SubpassKey>,
+    /// Subpass dependencies, mapped to `VkSubpassDependency` in
+    /// `make_render_pass`. Always empty when `subpasses` is empty.
+    subpass_dependencies: Vec<wgt::SubpassDependency>,
+    // tiled-fork: end subpass-fields
 }
 
 struct DeviceShared {
@@ -995,7 +1021,36 @@ pub struct CommandEncoder {
     counters: Arc<wgt::HalCounters>,
 
     current_pipeline_is_multiview: bool,
+
+    // tiled-fork: begin subpass-state
+    /// Multi-subpass render pass tracking. `Some(_)` between a
+    /// `begin_subpass_render_pass` call and the matching `end_render_pass`,
+    /// `None` otherwise (including for legacy single-subpass render passes).
+    subpass_state: Option<SubpassState>,
+    // tiled-fork: end subpass-state
 }
+
+// tiled-fork: begin subpass-state-struct
+/// State machine tracking position inside a multi-subpass render pass.
+///
+/// `current_index` is the index of the currently-recording subpass; it
+/// starts at `first_active_subpass_index(subpass_count, mask)` and advances
+/// to the next active subpass on each `next_subpass`. `end_render_pass`
+/// drains any remaining subpasses with empty `vkCmdNextSubpass` calls
+/// because the Vulkan spec requires sequential traversal of every subpass
+/// declared in the `VkRenderPass` before `vkCmdEndRenderPass`.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SubpassState {
+    /// Total subpass count declared in the `VkRenderPass`.
+    pub(super) subpass_count: u32,
+    /// Index of the currently-recording subpass, or `None` when every
+    /// subpass has been culled by `active_subpass_mask`.
+    pub(super) current_index: Option<u32>,
+    /// Bitmask filter on which subpasses receive draw calls. `None`
+    /// means every subpass is active.
+    pub(super) active_subpass_mask: Option<wgt::ActiveSubpassMask>,
+}
+// tiled-fork: end subpass-state-struct
 
 impl Drop for CommandEncoder {
     fn drop(&mut self) {

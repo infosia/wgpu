@@ -7,6 +7,40 @@ use hashbrown::hash_map::Entry;
 const ALLOCATION_GRANULARITY: u32 = 16;
 const DST_IMAGE_LAYOUT: vk::ImageLayout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
 
+// tiled-fork: begin subpass-helpers
+/// Find the first active subpass index according to `mask`. Returns `None`
+/// when every subpass is culled or `subpass_count == 0`. Bits set beyond
+/// `subpass_count` (or beyond `ActiveSubpassMask::MAX_SUBPASSES`) are
+/// ignored.
+pub(super) fn first_active_subpass_index(
+    subpass_count: u32,
+    mask: Option<wgt::ActiveSubpassMask>,
+) -> Option<u32> {
+    if subpass_count == 0 {
+        return None;
+    }
+    let mask_bits = mask.unwrap_or(wgt::ActiveSubpassMask::ALL).0;
+    let search_end = subpass_count.min(wgt::ActiveSubpassMask::MAX_SUBPASSES);
+    (0..search_end).find(|&index| (mask_bits & (1u32 << index)) != 0)
+}
+
+/// Find the next active subpass index strictly after `current`. Returns
+/// `subpass_count` (i.e. one past the last subpass) when no more active
+/// subpasses remain — callers use this as a sentinel meaning
+/// "drain to end".
+pub(super) fn next_active_subpass_index(
+    current: u32,
+    subpass_count: u32,
+    mask: Option<wgt::ActiveSubpassMask>,
+) -> u32 {
+    let mask_bits = mask.unwrap_or(wgt::ActiveSubpassMask::ALL).0;
+    let search_end = subpass_count.min(wgt::ActiveSubpassMask::MAX_SUBPASSES);
+    ((current + 1)..search_end)
+        .find(|&index| (mask_bits & (1u32 << index)) != 0)
+        .unwrap_or(subpass_count)
+}
+// tiled-fork: end subpass-helpers
+
 impl super::Texture {
     fn map_buffer_copies<T>(&self, regions: T) -> impl Iterator<Item = vk::BufferImageCopy>
     where
@@ -52,7 +86,8 @@ impl super::CommandEncoder {
         }
     }
 
-    fn make_framebuffer(
+    // tiled-fork: bump visibility so `tiled.rs` can build framebuffers.
+    pub(super) fn make_framebuffer(
         &mut self,
         key: super::FramebufferKey,
     ) -> Result<vk::Framebuffer, crate::DeviceError> {
@@ -79,7 +114,9 @@ impl super::CommandEncoder {
         })
     }
 
-    fn make_temp_texture_view(
+    // tiled-fork: bump visibility so `tiled.rs` can build per-slice
+    // temporary views for 3D color targets.
+    pub(super) fn make_temp_texture_view(
         &mut self,
         key: super::TempTextureViewKey,
     ) -> Result<super::IdentifiedTextureView, crate::DeviceError> {
@@ -140,6 +177,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
 
         // Reset this in case the last renderpass was never ended.
         self.rpass_debug_marker_active = false;
+        // tiled-fork: begin reset-subpass-state-begin-encoding
+        self.subpass_state = None;
+        // tiled-fork: end reset-subpass-state-begin-encoding
 
         let vk_info = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -177,6 +217,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
         I: Iterator<Item = super::CommandBuffer>,
     {
         self.temp.clear();
+        // tiled-fork: begin reset-subpass-state-reset-all
+        self.subpass_state = None;
+        // tiled-fork: end reset-subpass-state-reset-all
         self.free
             .extend(cmd_bufs.into_iter().map(|cmd_buf| cmd_buf.raw));
         self.free.append(&mut self.discarded);
@@ -789,6 +832,13 @@ impl crate::CommandEncoder for super::CommandEncoder {
             depth_stencil: None,
             sample_count: desc.sample_count,
             multiview_mask: desc.multiview_mask,
+            // tiled-fork: begin legacy-rp-key-empty
+            // Legacy single-subpass entry point: leave the subpass-mode
+            // fields empty so `make_render_pass` takes the original
+            // single-subpass path.
+            subpasses: alloc::vec::Vec::new(),
+            subpass_dependencies: alloc::vec::Vec::new(),
+            // tiled-fork: end legacy-rp-key-empty
         };
         let mut fb_key = super::FramebufferKey {
             raw_pass: vk::RenderPass::null(),
@@ -910,6 +960,26 @@ impl crate::CommandEncoder for super::CommandEncoder {
         Ok(())
     }
     unsafe fn end_render_pass(&mut self) {
+        // tiled-fork: begin drain-trailing-subpasses
+        // The Vulkan spec requires `vkCmdEndRenderPass` only after every
+        // declared subpass has been entered. When the user's
+        // `active_subpass_mask` cuts off the trailing subpasses, drain
+        // them with empty `vkCmdNextSubpass` calls.
+        if let Some(state) = self.subpass_state.take() {
+            if state.subpass_count > 0 {
+                let current_subpass = state
+                    .current_index
+                    .unwrap_or(state.subpass_count.saturating_sub(1));
+                for _ in (current_subpass + 1)..state.subpass_count {
+                    unsafe {
+                        self.device
+                            .raw
+                            .cmd_next_subpass(self.active, vk::SubpassContents::INLINE);
+                    }
+                }
+            }
+        }
+        // tiled-fork: end drain-trailing-subpasses
         unsafe {
             self.device.raw.cmd_end_render_pass(self.active);
         }
