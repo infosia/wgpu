@@ -601,7 +601,14 @@ pub(crate) struct InnerCommandEncoder {
     ///
     /// [`CommandEncoder`]: hal::Api::CommandEncoder
     /// [`CommandAllocator`]: crate::command::CommandAllocator
-    pub(crate) raw: ManuallyDrop<Box<dyn hal::DynCommandEncoder>>,
+    // tiled-fork: begin storage (DynTiledCommandEncoder)
+    // Stored as `Box<dyn DynTiledCommandEncoder>` so the encoder reaches
+    // both the upstream encoder API and the fork's tiled extension API.
+    // `DynTiledCommandEncoder: DynCommandEncoder` (Phase 11d1) makes the
+    // existing `self.raw.as_ref()` upstream consumers continue to work
+    // through trait upcasting.
+    pub(crate) raw: ManuallyDrop<Box<dyn hal::DynTiledCommandEncoder>>,
+    // tiled-fork: end storage (DynTiledCommandEncoder)
 
     /// All the raw command buffers for our owning [`CommandBuffer`], in
     /// submission order.
@@ -881,11 +888,13 @@ impl Drop for CommandBuffer {
 }
 
 impl CommandEncoder {
+    // tiled-fork: begin signature (DynTiledCommandEncoder)
     pub(crate) fn new(
-        encoder: Box<dyn hal::DynCommandEncoder>,
+        encoder: Box<dyn hal::DynTiledCommandEncoder>,
         device: &Arc<Device>,
         label: &Label,
     ) -> Self {
+    // tiled-fork: end signature (DynTiledCommandEncoder)
         CommandEncoder {
             device: device.clone(),
             label: label.to_string(),

@@ -82,6 +82,9 @@ impl Adapter {
     where
         // tiled-fork: begin trait-bound (TiledDevice)
         <A as hal::Api>::Device: hal::TiledDevice,
+        // Phase 11d1: encoders are stored as `Box<dyn DynTiledCommandEncoder>`,
+        // so the concrete encoder must impl `TiledCommandEncoder`.
+        <A as hal::Api>::CommandEncoder: hal::TiledCommandEncoder,
         // tiled-fork: end trait-bound (TiledDevice)
     {
         let core_adapter = self.inner.as_core();

@@ -321,11 +321,17 @@ impl<Q: DynQuerySet + ?Sized, T: DynTextureView + ?Sized> Default
 impl<'a> SubpassColorAttachment<'a, dyn DynTextureView> {
     /// Downcast a dyn-typed subpass color attachment to a concrete texture-view backend.
     ///
+    /// Takes `&self` so callers can rebuild a concrete descriptor from the
+    /// dyn-typed `Subpass.color_attachments: &'a [Option<...>]` slice without
+    /// needing the elements themselves to be `Clone` (the `derive(Clone)`
+    /// blanket on the enum requires `T: Clone`, which `dyn DynTextureView`
+    /// does not satisfy).
+    ///
     /// # Panics
     /// `Persistent` arms panic if the underlying view is not of type `B`.
     /// `Transient` arms are infallible; they carry no view and are simply
     /// re-wrapped with the new generic parameter.
-    pub fn expect_downcast<B: DynTextureView>(self) -> SubpassColorAttachment<'a, B> {
+    pub fn expect_downcast<B: DynTextureView>(&self) -> SubpassColorAttachment<'a, B> {
         match self {
             Self::Persistent(p) => SubpassColorAttachment::Persistent(p.expect_downcast()),
             Self::Transient {
@@ -333,9 +339,9 @@ impl<'a> SubpassColorAttachment<'a, dyn DynTextureView> {
                 ops,
                 clear_value,
             } => SubpassColorAttachment::Transient {
-                transient_index,
-                ops,
-                clear_value,
+                transient_index: *transient_index,
+                ops: *ops,
+                clear_value: *clear_value,
             },
         }
     }
@@ -344,11 +350,14 @@ impl<'a> SubpassColorAttachment<'a, dyn DynTextureView> {
 impl<'a> SubpassDepthStencilAttachment<'a, dyn DynTextureView> {
     /// Downcast a dyn-typed subpass depth/stencil attachment to a concrete texture-view backend.
     ///
+    /// Takes `&self`; see [`SubpassColorAttachment::expect_downcast`] for
+    /// rationale.
+    ///
     /// # Panics
     /// `Persistent` arms panic if the underlying view is not of type `B`.
     /// `Transient` arms are infallible; they carry no view and are simply
     /// re-wrapped with the new generic parameter.
-    pub fn expect_downcast<B: DynTextureView>(self) -> SubpassDepthStencilAttachment<'a, B> {
+    pub fn expect_downcast<B: DynTextureView>(&self) -> SubpassDepthStencilAttachment<'a, B> {
         match self {
             Self::Persistent(p) => SubpassDepthStencilAttachment::Persistent(p.expect_downcast()),
             Self::Transient {
@@ -357,10 +366,10 @@ impl<'a> SubpassDepthStencilAttachment<'a, dyn DynTextureView> {
                 stencil_ops,
                 clear_value,
             } => SubpassDepthStencilAttachment::Transient {
-                transient_index,
-                depth_ops,
-                stencil_ops,
-                clear_value,
+                transient_index: *transient_index,
+                depth_ops: *depth_ops,
+                stencil_ops: *stencil_ops,
+                clear_value: *clear_value,
             },
         }
     }

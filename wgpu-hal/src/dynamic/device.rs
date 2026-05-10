@@ -11,11 +11,18 @@ use crate::{
 };
 
 use super::{
-    DynAccelerationStructure, DynBindGroup, DynBindGroupLayout, DynBuffer, DynCommandEncoder,
-    DynComputePipeline, DynFence, DynPipelineCache, DynPipelineLayout, DynQuerySet, DynQueue,
-    DynRenderPipeline, DynResource, DynResourceExt as _, DynSampler, DynShaderModule, DynTexture,
-    DynTextureView,
+    DynAccelerationStructure, DynBindGroup, DynBindGroupLayout, DynBuffer, DynComputePipeline,
+    DynFence, DynPipelineCache, DynPipelineLayout, DynQuerySet, DynQueue, DynRenderPipeline,
+    DynResource, DynResourceExt as _, DynSampler, DynShaderModule, DynTexture, DynTextureView,
 };
+// tiled-fork: begin import (DynTiledCommandEncoder)
+// `DynDevice::create_command_encoder` returns `Box<dyn DynTiledCommandEncoder>`
+// so the fork's tiled command-encoder surface (next_subpass / dispatch_transient
+// / begin_subpass_render_pass) is reachable from wgpu-core's encoder storage.
+// `DynTiledCommandEncoder: DynCommandEncoder` (Phase 11d1) keeps existing
+// `&dyn DynCommandEncoder` consumers working through trait upcasting.
+use super::DynTiledCommandEncoder;
+// tiled-fork: end import (DynTiledCommandEncoder)
 
 pub trait DynDevice: DynResource {
     unsafe fn create_buffer(
@@ -56,10 +63,12 @@ pub trait DynDevice: DynResource {
     ) -> Result<Box<dyn DynSampler>, DeviceError>;
     unsafe fn destroy_sampler(&self, sampler: Box<dyn DynSampler>);
 
+    // tiled-fork: begin signature (DynTiledCommandEncoder return)
     unsafe fn create_command_encoder(
         &self,
         desc: &CommandEncoderDescriptor<dyn DynQueue>,
-    ) -> Result<Box<dyn DynCommandEncoder>, DeviceError>;
+    ) -> Result<Box<dyn DynTiledCommandEncoder>, DeviceError>;
+    // tiled-fork: end signature (DynTiledCommandEncoder return)
 
     unsafe fn create_bind_group_layout(
         &self,
@@ -167,7 +176,20 @@ pub trait DynDevice: DynResource {
     fn check_if_oom(&self) -> Result<(), DeviceError>;
 }
 
-impl<D: Device + DynResource> DynDevice for D {
+// tiled-fork: begin trait-bound (DynTiledCommandEncoder)
+// The blanket `DynDevice` impl needs to box the concrete
+// `D::A::CommandEncoder` as `Box<dyn DynTiledCommandEncoder>` for
+// `create_command_encoder`. That coercion requires the concrete encoder
+// to impl `DynTiledCommandEncoder`, which the blanket in `dynamic/tiled.rs`
+// provides for any `TiledCommandEncoder + DynResource` whose `Api` impls
+// `TiledApi`. Spelling the bounds out here keeps them visible at the call
+// site and matches the Phase 11a pattern used by `DynOpenDevice`.
+impl<D: Device + DynResource> DynDevice for D
+where
+    D::A: crate::TiledApi,
+    <D::A as Api>::CommandEncoder: crate::TiledCommandEncoder,
+{
+// tiled-fork: end trait-bound (DynTiledCommandEncoder)
     unsafe fn create_buffer(
         &self,
         desc: &BufferDescriptor,
@@ -259,17 +281,19 @@ impl<D: Device + DynResource> DynDevice for D {
         unsafe { D::destroy_sampler(self, sampler.unbox()) };
     }
 
+    // tiled-fork: begin impl (DynTiledCommandEncoder return)
     unsafe fn create_command_encoder(
         &self,
         desc: &CommandEncoderDescriptor<'_, dyn DynQueue>,
-    ) -> Result<Box<dyn DynCommandEncoder>, DeviceError> {
+    ) -> Result<Box<dyn DynTiledCommandEncoder>, DeviceError> {
         let desc = CommandEncoderDescriptor {
             label: desc.label,
             queue: desc.queue.expect_downcast_ref(),
         };
         unsafe { D::create_command_encoder(self, &desc) }
-            .map(|b| -> Box<dyn DynCommandEncoder> { Box::new(b) })
+            .map(|b| -> Box<dyn DynTiledCommandEncoder> { Box::new(b) })
     }
+    // tiled-fork: end impl (DynTiledCommandEncoder return)
 
     unsafe fn create_bind_group_layout(
         &self,

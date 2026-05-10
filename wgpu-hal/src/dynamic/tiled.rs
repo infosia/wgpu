@@ -10,10 +10,13 @@ use alloc::boxed::Box;
 use core::fmt;
 
 use super::{
-    DynDevice, DynPipelineCache, DynPipelineLayout, DynRenderPipeline, DynResource,
-    DynResourceExt as _, DynShaderModule,
+    DynCommandEncoder, DynDevice, DynPipelineCache, DynPipelineLayout, DynQuerySet,
+    DynRenderPipeline, DynResource, DynResourceExt as _, DynShaderModule, DynTextureView,
 };
-use crate::tiled::{TiledApi, TiledCommandEncoder, TiledDevice};
+use crate::tiled::{
+    Subpass, SubpassDepthStencilAttachment, SubpassRenderPassDescriptor, TiledApi,
+    TiledCommandEncoder, TiledDevice,
+};
 use crate::{Api, CommandEncoder, Device, DeviceError, PipelineError, RenderPipelineDescriptor};
 
 // ----- Resource marker traits ---------------------------------------------
@@ -80,7 +83,20 @@ pub trait DynTiledDevice: DynDevice {
 }
 
 /// Dynamic-dispatch counterpart to [`TiledCommandEncoder`].
-pub trait DynTiledCommandEncoder {
+///
+/// `DynTiledCommandEncoder: DynCommandEncoder` so wgpu-core can store a
+/// single `Box<dyn DynTiledCommandEncoder>` and reach both the upstream
+/// command-encoder API and the tiled extension API through trait upcasting.
+pub trait DynTiledCommandEncoder: DynCommandEncoder {
+    /// Begin a multi-subpass render pass.
+    ///
+    /// # Safety
+    /// See [`TiledCommandEncoder::begin_subpass_render_pass`].
+    unsafe fn begin_subpass_render_pass_dyn(
+        &mut self,
+        desc: &SubpassRenderPassDescriptor<'_, dyn DynQuerySet, dyn DynTextureView>,
+    );
+
     /// Advance to the next subpass.
     ///
     /// # Safety
@@ -105,6 +121,14 @@ impl<D> DynTiledDevice for D
 where
     D: TiledDevice + DynResource,
     <D as Device>::A: TiledApi,
+    // tiled-fork: begin trait-bound (DynDevice supertrait)
+    // `DynTiledDevice: DynDevice` and the blanket `DynDevice` impl now
+    // requires `<D::A as Api>::CommandEncoder: TiledCommandEncoder` so it
+    // can box created encoders as `Box<dyn DynTiledCommandEncoder>`.
+    // Re-state the bound here so this `DynTiledDevice` impl can itself
+    // satisfy its `DynDevice` supertrait.
+    <<D as Device>::A as Api>::CommandEncoder: TiledCommandEncoder,
+    // tiled-fork: end trait-bound (DynDevice supertrait)
 {
     unsafe fn create_transient_attachment_dyn(
         &self,
@@ -188,9 +212,93 @@ where
 
 impl<E> DynTiledCommandEncoder for E
 where
-    E: TiledCommandEncoder,
+    E: TiledCommandEncoder + DynResource,
     <E as CommandEncoder>::A: TiledApi,
 {
+    unsafe fn begin_subpass_render_pass_dyn(
+        &mut self,
+        desc: &SubpassRenderPassDescriptor<'_, dyn DynQuerySet, dyn DynTextureView>,
+    ) {
+        use alloc::vec::Vec;
+
+        type ApiOf<E> = <E as CommandEncoder>::A;
+
+        // Downcast persistent (DRAM) color attachments.
+        let color_attachments: Vec<_> = desc
+            .color_attachments
+            .iter()
+            .map(|attachment| {
+                attachment
+                    .as_ref()
+                    .map(|attachment| attachment.expect_downcast())
+            })
+            .collect();
+
+        // Downcast persistent depth/stencil attachment.
+        let depth_stencil_attachment = desc
+            .depth_stencil_attachment
+            .as_ref()
+            .map(|ds| ds.expect_downcast());
+
+        // Each subpass owns its own attachment vectors that must outlive the
+        // concrete `Subpass` slice we hand off below.
+        let subpass_color_attachments: Vec<Vec<_>> = desc
+            .subpasses
+            .iter()
+            .map(|subpass| {
+                subpass
+                    .color_attachments
+                    .iter()
+                    .map(|att| att.as_ref().map(|a| a.expect_downcast()))
+                    .collect()
+            })
+            .collect();
+
+        let subpasses: Vec<Subpass<<ApiOf<E> as Api>::TextureView>> = desc
+            .subpasses
+            .iter()
+            .zip(subpass_color_attachments.iter())
+            .map(|(subpass, color_attachments)| Subpass::<<ApiOf<E> as Api>::TextureView> {
+                color_attachments,
+                color_attachment_indices: subpass.color_attachment_indices,
+                depth_stencil_attachment: subpass
+                    .depth_stencil_attachment
+                    .as_ref()
+                    .map(SubpassDepthStencilAttachment::expect_downcast),
+                input_attachments: subpass.input_attachments,
+            })
+            .collect();
+
+        let timestamp_writes = desc
+            .timestamp_writes
+            .as_ref()
+            .map(|writes| writes.expect_downcast());
+
+        let occlusion_query_set = desc
+            .occlusion_query_set
+            .map(|set| set.expect_downcast_ref());
+
+        let concrete = SubpassRenderPassDescriptor::<
+            '_,
+            <ApiOf<E> as Api>::QuerySet,
+            <ApiOf<E> as Api>::TextureView,
+        > {
+            label: desc.label,
+            extent: desc.extent,
+            sample_count: desc.sample_count,
+            color_attachments: &color_attachments,
+            depth_stencil_attachment,
+            subpasses: &subpasses,
+            subpass_dependencies: desc.subpass_dependencies,
+            transient_memory_hint: desc.transient_memory_hint,
+            active_subpass_mask: desc.active_subpass_mask,
+            multiview_mask: desc.multiview_mask,
+            timestamp_writes,
+            occlusion_query_set,
+        };
+        unsafe { <E as TiledCommandEncoder>::begin_subpass_render_pass(self, &concrete) }
+    }
+
     unsafe fn next_subpass_dyn(&mut self) {
         unsafe { <E as TiledCommandEncoder>::next_subpass(self) }
     }

@@ -13,7 +13,15 @@ use crate::lock::{rank, Mutex};
 /// [ce]: hal::CommandEncoder
 /// [cb]: hal::Api::CommandBuffer
 pub(crate) struct CommandAllocator {
-    free_encoders: Mutex<Vec<Box<dyn hal::DynCommandEncoder>>>,
+    // tiled-fork: begin storage (DynTiledCommandEncoder)
+    // Stored as `Box<dyn DynTiledCommandEncoder>` so wgpu-core can reach
+    // the fork's tiled command-encoder surface (next_subpass /
+    // dispatch_transient / begin_subpass_render_pass) on encoders pulled
+    // from the pool. `DynTiledCommandEncoder: DynCommandEncoder`
+    // (Phase 11d1) keeps the upstream `&dyn DynCommandEncoder` callers
+    // working through trait upcasting.
+    free_encoders: Mutex<Vec<Box<dyn hal::DynTiledCommandEncoder>>>,
+    // tiled-fork: end storage (DynTiledCommandEncoder)
 }
 
 impl CommandAllocator {
@@ -29,11 +37,12 @@ impl CommandAllocator {
     /// create a new one on `device`.
     ///
     /// [`wgpu_hal::CommandEncoder`]: hal::CommandEncoder
+    // tiled-fork: begin signature (DynTiledCommandEncoder)
     pub(crate) fn acquire_encoder(
         &self,
         device: &dyn hal::DynDevice,
         queue: &dyn hal::DynQueue,
-    ) -> Result<Box<dyn hal::DynCommandEncoder>, hal::DeviceError> {
+    ) -> Result<Box<dyn hal::DynTiledCommandEncoder>, hal::DeviceError> {
         let mut free_encoders = self.free_encoders.lock();
         match free_encoders.pop() {
             Some(encoder) => Ok(encoder),
@@ -45,8 +54,9 @@ impl CommandAllocator {
     }
 
     /// Add `encoder` back to the free pool.
-    pub(crate) fn release_encoder(&self, encoder: Box<dyn hal::DynCommandEncoder>) {
+    pub(crate) fn release_encoder(&self, encoder: Box<dyn hal::DynTiledCommandEncoder>) {
         let mut free_encoders = self.free_encoders.lock();
         free_encoders.push(encoder);
     }
+    // tiled-fork: end signature (DynTiledCommandEncoder)
 }

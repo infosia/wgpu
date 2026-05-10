@@ -113,6 +113,11 @@ impl ContextWgpuCore {
     where
         // tiled-fork: begin trait-bound (TiledDevice)
         <A as hal::Api>::Device: hal::TiledDevice,
+        // Phase 11d1: `DynTiledDevice: DynDevice`, and the `DynDevice`
+        // blanket impl now requires the concrete encoder to impl
+        // `TiledCommandEncoder` so it can box created encoders as
+        // `Box<dyn DynTiledCommandEncoder>`.
+        <A as hal::Api>::CommandEncoder: hal::TiledCommandEncoder,
         // tiled-fork: end trait-bound (TiledDevice)
     {
         let (device_id, queue_id) = unsafe {

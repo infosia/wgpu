@@ -317,7 +317,13 @@ pub(crate) struct EncoderInFlight {
 #[derive(Debug)]
 pub(crate) struct PendingWrites {
     // The command encoder needs to be destroyed before any other resource in pending writes.
-    pub command_encoder: Box<dyn hal::DynCommandEncoder>,
+    // tiled-fork: begin storage (DynTiledCommandEncoder)
+    // Stored as `Box<dyn DynTiledCommandEncoder>` so the encoder reaches
+    // both the upstream encoder API and the fork's tiled extension API
+    // (Phase 11d1). Existing `&dyn DynCommandEncoder` consumers continue
+    // to work via trait upcasting.
+    pub command_encoder: Box<dyn hal::DynTiledCommandEncoder>,
+    // tiled-fork: end storage (DynTiledCommandEncoder)
 
     /// True if `command_encoder` is in the "recording" state, as
     /// described in the docs for the [`wgpu_hal::CommandEncoder`]
@@ -334,10 +340,12 @@ pub(crate) struct PendingWrites {
 }
 
 impl PendingWrites {
+    // tiled-fork: begin signature (DynTiledCommandEncoder)
     pub fn new(
-        command_encoder: Box<dyn hal::DynCommandEncoder>,
+        command_encoder: Box<dyn hal::DynTiledCommandEncoder>,
         instance_flags: wgt::InstanceFlags,
     ) -> Self {
+    // tiled-fork: end signature (DynTiledCommandEncoder)
         Self {
             command_encoder,
             is_recording: false,

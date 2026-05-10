@@ -29,6 +29,9 @@ pub struct DynOpenDevice {
 impl<A: Api + crate::TiledApi> From<OpenDevice<A>> for DynOpenDevice
 where
     <A as Api>::Device: crate::TiledDevice,
+    // Phase 11d1: `DynTiledDevice: DynDevice`, and the `DynDevice` blanket
+    // requires the concrete encoder to impl `TiledCommandEncoder`.
+    <A as Api>::CommandEncoder: crate::TiledCommandEncoder,
 {
 // tiled-fork: end trait-bound (TiledApi)
     fn from(open_device: OpenDevice<A>) -> Self {
@@ -76,6 +79,10 @@ where
     // out here keeps them visible at the call site.
     A::A: crate::TiledApi,
     <A::A as Api>::Device: crate::TiledDevice,
+    // Phase 11d1: `DynTiledDevice: DynDevice`, and the `DynDevice` blanket
+    // requires the concrete encoder to impl `TiledCommandEncoder` so it
+    // can box created encoders as `Box<dyn DynTiledCommandEncoder>`.
+    <A::A as Api>::CommandEncoder: crate::TiledCommandEncoder,
     // tiled-fork: end trait-bound (DynTiledDevice)
 {
     unsafe fn open(
