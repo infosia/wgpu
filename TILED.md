@@ -283,6 +283,7 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
         only needed if we ever want subpass advance from inside an *upstream* single-pass `RenderPass`,
         which has no obvious caller. Left open as a marker, low priority.)
   - [x] Phase 11f — Public `SubpassRenderPipelineDescriptor` + `Device::create_subpass_render_pipeline`
+  - [x] Phase 11g — Resource-tracker registration in `SubpassRenderPass::set_*` (pipeline / bind-group / vertex / index)
 
 ## Snapshot at session end (2026-05-11)
 
@@ -367,13 +368,15 @@ but should be addressed in subsequent passes:
   subpass-render-graph example. Estimated ~2,000+ LOC of example code
   + shaders.
 
-- **Resource-tracker registration in `SubpassRenderPass`.** Upstream
-  `RenderPass` inserts every bound pipeline / bind-group / buffer Arc
-  into the parent command buffer's tracker so the resources live
-  until queue submission. The Phase 11d4 subpass path does *not* yet
-  do this — callers must keep handles alive themselves until the
-  command buffer is submitted. Mirroring upstream's `RenderPassInfo`
-  machinery here is the next correctness item.
+- ~~Resource-tracker registration in `SubpassRenderPass`~~ — **fixed
+  in Phase 11g.** `set_pipeline`, `set_bind_group`, `set_vertex_buffer`,
+  and `set_index_buffer` now insert their resource Arcs into
+  `cmd_buf.trackers` so they survive until queue submission. Buffer
+  bindings additionally record `BufferUses::VERTEX|INDEX` via
+  `BufferTracker::set_single`. (The per-draw barrier-plan side of
+  upstream's tracking — `UsageScope::merge_single` — is still not
+  wired; that's a separate sub-pass on the per-draw validation
+  hardening listed below.)
 
 - **wgpu-side draw validation gaps in `SubpassRenderPass`.**
   `set_pipeline` skips `pass_context.check_compatible` and pipeline

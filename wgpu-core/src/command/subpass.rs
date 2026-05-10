@@ -34,13 +34,16 @@
 //! the caller upholds the same invariants the upstream `RenderPass`
 //! validator would enforce. Specifically:
 //!
-//! 1. **No resource-tracker registration**: upstream's `RenderPass`
-//!    inserts each bound `Arc<RenderPipeline>` / `Arc<BindGroup>` /
-//!    `Arc<Buffer>` into the parent command buffer's tracker so that
-//!    the resources survive until queue submission. The subpass path
-//!    does not yet do this — see the `RenderPassInfo` machinery in
-//!    `render.rs` for the upstream pattern. Callers must keep handles
-//!    alive themselves until the command buffer is submitted.
+//! 1. ~~No resource-tracker registration~~ — **fixed in Phase 11g.**
+//!    `set_pipeline`, `set_bind_group`, `set_vertex_buffer`, and
+//!    `set_index_buffer` now insert their resource Arcs into the
+//!    command buffer's tracker so the resources stay alive until queue
+//!    submission. The pattern mirrors upstream `RenderPass`'s tracker
+//!    insertion. Buffer bindings additionally record `BufferUses::VERTEX`
+//!    or `BufferUses::INDEX` against the buffer tracker via
+//!    `BufferTracker::set_single` (the upstream per-draw
+//!    `UsageScope::merge_single` barrier-plan path is still deferred to
+//!    a future validation-hardening pass).
 //! 2. **No pipeline/bind-group/buffer-usage validation**: `set_pipeline`
 //!    skips `pass_context.check_compatible`; `set_bind_group` skips
 //!    `BindGroupLayout::is_compatible`; `set_*_buffer` skips
@@ -630,6 +633,15 @@ impl Global {
         let mut cmd_buf_data = parent.data.lock();
         let dispatch_result: Result<(), SubpassRenderPassError> =
             with_locked_encoder_mut(&mut cmd_buf_data, |cmd_buf| {
+                // tiled-fork: begin tracker (set_pipeline)
+                // Pin the pipeline Arc into the command buffer's tracker so
+                // it stays alive until queue submission. Mirrors upstream
+                // `RenderPass::set_pipeline` -> `state.pass.base.tracker.render_pipelines.insert_single(pipeline)`.
+                cmd_buf
+                    .trackers
+                    .render_pipelines
+                    .insert_single(pipeline.clone());
+                // tiled-fork: end tracker (set_pipeline)
                 // SAFETY: pass was opened, encoder is in a subpass-mode
                 // render pass per the begin/end contract.
                 unsafe {
@@ -720,7 +732,17 @@ impl Global {
         let mut cmd_buf_data = parent.data.lock();
         let dispatch_result: Result<(), SubpassRenderPassError> =
             with_locked_encoder_mut(&mut cmd_buf_data, |cmd_buf| {
-                if let Some(raw_bg) = raw_bg {
+                if let (Some(raw_bg), Some(bg)) = (raw_bg, bind_group.as_ref()) {
+                    // tiled-fork: begin tracker (set_bind_group)
+                    // Pin the bind-group Arc into the command buffer's
+                    // tracker so it stays alive until queue submission.
+                    // Mirrors upstream `RenderPass::set_bind_group` ->
+                    // `state.pass.base.tracker.bind_groups.insert_single(bind_group)`.
+                    // `raw_bg` and `bind_group` are constructed as paired
+                    // Options above, so this destructure always matches when
+                    // `raw_bg.is_some()`.
+                    cmd_buf.trackers.bind_groups.insert_single(bg.clone());
+                    // tiled-fork: end tracker (set_bind_group)
                     // SAFETY: pass is open in subpass mode; layout is from
                     // the most recently bound pipeline.
                     unsafe {
@@ -1014,6 +1036,29 @@ impl Global {
         let mut cmd_buf_data = parent.data.lock();
         let dispatch_result: Result<(), SubpassRenderPassError> =
             with_locked_encoder_mut(&mut cmd_buf_data, |cmd_buf| {
+                // tiled-fork: begin tracker (set_buffer_inner)
+                // Pin the buffer Arc into the command buffer's BufferTracker
+                // so it stays alive until queue submission. We use
+                // `set_single` (not `merge_single`) because:
+                //
+                //   * Phase 11g's goal is lifetime: the BufferTracker holds
+                //     `Arc<Buffer>` and frees it at submission, which is
+                //     what we need.
+                //   * Upstream's `merge_single` lives on a `UsageScope`
+                //     (not the BufferTracker) and is used for per-draw
+                //     usage-state merging into the pass-scoped barrier
+                //     plan; that machinery isn't yet wired for subpass
+                //     mode (a future hardening pass).
+                //
+                // The returned `Option<PendingTransition>` would describe a
+                // state transition that the (eager) HAL dispatch already
+                // performed externally; we ignore it.
+                let usage = match kind {
+                    BufferBindKind::Vertex { .. } => wgt::BufferUses::VERTEX,
+                    BufferBindKind::Index { .. } => wgt::BufferUses::INDEX,
+                };
+                let _ = cmd_buf.trackers.buffers.set_single(&buffer, usage);
+                // tiled-fork: end tracker (set_buffer_inner)
                 match kind {
                     BufferBindKind::Vertex { slot } => {
                         // SAFETY: pass open in subpass mode; binding has the
