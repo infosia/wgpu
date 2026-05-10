@@ -133,15 +133,23 @@ and `CommandEncoder::begin_render_pass` → `begin_subpass_render_pass`.
 
 ## Phase ordering (each phase = one focused commit)
 
-1. **Phase 0** — `wgpu-types`: foundation types in `tiled.rs`, 4 feature flag bits, `mod` registration. Limits and `RenderPipelineDescriptor` are **not** touched.
+The original plan had 9 phases (0-8). During execution, Phase 3
+(wgpu-core integration) and Phase 4 (public API) were each scoped wide
+enough that they were split into scaffolding-only commits + a deferred
+"real implementation" phase, to keep each commit reviewable under the
+single-commit-per-phase rule. The current sequence:
+
+1. **Phase 0** — `wgpu-types`: foundation types in `tiled.rs`, 5 feature flag bits, `mod` registration. Limits and `RenderPipelineDescriptor` are **not** touched.
 2. **Phase 1** — `wgpu-hal` extension traits in `tiled.rs`. Upstream `Api`/`Device`/`CommandEncoder` traits unchanged.
-3. **Phase 2** — Per-backend HAL impls in `{vulkan,metal,gles,dx12,noop}/tiled.rs`. Each backend's `mod.rs` gets a single `mod tiled;` line.
-4. **Phase 3** — `wgpu-core` integration: `command/subpass.rs`, `resource_tiled.rs`, `device/tiled.rs`. `command/render.rs` only gets `mod subpass;` + a small dispatch hook.
-5. **Phase 4** — `wgpu` public API: `api/subpass.rs`, `api/render_graph.rs`, `api/tiled_caps.rs`, `dispatch_tiled.rs`. Existing types receive only purely-additive inherent methods.
-6. **Phase 5** — naga: cherry-pick the **already-refactored** subpass variant from `wgpu-tiled` (post `4ba4a1c11`, post `b1c2d5d50`). Do not redo the IR work.
-7. **Phase 6** — Examples: `deferred_rendering`, `subpass_render_graph`, `subpass_msaa`. **No** churn to existing examples.
-8. **Phase 7** — Tests + benches: copy verbatim from `wgpu-tiled` for new tiled-related tests. **No** churn to existing tests.
-9. **Phase 8** — Docs: keep this `TILED.md` updated; add `docs/tiled-fork-conventions.md` describing the marker convention and rebase workflow.
+3. **Phase 2** — Per-backend HAL stubs in `{vulkan,metal,gles,dx12,noop}/tiled.rs`. Each backend's `mod.rs` gets a single `mod tiled;` line.
+4. **Phase 3** — `wgpu-core` scaffolding: `resource_tiled.rs`, `device/tiled.rs`, registry/tracker slots, IDs. Methods return `Err(DeviceError::from_hal(Unexpected))`.
+5. **Phase 4** — `wgpu-core` subpass scaffolding: `command/subpass.rs` with stub `Global` methods returning `SubpassRenderPassError::NotImplemented`.
+6. **Phase 5** — `wgpu` public API: `api/subpass.rs`, `api/render_graph.rs`, `api/tiled_caps.rs`, `dispatch_tiled.rs`. Existing types receive only purely-additive inherent methods.
+7. **Phase 6** — naga: cherry-pick the **already-refactored** subpass variant from `wgpu-tiled` (post `4ba4a1c11`, post `b1c2d5d50`). Do not redo the IR work.
+8. **Phase 7** — Examples: `deferred_rendering`, `subpass_render_graph`, `subpass_msaa`. **No** churn to existing examples.
+9. **Phase 8** — Tests + benches: copy from `wgpu-tiled` for new tiled-related tests. **No** churn to existing tests.
+10. **Phase 9** — Backend real implementations (Vulkan / Metal / GLES). Replaces the per-backend `todo!()` stubs and lights up the path through wgpu-core.
+11. **Phase 10** — Docs: refresh `TILED.md`, add `docs/tiled-fork-conventions.md` describing the marker convention and rebase workflow.
 
 ## Conventions
 
@@ -236,7 +244,7 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
 - [x] Phase 1 — wgpu-hal extension traits
 - [x] Phase 2 — Per-backend HAL impls (stubs; real impls in later phases)
 - [x] Phase 3 — wgpu-core scaffolding (resource wrappers, Device methods, IDs)
-- [ ] Phase 4 — wgpu-core subpass validation + render-pass info
+- [x] Phase 4 — wgpu-core subpass scaffolding (NotImplemented stubs; full validation in Phase 9)
 - [ ] Phase 5 — wgpu public API
 - [ ] Phase 6 — naga (cherry-pick refactored variant)
 - [ ] Phase 7 — Examples

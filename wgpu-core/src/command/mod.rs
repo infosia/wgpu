@@ -24,6 +24,9 @@ mod query;
 mod ray_tracing;
 mod render;
 mod render_command;
+// tiled-fork: begin module
+mod subpass;
+// tiled-fork: end module
 mod timestamp_writes;
 mod transfer;
 mod transition_resources;
@@ -67,6 +70,9 @@ pub use self::{
     transfer::{CopySide, TransferError},
     transition_resources::TransitionResourcesError,
 };
+// tiled-fork: begin re-export
+pub use self::subpass::{SubpassRenderPass, SubpassRenderPassError};
+// tiled-fork: end re-export
 pub(crate) use self::{
     clear::clear_texture,
     encoder::EncodingState,
