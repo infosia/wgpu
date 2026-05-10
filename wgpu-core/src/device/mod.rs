@@ -26,6 +26,9 @@ mod life;
 pub mod queue;
 pub mod ray_tracing;
 pub mod resource;
+// tiled-fork: begin module
+mod tiled;
+// tiled-fork: end module
 #[cfg(any(feature = "trace", feature = "replay"))]
 pub mod trace;
 pub use {life::WaitIdleError, resource::Device};

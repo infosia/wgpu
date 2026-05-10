@@ -235,9 +235,11 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
 - [x] Phase 0 — wgpu-types foundation
 - [x] Phase 1 — wgpu-hal extension traits
 - [x] Phase 2 — Per-backend HAL impls (stubs; real impls in later phases)
-- [ ] Phase 3 — wgpu-core integration
-- [ ] Phase 4 — wgpu public API
-- [ ] Phase 5 — naga (cherry-pick refactored variant)
-- [ ] Phase 6 — Examples
-- [ ] Phase 7 — Tests + benches
-- [ ] Phase 8 — Docs
+- [x] Phase 3 — wgpu-core scaffolding (resource wrappers, Device methods, IDs)
+- [ ] Phase 4 — wgpu-core subpass validation + render-pass info
+- [ ] Phase 5 — wgpu public API
+- [ ] Phase 6 — naga (cherry-pick refactored variant)
+- [ ] Phase 7 — Examples
+- [ ] Phase 8 — Tests + benches
+- [ ] Phase 9 — Backend real impls (Vulkan, Metal, GLES)
+- [ ] Phase 10 — Docs

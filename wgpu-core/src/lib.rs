@@ -87,6 +87,9 @@ pub mod present;
 pub mod ray_tracing;
 pub mod registry;
 pub mod resource;
+// tiled-fork: begin module
+pub mod resource_tiled;
+// tiled-fork: end module
 mod snatch;
 pub mod storage;
 mod timestamp_normalization;

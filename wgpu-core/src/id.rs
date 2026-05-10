@@ -338,6 +338,10 @@ ids! {
     pub type QuerySetId QuerySet;
     pub type BlasId Blas;
     pub type TlasId Tlas;
+    // tiled-fork: begin ids
+    pub type TransientAttachmentId TransientAttachment;
+    pub type TransientDispatchId TransientDispatch;
+    // tiled-fork: end ids
 }
 
 #[test]

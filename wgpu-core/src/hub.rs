@@ -130,6 +130,9 @@ use crate::{
         Blas, Buffer, ExternalTexture, Fallible, QuerySet, Sampler, StagingBuffer, Texture,
         TextureView, Tlas,
     },
+    // tiled-fork: begin import
+    resource_tiled::{TransientAttachment, TransientDispatch},
+    // tiled-fork: end import
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -153,6 +156,10 @@ pub struct HubReport {
     pub texture_views: RegistryReport,
     pub external_textures: RegistryReport,
     pub samplers: RegistryReport,
+    // tiled-fork: begin report
+    pub transient_attachments: RegistryReport,
+    pub transient_dispatches: RegistryReport,
+    // tiled-fork: end report
 }
 
 impl HubReport {
@@ -205,6 +212,10 @@ pub struct Hub {
     pub(crate) samplers: Registry<Fallible<Sampler>>,
     pub(crate) blas_s: Registry<Fallible<Blas>>,
     pub(crate) tlas_s: Registry<Fallible<Tlas>>,
+    // tiled-fork: begin registries
+    pub(crate) transient_attachments: Registry<Fallible<TransientAttachment>>,
+    pub(crate) transient_dispatches: Registry<Fallible<TransientDispatch>>,
+    // tiled-fork: end registries
 }
 
 impl Hub {
@@ -232,6 +243,10 @@ impl Hub {
             samplers: Registry::new(),
             blas_s: Registry::new(),
             tlas_s: Registry::new(),
+            // tiled-fork: begin registries
+            transient_attachments: Registry::new(),
+            transient_dispatches: Registry::new(),
+            // tiled-fork: end registries
         }
     }
 
@@ -256,6 +271,10 @@ impl Hub {
             texture_views: self.texture_views.generate_report(),
             external_textures: self.external_textures.generate_report(),
             samplers: self.samplers.generate_report(),
+            // tiled-fork: begin report
+            transient_attachments: self.transient_attachments.generate_report(),
+            transient_dispatches: self.transient_dispatches.generate_report(),
+            // tiled-fork: end report
         }
     }
 }

@@ -234,6 +234,16 @@ pub(crate) struct TrackerIndexAllocators {
     pub query_sets: Arc<SharedTrackerIndexAllocator>,
     pub blas_s: Arc<SharedTrackerIndexAllocator>,
     pub tlas_s: Arc<SharedTrackerIndexAllocator>,
+    // tiled-fork: begin allocators
+    // Allocated up front so the wgpu-core registry slot count stays stable across
+    // phases; consumers (`resource_tiled::TransientAttachment` /
+    // `TransientDispatch` constructors) become live when backends gain real
+    // HAL implementations in a later phase.
+    #[allow(dead_code)]
+    pub transient_attachments: Arc<SharedTrackerIndexAllocator>,
+    #[allow(dead_code)]
+    pub transient_dispatches: Arc<SharedTrackerIndexAllocator>,
+    // tiled-fork: end allocators
 }
 
 impl TrackerIndexAllocators {
@@ -250,6 +260,10 @@ impl TrackerIndexAllocators {
             query_sets: Arc::new(SharedTrackerIndexAllocator::new()),
             blas_s: Arc::new(SharedTrackerIndexAllocator::new()),
             tlas_s: Arc::new(SharedTrackerIndexAllocator::new()),
+            // tiled-fork: begin allocators
+            transient_attachments: Arc::new(SharedTrackerIndexAllocator::new()),
+            transient_dispatches: Arc::new(SharedTrackerIndexAllocator::new()),
+            // tiled-fork: end allocators
         }
     }
 }
