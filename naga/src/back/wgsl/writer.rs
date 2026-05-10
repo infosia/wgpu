@@ -717,6 +717,9 @@ impl<W: Write> Writer<W> {
                         // Forcefully creating baking expressions in some cases to help with readability
                         let required_baking_expr = match *expr {
                             Expression::ImageLoad { .. }
+                            // tiled-fork: begin arm (Expression::SubpassLoad bake)
+                            | Expression::SubpassLoad { .. }
+                            // tiled-fork: end arm (Expression::SubpassLoad bake)
                             | Expression::ImageQuery { .. }
                             | Expression::ImageSample { .. } => true,
                             _ => false,
@@ -1693,6 +1696,20 @@ impl<W: Write> Writer<W> {
                 }
                 write!(self.out, ")")?;
             }
+            // tiled-fork: begin arm (Expression::SubpassLoad write)
+            Expression::SubpassLoad {
+                image,
+                sample_index,
+            } => {
+                write!(self.out, "subpassLoad(")?;
+                self.write_expr(module, image, func_ctx)?;
+                if let Some(sample_index) = sample_index {
+                    write!(self.out, ", ")?;
+                    self.write_expr(module, sample_index, func_ctx)?;
+                }
+                write!(self.out, ")")?;
+            }
+            // tiled-fork: end arm (Expression::SubpassLoad write)
             Expression::GlobalVariable(handle) => {
                 let name = &self.names[&NameKey::GlobalVariable(handle)];
                 write!(self.out, "{name}")?;
@@ -1951,12 +1968,6 @@ impl<W: Write> Writer<W> {
                 self.write_expr(module, c, func_ctx)?;
                 write!(self.out, ")")?;
             }
-            // tiled-fork: begin arm (SubpassLoad)
-            #[allow(clippy::todo)]
-            Expression::SubpassLoad { .. } => {
-                todo!("Phase 6b: subpass-input emission for the WGSL backend")
-            }
-            // tiled-fork: end arm (SubpassLoad)
         }
 
         Ok(())

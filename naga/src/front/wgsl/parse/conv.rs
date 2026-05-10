@@ -2,7 +2,9 @@ use crate::front::wgsl::parse::directive::enable_extension::{
     EnableExtensions, ImplementedEnableExtension,
 };
 use crate::front::wgsl::{Error, Result, Scalar};
-use crate::{ImageClass, ImageDimension, Span, TypeInner, VectorSize};
+// tiled-fork: begin import (SubpassAspect)
+use crate::{ImageClass, ImageDimension, Span, SubpassAspect, TypeInner, VectorSize};
+// tiled-fork: end import (SubpassAspect)
 
 use alloc::boxed::Box;
 
@@ -407,6 +409,15 @@ pub enum TypeGenerator {
         arrayed: bool,
         multi: bool,
     },
+    // tiled-fork: begin variant (TypeGenerator::SubpassInput)
+    /// Generator for `subpass_input<T>` / `subpass_input_multisampled<T>`.
+    /// The element scalar type is supplied by the WGSL template argument
+    /// and lowers to [`crate::ImageClass::Subpass`] with
+    /// [`crate::SubpassAspect::Color`].
+    SubpassInput {
+        multi: bool,
+    },
+    // tiled-fork: end variant (TypeGenerator::SubpassInput)
     StorageTexture {
         dim: ImageDimension,
         arrayed: bool,
@@ -500,6 +511,12 @@ pub fn map_predeclared_type(
         "texture_depth_cube" =>            Ti::Image { dim: ImageDimension::Cube, arrayed: false, class: ImageClass::Depth { multi: false } }.into(),
         "texture_depth_cube_array" =>      Ti::Image { dim: ImageDimension::Cube, arrayed: true,  class: ImageClass::Depth { multi: false } }.into(),
         "texture_depth_multisampled_2d" => Ti::Image { dim: ImageDimension::D2,   arrayed: false, class: ImageClass::Depth { multi: true  } }.into(),
+        // tiled-fork: begin types (subpass_input depth/stencil)
+        "subpass_input_depth"              => Ti::Image { dim: ImageDimension::D2, arrayed: false, class: ImageClass::Subpass { aspect: SubpassAspect::Depth,   multi: false } }.into(),
+        "subpass_input_depth_multisampled" => Ti::Image { dim: ImageDimension::D2, arrayed: false, class: ImageClass::Subpass { aspect: SubpassAspect::Depth,   multi: true  } }.into(),
+        "subpass_input_stencil"              => Ti::Image { dim: ImageDimension::D2, arrayed: false, class: ImageClass::Subpass { aspect: SubpassAspect::Stencil, multi: false } }.into(),
+        "subpass_input_stencil_multisampled" => Ti::Image { dim: ImageDimension::D2, arrayed: false, class: ImageClass::Subpass { aspect: SubpassAspect::Stencil, multi: true  } }.into(),
+        // tiled-fork: end types (subpass_input depth/stencil)
         // external texture
         "texture_external" => Ti::Image { dim: ImageDimension::D2, arrayed: false, class: ImageClass::External }.into(),
         // ray desc
@@ -537,6 +554,10 @@ pub fn map_predeclared_type(
         "texture_cube" =>             TypeGenerator::SampledTexture { dim: ImageDimension::Cube, arrayed: false, multi: false }.into(),
         "texture_cube_array" =>       TypeGenerator::SampledTexture { dim: ImageDimension::Cube, arrayed: true,  multi: false }.into(),
         "texture_multisampled_2d" =>  TypeGenerator::SampledTexture { dim: ImageDimension::D2,   arrayed: false, multi: true  }.into(),
+        // tiled-fork: begin types (subpass_input color)
+        "subpass_input"              => TypeGenerator::SubpassInput { multi: false }.into(),
+        "subpass_input_multisampled" => TypeGenerator::SubpassInput { multi: true  }.into(),
+        // tiled-fork: end types (subpass_input color)
         // storage textures
         "texture_storage_1d" =>       TypeGenerator::StorageTexture { dim: ImageDimension::D1,   arrayed: false }.into(),
         "texture_storage_2d" =>       TypeGenerator::StorageTexture { dim: ImageDimension::D2,   arrayed: false }.into(),

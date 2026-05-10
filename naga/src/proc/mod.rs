@@ -458,6 +458,13 @@ impl super::ImageClass {
     pub const fn is_depth(self) -> bool {
         matches!(self, crate::ImageClass::Depth { .. })
     }
+
+    // tiled-fork: begin method (is_subpass_input)
+    /// Whether this image class is one of the `subpass_input*` types.
+    pub const fn is_subpass_input(self) -> bool {
+        matches!(self, crate::ImageClass::Subpass { .. })
+    }
+    // tiled-fork: end method (is_subpass_input)
 }
 
 impl crate::Module {

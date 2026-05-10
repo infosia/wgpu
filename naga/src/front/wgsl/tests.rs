@@ -1113,3 +1113,112 @@ error: `bitcast` needs a template argument specified: `T`, a type
         );
     }
 }
+
+// tiled-fork: begin tests (subpass_input frontend)
+mod subpass_input {
+    use super::parse_str;
+    use crate::front::wgsl::assert_parse_err;
+
+    #[test]
+    fn parse_subpass_input_types() {
+        // All four subpass-input types in their plain and multisampled forms.
+        parse_str("@group(0) @binding(0) var s: subpass_input<f32>;").unwrap();
+        parse_str("@group(0) @binding(0) var s: subpass_input<i32>;").unwrap();
+        parse_str("@group(0) @binding(0) var s: subpass_input<u32>;").unwrap();
+        parse_str("@group(0) @binding(0) var s: subpass_input_multisampled<f32>;").unwrap();
+        parse_str("@group(0) @binding(0) var s: subpass_input_depth;").unwrap();
+        parse_str("@group(0) @binding(0) var s: subpass_input_depth_multisampled;").unwrap();
+        parse_str("@group(0) @binding(0) var s: subpass_input_stencil;").unwrap();
+        parse_str("@group(0) @binding(0) var s: subpass_input_stencil_multisampled;").unwrap();
+    }
+
+    #[test]
+    fn subpass_load_lowers() {
+        // `subpassLoad` on a single-sampled subpass input should parse and lower.
+        parse_str(
+            "
+@group(0) @binding(0) var s: subpass_input<f32>;
+@fragment
+fn fs() -> @location(0) vec4<f32> {
+    return subpassLoad(s);
+}
+",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn subpass_load_multisampled_takes_sample_index() {
+        // Multisampled subpass inputs require a `sample_index` argument.
+        parse_str(
+            "
+@group(0) @binding(0) var s: subpass_input_multisampled<f32>;
+@fragment
+fn fs() -> @location(0) vec4<f32> {
+    return subpassLoad(s, 0);
+}
+",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn texture_load_on_subpass_input_is_rejected() {
+        assert_parse_err(
+            "
+@group(0) @binding(0) var s: subpass_input<f32>;
+@fragment
+fn fs() -> @location(0) vec4<f32> {
+    return textureLoad(s, vec2<i32>(0, 0), 0);
+}
+",
+            "\
+error: textureLoad cannot be used with input attachments
+  ┌─ wgsl:5:24
+  │
+5 │     return textureLoad(s, vec2<i32>(0, 0), 0);
+  │                        ^ use subpassLoad(input_attachment) instead
+
+",
+        );
+    }
+
+    #[test]
+    fn subpass_load_on_non_subpass_input_is_rejected() {
+        assert_parse_err(
+            "
+@group(0) @binding(0) var t: texture_2d<f32>;
+@fragment
+fn fs() -> @location(0) vec4<f32> {
+    return subpassLoad(t);
+}
+",
+            "\
+error: subpassLoad requires an input attachment
+  ┌─ wgsl:5:24
+  │
+5 │     return subpassLoad(t);
+  │                        ^ this value is not a `subpass_input*` type
+
+",
+        );
+    }
+
+    #[test]
+    fn input_attachment_index_is_deprecated() {
+        assert_parse_err(
+            "
+@group(0) @binding(0) @input_attachment_index(0) var s: subpass_input<f32>;
+",
+            "\
+error: `@input_attachment_index` is no longer supported
+  ┌─ wgsl:2:24
+  │
+2 │ @group(0) @binding(0) @input_attachment_index(0) var s: subpass_input<f32>;
+  │                        ^^^^^^^^^^^^^^^^^^^^^^ use `subpass_input*` types and identify inputs by `@binding`
+
+",
+        );
+    }
+}
+// tiled-fork: end tests (subpass_input frontend)

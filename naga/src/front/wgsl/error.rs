@@ -187,6 +187,11 @@ pub(crate) enum Error<'a> {
     BadMatrixScalarKind(Span, Scalar),
     BadAccessor(Span),
     BadTexture(Span),
+    // tiled-fork: begin variants (subpass_input errors)
+    DeprecatedInputAttachmentIndex(Span),
+    TextureLoadSubpassInput(Span),
+    SubpassLoadNonInputAttachment(Span),
+    // tiled-fork: end variants (subpass_input errors)
     BadTypeCast {
         span: Span,
         from_type: String,
@@ -626,6 +631,26 @@ impl<'a> Error<'a> {
                 labels: vec![(bad_span, "not an image".into())],
                 notes: vec![],
             },
+            // tiled-fork: begin arms (subpass_input errors)
+            Error::DeprecatedInputAttachmentIndex(span) => ParseError {
+                message: "`@input_attachment_index` is no longer supported".to_string(),
+                labels: vec![(
+                    span,
+                    "use `subpass_input*` types and identify inputs by `@binding`".into(),
+                )],
+                notes: vec![],
+            },
+            Error::TextureLoadSubpassInput(span) => ParseError {
+                message: "textureLoad cannot be used with input attachments".to_string(),
+                labels: vec![(span, "use subpassLoad(input_attachment) instead".into())],
+                notes: vec![],
+            },
+            Error::SubpassLoadNonInputAttachment(span) => ParseError {
+                message: "subpassLoad requires an input attachment".to_string(),
+                labels: vec![(span, "this value is not a `subpass_input*` type".into())],
+                notes: vec![],
+            },
+            // tiled-fork: end arms (subpass_input errors)
             Error::BadTypeCast {
                 span,
                 ref from_type,

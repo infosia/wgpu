@@ -247,6 +247,7 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
 - [x] Phase 4 — wgpu-core subpass scaffolding (NotImplemented stubs; full validation in Phase 9)
 - [x] Phase 5 — wgpu public API (TiledCapabilities query; descriptors & methods deferred)
 - [x] Phase 6a — naga IR additions + match-arm stubs (collapsed Subpass variant; backends Phase 6b)
+- [x] Phase 6b1 — naga WGSL frontend: subpass_input types + subpassLoad builtin (excludes @color)
 - [ ] Phase 7 — Examples
 - [ ] Phase 8 — Tests + benches
 - [ ] Phase 9 — Backend real impls (Vulkan, Metal, GLES)

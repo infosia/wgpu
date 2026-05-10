@@ -2849,6 +2849,30 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                             class: ir::ImageClass::Sampled { kind, multi },
                         }
                     }
+                    // tiled-fork: begin arm (TypeGenerator::SubpassInput)
+                    conv::TypeGenerator::SubpassInput { multi } => {
+                        let (scalar, span) = tl.scalar_ty(self, ctx)?;
+                        let ir::Scalar { kind, width } = scalar;
+                        if width != 4
+                            || !matches!(
+                                kind,
+                                ir::ScalarKind::Float
+                                    | ir::ScalarKind::Sint
+                                    | ir::ScalarKind::Uint
+                            )
+                        {
+                            return Err(Box::new(Error::BadTextureSampleType { span, scalar }));
+                        }
+                        ir::TypeInner::Image {
+                            dim: ir::ImageDimension::D2,
+                            arrayed: false,
+                            class: ir::ImageClass::Subpass {
+                                aspect: ir::SubpassAspect::Color { kind },
+                                multi,
+                            },
+                        }
+                    }
+                    // tiled-fork: end arm (TypeGenerator::SubpassInput)
                     conv::TypeGenerator::StorageTexture { dim, arrayed } => {
                         let format = tl.storage_format(ctx)?;
                         let access = tl.access_mode(ctx)?;
@@ -3438,6 +3462,11 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                     let coordinate = self.expression(args.next()?, ctx)?;
 
                     let (class, arrayed) = ctx.image_data(image, image_span)?;
+                    // tiled-fork: begin guard (textureLoad on subpass_input)
+                    if class.is_subpass_input() {
+                        return Err(Box::new(Error::TextureLoadSubpassInput(image_span)));
+                    }
+                    // tiled-fork: end guard (textureLoad on subpass_input)
                     let array_index = arrayed
                         .then(|| {
                             args.min_args += 1;
@@ -3471,6 +3500,34 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                         MustUse::Yes,
                     )
                 }
+                // tiled-fork: begin builtin (subpassLoad)
+                "subpassLoad" => {
+                    let mut args = ctx.prepare_args(arguments, 1, function_span);
+                    let image_arg = args.next()?;
+                    let image_span = ctx.ast_expressions.get_span(image_arg);
+                    let image = self.expression(image_arg, ctx)?;
+                    let (class, _) = ctx.image_data(image, image_span)?;
+                    if !class.is_subpass_input() {
+                        return Err(Box::new(Error::SubpassLoadNonInputAttachment(image_span)));
+                    }
+                    let sample_index = class
+                        .is_multisampled()
+                        .then(|| {
+                            args.min_args += 1;
+                            self.expression(args.next()?, ctx)
+                        })
+                        .transpose()?;
+                    args.finish()?;
+
+                    (
+                        ir::Expression::SubpassLoad {
+                            image,
+                            sample_index,
+                        },
+                        MustUse::Yes,
+                    )
+                }
+                // tiled-fork: end builtin (subpassLoad)
                 "textureDimensions" => {
                     let mut args = ctx.prepare_args(arguments, 1, function_span);
                     let image = self.expression(args.next()?, ctx)?;
@@ -4451,9 +4508,17 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                         self.expression(args.next()?, ctx)?
                     }
                     // tiled-fork: begin arm (ImageClass::Subpass)
-                    #[allow(clippy::todo)]
+                    // `textureSampleLevel` is not valid on subpass inputs; the
+                    // validator will reject the resulting expression. Match the
+                    // reference fork by routing depth-aspect to the integer-level
+                    // branch and color/stencil to the f32-level branch so we don't
+                    // silently coerce an inappropriate scalar type here.
+                    ir::ImageClass::Subpass {
+                        aspect: ir::SubpassAspect::Depth,
+                        ..
+                    } => self.expression(args.next()?, ctx)?,
                     ir::ImageClass::Subpass { .. } => {
-                        todo!("Phase 6b: subpass-input parsing for the WGSL frontend")
+                        self.expression_with_leaf_scalar(args.next()?, ir::Scalar::F32, ctx)?
                     }
                     // tiled-fork: end arm (ImageClass::Subpass)
                 };

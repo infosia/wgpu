@@ -2025,6 +2025,11 @@ impl Parser {
                 "volatile" => {
                     memory_decorations |= crate::MemoryDecorations::VOLATILE;
                 }
+                // tiled-fork: begin arm (deprecated input_attachment_index)
+                "input_attachment_index" => {
+                    return Err(Box::new(Error::DeprecatedInputAttachmentIndex(name_span)));
+                }
+                // tiled-fork: end arm (deprecated input_attachment_index)
                 _ => return Err(Box::new(Error::UnknownAttribute(name_span))),
             }
         }
