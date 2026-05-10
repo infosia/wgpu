@@ -260,7 +260,52 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
 - [x] Phase 6c — naga SPIR-V backend: SubpassData type + OpImageRead emission, SPV_EXT_shader_tile_image
 - [x] Phase 6d — naga MSL backend: [[color(N)]] fragment-arg emission for subpass + framebuffer fetch
 - [x] Phase 6e — naga GLSL backend: subpassInput/inout dual-mode emission
-- [ ] Phase 7 — Examples
+- [ ] Phase 7 — Examples (deferred; depends on Phase 9 backend impls)
 - [x] Phase 8 — Tests + benches (naga snapshot fixtures: subpass-* + framebuffer-fetch-*)
 - [ ] Phase 9 — Backend real impls (Vulkan, Metal, GLES)
-- [ ] Phase 10 — Docs
+- [x] Phase 10 — Docs (`docs/tiled-fork-conventions.md` + this status block)
+
+## Snapshot at session end (2026-05-10)
+
+The fork landed Phases 0-6e, 8, 10 across 14 commits. Cumulative diff
+against the branch base is ~5,000 LOC of fork-only new code in
+~25 new files plus ~250 LOC of marker-tagged upstream-shared edits.
+`git grep "tiled-fork:"` enumerates every divergence point.
+
+What works end-to-end:
+- WGSL `subpass_input<T>` / `subpass_input_depth` / `subpass_input_stencil`
+  (with `_multisampled` variants) + `subpassLoad(s[, sample])` parses
+  and validates.
+- WGSL `@color(N)` fragment-arg attribute parses (fragment-stage only).
+- Modules using these compile to SPIR-V (with `OpDecorate
+  InputAttachmentIndex` + `OpTypeImage SubpassData` + `OpImageRead` +
+  `OpCapability InputAttachment`; `SPV_EXT_shader_tile_image` for
+  framebuffer fetch), MSL (`[[color(N)]]` fragment-args), GLSL (dual
+  mode: `uniform subpassInput` / `subpassLoad` for the default,
+  `EXT_shader_framebuffer_fetch` `inout` for `Options::use_framebuffer_fetch
+  = true`), and re-emit cleanly to WGSL.
+- `wgpu_types::TiledCapabilities` is queryable via
+  `Adapter::tiled_capabilities()` (returns `none()` until backends
+  populate real values in Phase 9).
+- The wgpu-core scaffolding (resource wrappers, IDs, registry slots,
+  tracker allocators, stub `Global` methods) is in place so Phase 9
+  has a target.
+
+What's deferred:
+- Phase 7: visual examples (`deferred_rendering`,
+  `subpass_render_graph`, `subpass_msaa`) require Phase 9 backends
+  to actually render. The WGSL these use already compiles correctly.
+- Phase 9: real implementations on Vulkan (transient images,
+  multi-subpass `VkRenderPass`, descriptor sets), Metal
+  (`MTLStorageModeMemoryless`, single-encoder tile shading), and
+  GLES (renderbuffer transients, `glInvalidateFramebuffer`,
+  framebuffer-fetch runtime path).
+- Subpass-input *globals* on MSL: Phase 6d returns a
+  `FeatureNotImplemented` error for the global-variable form; the
+  entry-point `@color(N)` form works. Lifting globals to
+  `[[color(N)]]` arguments needs an `Options` plumbing that's a
+  follow-up.
+- `naga::back::glsl::Options` was extended with `use_framebuffer_fetch`
+  as a non-`#[non_exhaustive]` struct field, which is a known-breaking
+  change for external naga consumers. See `docs/tiled-fork-conventions.md`
+  "Known divergences" #2.
