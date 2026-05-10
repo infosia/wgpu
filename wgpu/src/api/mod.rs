@@ -51,6 +51,7 @@ mod surface_texture;
 mod texture;
 mod texture_view;
 // tiled-fork: begin module
+mod subpass;
 mod tiled_caps;
 // tiled-fork: end module
 mod tlas;
@@ -84,6 +85,7 @@ pub use surface_texture::*;
 pub use texture::*;
 pub use texture_view::*;
 // tiled-fork: begin re-export
+pub use subpass::*;
 pub use tiled_caps::*;
 // tiled-fork: end re-export
 pub use tlas::*;

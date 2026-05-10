@@ -1383,6 +1383,27 @@ pub struct WebRenderPassEncoder {
     ident: crate::cmp::Identifier,
 }
 
+// tiled-fork: begin subpass-stub-type
+/// WebGPU has no native multi-subpass concept, so this is a stub: every
+/// method either no-ops or surfaces a validation error through the
+/// encoder's error sink. Returned both by the wgpu_core-disabled
+/// `DispatchSubpassRenderPass::stub_unsupported` constructor and by the
+/// concrete WebGPU `begin_subpass_render_pass` impl below.
+#[derive(Debug)]
+pub struct WebSubpassRenderPass {
+    /// Unique identifier for this stub pass.
+    ident: crate::cmp::Identifier,
+}
+
+impl WebSubpassRenderPass {
+    pub(crate) fn new_unsupported() -> Self {
+        Self {
+            ident: crate::cmp::Identifier::create(),
+        }
+    }
+}
+// tiled-fork: end subpass-stub-type
+
 #[derive(Debug)]
 pub struct WebCommandBuffer {
     pub(crate) inner: webgpu_sys::GpuCommandBuffer,
@@ -1460,6 +1481,9 @@ impl_send_sync!(WebPipelineCache);
 impl_send_sync!(WebCommandEncoder);
 impl_send_sync!(WebComputePassEncoder);
 impl_send_sync!(WebRenderPassEncoder);
+// tiled-fork: begin subpass-stub-send-sync
+impl_send_sync!(WebSubpassRenderPass);
+// tiled-fork: end subpass-stub-send-sync
 impl_send_sync!(WebCommandBuffer);
 impl_send_sync!(WebRenderBundleEncoder);
 impl_send_sync!(WebRenderBundle);
@@ -1490,6 +1514,9 @@ crate::cmp::impl_eq_ord_hash_proxy!(WebPipelineCache => .ident);
 crate::cmp::impl_eq_ord_hash_proxy!(WebCommandEncoder => .ident);
 crate::cmp::impl_eq_ord_hash_proxy!(WebComputePassEncoder => .ident);
 crate::cmp::impl_eq_ord_hash_proxy!(WebRenderPassEncoder => .ident);
+// tiled-fork: begin subpass-stub-cmp
+crate::cmp::impl_eq_ord_hash_proxy!(WebSubpassRenderPass => .ident);
+// tiled-fork: end subpass-stub-cmp
 crate::cmp::impl_eq_ord_hash_proxy!(WebCommandBuffer => .ident);
 crate::cmp::impl_eq_ord_hash_proxy!(WebRenderBundleEncoder => .ident);
 crate::cmp::impl_eq_ord_hash_proxy!(WebRenderBundle => .ident);
@@ -3194,6 +3221,21 @@ impl dispatch::CommandEncoderInterface for WebCommandEncoder {
         .into()
     }
 
+    // tiled-fork: begin subpass-encoder-impl
+    fn begin_subpass_render_pass(
+        &self,
+        _desc: &crate::SubpassRenderPassDescriptor<'_>,
+    ) -> dispatch::DispatchSubpassRenderPass {
+        // WebGPU has no native multi-subpass concept. Return a stub pass
+        // whose methods no-op; we don't emit a JS console error here
+        // because the descriptor itself isn't routed through any JS API.
+        log::error!(
+            "tiled-fork: begin_subpass_render_pass called on the WebGPU backend, which does not support multi-subpass render passes; returning a no-op stub"
+        );
+        WebSubpassRenderPass::new_unsupported().into()
+    }
+    // tiled-fork: end subpass-encoder-impl
+
     fn finish(&mut self) -> dispatch::DispatchCommandBuffer {
         let label = self.inner.label();
         let buffer = if label.is_empty() {
@@ -3310,6 +3352,29 @@ impl Drop for WebCommandEncoder {
         // no-op
     }
 }
+
+// tiled-fork: begin subpass-stub-impl
+impl dispatch::SubpassRenderPassInterface for WebSubpassRenderPass {
+    fn next_subpass(&mut self) {
+        // no-op stub; WebGPU has no native multi-subpass concept.
+    }
+
+    fn current_subpass_index(&self) -> Option<u32> {
+        // The pass never actually opens, so it has no current subpass.
+        None
+    }
+
+    fn end(&mut self) {
+        // no-op stub.
+    }
+}
+
+impl Drop for WebSubpassRenderPass {
+    fn drop(&mut self) {
+        // no-op
+    }
+}
+// tiled-fork: end subpass-stub-impl
 
 impl dispatch::PipelineCacheInterface for WebPipelineCache {
     fn get_data(&self) -> Option<Vec<u8>> {

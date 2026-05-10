@@ -447,6 +447,82 @@ fn map_pass_channel<V: Copy>(ops: Option<&Operations<V>>) -> wgc::command::PassC
     }
 }
 
+// tiled-fork: begin subpass-mapping
+fn map_subpass_color_attachment_to_core(
+    att: &crate::SubpassColorAttachment<'_>,
+) -> wgc::command::SubpassColorAttachment {
+    match att {
+        crate::SubpassColorAttachment::Persistent(at) => {
+            wgc::command::SubpassColorAttachment::Persistent(wgc::command::RenderPassColorAttachment {
+                view: at.view.inner.as_core().id,
+                depth_slice: at.depth_slice,
+                resolve_target: at.resolve_target.map(|view| view.inner.as_core().id),
+                load_op: at.ops.load,
+                store_op: at.ops.store,
+            })
+        }
+        crate::SubpassColorAttachment::Transient {
+            transient_index,
+            ops,
+            clear_value,
+        } => wgc::command::SubpassColorAttachment::Transient {
+            transient_index: *transient_index,
+            ops: *ops,
+            clear_value: *clear_value,
+        },
+    }
+}
+
+fn map_subpass_depth_stencil_to_core(
+    att: &crate::SubpassDepthStencilAttachment<'_>,
+) -> wgc::command::SubpassDepthStencilAttachment {
+    match att {
+        crate::SubpassDepthStencilAttachment::Persistent(at) => {
+            wgc::command::SubpassDepthStencilAttachment::Persistent(
+                wgc::command::RenderPassDepthStencilAttachment {
+                    view: at.view.inner.as_core().id,
+                    depth: map_pass_channel(at.depth_ops.as_ref()),
+                    stencil: map_pass_channel(at.stencil_ops.as_ref()),
+                },
+            )
+        }
+        crate::SubpassDepthStencilAttachment::Transient {
+            transient_index,
+            depth_ops,
+            stencil_ops,
+            clear_value,
+        } => wgc::command::SubpassDepthStencilAttachment::Transient {
+            transient_index: *transient_index,
+            depth_ops: *depth_ops,
+            stencil_ops: *stencil_ops,
+            clear_value: *clear_value,
+        },
+    }
+}
+
+fn map_subpass_descriptor_to_core<'a>(
+    sub: &crate::SubpassDescriptor<'a>,
+) -> wgc::command::SubpassDescriptor<'static> {
+    let color_attachments: Vec<Option<wgc::command::SubpassColorAttachment>> = sub
+        .color_attachments
+        .iter()
+        .map(|c| c.as_ref().map(map_subpass_color_attachment_to_core))
+        .collect();
+    let color_attachment_indices: Vec<u32> = sub.color_attachment_indices.to_vec();
+    let depth_stencil_attachment = sub
+        .depth_stencil_attachment
+        .as_ref()
+        .map(map_subpass_depth_stencil_to_core);
+    let input_attachments: Vec<wgt::SubpassInputAttachment> = sub.input_attachments.to_vec();
+    wgc::command::SubpassDescriptor {
+        color_attachments: Cow::Owned(color_attachments),
+        color_attachment_indices: Cow::Owned(color_attachment_indices),
+        depth_stencil_attachment,
+        input_attachments: Cow::Owned(input_attachments),
+    }
+}
+// tiled-fork: end subpass-mapping
+
 #[derive(Debug)]
 pub struct CoreSurface {
     pub(crate) context: ContextWgpuCore,
@@ -597,6 +673,44 @@ pub struct CoreRenderPass {
     error_sink: ErrorSink,
     id: crate::cmp::Identifier,
 }
+
+// tiled-fork: begin subpass-pass
+/// Backend handle for a multi-subpass render pass.
+///
+/// Wraps a [`wgc::command::SubpassRenderPass`] together with the
+/// [`ContextWgpuCore`] used to dispatch `next_subpass`/`end` and the
+/// encoder's [`ErrorSink`] used to surface validation failures.
+#[derive(Debug)]
+pub struct CoreSubpassRenderPass {
+    pub(crate) context: Option<ContextWgpuCore>,
+    pass: Option<wgc::command::SubpassRenderPass>,
+    error_sink: Option<ErrorSink>,
+    label: Option<String>,
+    id: crate::cmp::Identifier,
+}
+
+impl CoreSubpassRenderPass {
+    /// Construct a stub pass that surfaces an "unsupported on this
+    /// backend" error from every method. Used by the dispatch-default
+    /// `begin_subpass_render_pass` impl. The wgpu_core backend never
+    /// itself returns one of these (its concrete `begin_subpass_render_pass`
+    /// always produces a real pass), but this constructor lives here so
+    /// `DispatchSubpassRenderPass::stub_unsupported` has a `Core` payload
+    /// to wrap when `wgpu_core` is enabled without `custom`. When `custom`
+    /// is also enabled the stub prefers the Custom variant per Phase 11d3
+    /// review M1, so this fn is dead in that combination.
+    #[cfg_attr(custom, expect(dead_code, reason = "Phase 11d3 review M1: stub_unsupported prefers Custom variant when custom is enabled"))]
+    pub(crate) fn new_unsupported() -> Self {
+        Self {
+            context: None,
+            pass: None,
+            error_sink: None,
+            label: None,
+            id: crate::cmp::Identifier::create(),
+        }
+    }
+}
+// tiled-fork: end subpass-pass
 
 #[derive(Debug)]
 pub struct CoreCommandEncoder {
@@ -772,6 +886,9 @@ crate::cmp::impl_eq_ord_hash_proxy!(CorePipelineCache => .id);
 crate::cmp::impl_eq_ord_hash_proxy!(CoreCommandEncoder => .id);
 crate::cmp::impl_eq_ord_hash_proxy!(CoreComputePass => .id);
 crate::cmp::impl_eq_ord_hash_proxy!(CoreRenderPass => .id);
+// tiled-fork: begin subpass-cmp
+crate::cmp::impl_eq_ord_hash_proxy!(CoreSubpassRenderPass => .id);
+// tiled-fork: end subpass-cmp
 crate::cmp::impl_eq_ord_hash_proxy!(CoreCommandBuffer => .id);
 crate::cmp::impl_eq_ord_hash_proxy!(CoreRenderBundleEncoder => .id);
 crate::cmp::impl_eq_ord_hash_proxy!(CoreRenderBundle => .id);
@@ -2662,6 +2779,95 @@ impl dispatch::CommandEncoderInterface for CoreCommandEncoder {
         .into()
     }
 
+    // tiled-fork: begin subpass-encoder-impl
+    fn begin_subpass_render_pass(
+        &self,
+        desc: &crate::SubpassRenderPassDescriptor<'_>,
+    ) -> dispatch::DispatchSubpassRenderPass {
+        // -- Persistent color attachments -----------------------------------
+        let colors = desc
+            .color_attachments
+            .iter()
+            .map(|ca| {
+                ca.as_ref()
+                    .map(|at| wgc::command::RenderPassColorAttachment {
+                        view: at.view.inner.as_core().id,
+                        depth_slice: at.depth_slice,
+                        resolve_target: at.resolve_target.map(|view| view.inner.as_core().id),
+                        load_op: at.ops.load,
+                        store_op: at.ops.store,
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        // -- Persistent depth/stencil ---------------------------------------
+        let depth_stencil = desc.depth_stencil_attachment.as_ref().map(|dsa| {
+            wgc::command::RenderPassDepthStencilAttachment {
+                view: dsa.view.inner.as_core().id,
+                depth: map_pass_channel(dsa.depth_ops.as_ref()),
+                stencil: map_pass_channel(dsa.stencil_ops.as_ref()),
+            }
+        });
+
+        // -- Subpasses (resolve TextureView refs to ids) --------------------
+        let subpasses = desc
+            .subpasses
+            .iter()
+            .map(map_subpass_descriptor_to_core)
+            .collect::<Vec<_>>();
+
+        // -- Timestamp writes & occlusion query set -------------------------
+        let timestamp_writes =
+            desc.timestamp_writes
+                .as_ref()
+                .map(|tw| wgc::command::PassTimestampWrites {
+                    query_set: tw.query_set.inner.as_core().id,
+                    beginning_of_pass_write_index: tw.beginning_of_pass_write_index,
+                    end_of_pass_write_index: tw.end_of_pass_write_index,
+                });
+
+        let occlusion_query_set = desc.occlusion_query_set.map(|qs| qs.inner.as_core().id);
+
+        let core_desc = wgc::command::SubpassRenderPassDescriptor {
+            label: desc.label.map(Borrowed),
+            extent: desc.extent,
+            sample_count: desc.sample_count,
+            color_attachments: Borrowed(&colors),
+            depth_stencil_attachment: depth_stencil,
+            subpasses: Borrowed(&subpasses),
+            subpass_dependencies: Borrowed(desc.subpass_dependencies),
+            transient_memory_hint: desc.transient_memory_hint,
+            active_subpass_mask: desc.active_subpass_mask,
+            multiview_mask: desc.multiview_mask,
+            timestamp_writes,
+            occlusion_query_set,
+        };
+
+        let (pass, err) = self
+            .context
+            .0
+            .command_encoder_begin_subpass_render_pass(self.id, &core_desc);
+
+        if let Some(cause) = err {
+            self.context.handle_error(
+                &self.error_sink,
+                cause,
+                desc.label,
+                "CommandEncoder::begin_subpass_render_pass",
+            );
+        }
+
+        CoreSubpassRenderPass {
+            context: Some(self.context.clone()),
+            pass: Some(pass),
+            error_sink: Some(self.error_sink.clone()),
+            label: desc.label.map(|s| s.to_string()),
+            id: crate::cmp::Identifier::create(),
+        }
+        .into()
+    }
+    // tiled-fork: end subpass-encoder-impl
+
     fn finish(&mut self) -> dispatch::DispatchCommandBuffer {
         let descriptor = wgt::CommandBufferDescriptor::default();
         let (id, opt_label_and_error) =
@@ -3743,6 +3949,86 @@ impl Drop for CoreRenderPass {
         }
     }
 }
+
+// tiled-fork: begin subpass-impl
+impl dispatch::SubpassRenderPassInterface for CoreSubpassRenderPass {
+    fn next_subpass(&mut self) {
+        let (Some(context), Some(pass), Some(sink)) = (
+            self.context.as_ref(),
+            self.pass.as_mut(),
+            self.error_sink.as_ref(),
+        ) else {
+            // Stub / already-ended case: surface a validation error.
+            self.report_unsupported_or_ended("SubpassRenderPass::next_subpass");
+            return;
+        };
+        if let Err(cause) = context.0.render_pass_next_subpass(pass) {
+            context.handle_error(
+                sink,
+                cause,
+                self.label.as_deref(),
+                "SubpassRenderPass::next_subpass",
+            );
+        }
+    }
+
+    fn current_subpass_index(&self) -> Option<u32> {
+        let (Some(context), Some(pass)) = (self.context.as_ref(), self.pass.as_ref()) else {
+            return None;
+        };
+        context.0.render_pass_current_subpass_index(pass)
+    }
+
+    fn end(&mut self) {
+        // Idempotent: take() the pass / context so a second call is a no-op.
+        let Some(pass) = self.pass.as_mut() else {
+            return;
+        };
+        let Some(context) = self.context.as_ref() else {
+            self.pass = None;
+            return;
+        };
+        let sink = self.error_sink.as_ref();
+        if let Err(cause) = context.0.render_pass_end_subpass_render_pass(pass) {
+            if let Some(sink) = sink {
+                context.handle_error(
+                    sink,
+                    cause,
+                    self.label.as_deref(),
+                    "SubpassRenderPass::end",
+                );
+            }
+        }
+        // Mark the pass as ended so subsequent calls are no-ops.
+        self.pass = None;
+    }
+}
+
+impl CoreSubpassRenderPass {
+    fn report_unsupported_or_ended(&self, fn_ident: &'static str) {
+        // Stub passes have no error sink, so we can't route a structured
+        // error through the host. Log so operators can diagnose silent
+        // no-ops in this path. Real passes that have already ended hit
+        // the same path; a `Drop`-time call after explicit `end()` is
+        // benign and gets logged at trace level only.
+        log::error!(
+            "tiled-fork: SubpassRenderPass::{fn_ident} called on a stub or already-ended pass; \
+             call ignored. (Stub passes are constructed when no backend supports subpass passes.)"
+        );
+    }
+}
+
+impl Drop for CoreSubpassRenderPass {
+    fn drop(&mut self) {
+        // If the user forgot to call `.end()`, do it for them. The wgpu-core
+        // `SubpassRenderPass` also has its own Drop fallback that ends the
+        // HAL render pass and unlocks the encoder, but going through
+        // `Global::render_pass_end_subpass_render_pass` here keeps the error
+        // surfacing consistent with explicit-end.
+        <Self as dispatch::SubpassRenderPassInterface>::end(self);
+    }
+}
+// tiled-fork: end subpass-impl
 
 impl dispatch::RenderBundleEncoderInterface for CoreRenderBundleEncoder {
     fn set_pipeline(&mut self, pipeline: &dispatch::DispatchRenderPipeline) {

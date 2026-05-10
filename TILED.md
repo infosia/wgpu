@@ -276,6 +276,7 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
   - [ ] Phase 11d — Public `wgpu::SubpassRenderPassDescriptor` API + `begin_subpass_render_pass`
     - [x] Phase 11d1 — `DynTiledCommandEncoder: DynCommandEncoder` + Box storage
     - [x] Phase 11d2 — wgpu-core SubpassRenderPass machinery (begin/next/end; persistent attachments)
+    - [x] Phase 11d3 — public wgpu::SubpassRenderPassDescriptor + begin_subpass_render_pass
   - [ ] Phase 11e — `RenderPass::next_subpass` + `current_subpass_index`
   - [ ] Phase 11f — Public `SubpassRenderPipelineDescriptor` + `Device::create_subpass_render_pipeline`
 

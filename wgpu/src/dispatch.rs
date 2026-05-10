@@ -353,6 +353,32 @@ pub trait CommandEncoderInterface: CommonTraits {
 
     fn begin_compute_pass(&self, desc: &crate::ComputePassDescriptor<'_>) -> DispatchComputePass;
     fn begin_render_pass(&self, desc: &crate::RenderPassDescriptor<'_>) -> DispatchRenderPass;
+    // tiled-fork: begin subpass-dispatch
+    /// Begin a multi-subpass render pass.
+    ///
+    /// A default implementation is provided so out-of-tree custom backends
+    /// continue to compile against pre-Phase-11d3 trait objects; built-in
+    /// backends (`wgpu_core` / `webgpu`) override it. The default impl
+    /// returns a stub error pass that surfaces validation errors through
+    /// the existing encoder-error-sink machinery.
+    ///
+    /// The default body is itself gated on at least one backend being
+    /// enabled (since `DispatchSubpassRenderPass` is uninhabited
+    /// otherwise); when no backend is compiled in, the trait is never
+    /// implemented anywhere, so this method is unreachable.
+    #[cfg(any(wgpu_core, webgpu, custom))]
+    fn begin_subpass_render_pass(
+        &self,
+        _desc: &crate::SubpassRenderPassDescriptor<'_>,
+    ) -> DispatchSubpassRenderPass {
+        DispatchSubpassRenderPass::stub_unsupported()
+    }
+    #[cfg(not(any(wgpu_core, webgpu, custom)))]
+    fn begin_subpass_render_pass(
+        &self,
+        _desc: &crate::SubpassRenderPassDescriptor<'_>,
+    ) -> DispatchSubpassRenderPass;
+    // tiled-fork: end subpass-dispatch
     fn finish(&mut self) -> DispatchCommandBuffer;
 
     fn clear_texture(
@@ -533,6 +559,27 @@ pub trait RenderPassInterface: CommonTraits + Drop {
 
     fn execute_bundles(&mut self, render_bundles: &mut dyn Iterator<Item = &DispatchRenderBundle>);
 }
+
+// tiled-fork: begin subpass-interface
+/// Interface for an in-progress multi-subpass render pass.
+///
+/// Mirrors `RenderPassInterface` but exposes only the Phase-11d3 method
+/// set. Per-subpass `set_pipeline`/`draw`/etc. methods land in Phase 11d4.
+///
+/// `Drop` is a supertrait so each backend is required to define an end
+/// behavior, mirroring the convention used for `RenderPassInterface` and
+/// `ComputePassInterface`.
+pub trait SubpassRenderPassInterface: CommonTraits + Drop {
+    /// Advance to the next subpass.
+    fn next_subpass(&mut self);
+    /// Returns the index of the current subpass, or `None` if the pass
+    /// has already ended.
+    fn current_subpass_index(&self) -> Option<u32>;
+    /// End the pass. Must be idempotent: calling `end` on an already-ended
+    /// pass must not panic.
+    fn end(&mut self);
+}
+// tiled-fork: end subpass-interface
 
 pub trait RenderBundleEncoderInterface: CommonTraits {
     fn set_pipeline(&mut self, pipeline: &DispatchRenderPipeline);
@@ -991,6 +1038,41 @@ dispatch_types! {ref type DispatchPipelineCache: PipelineCacheInterface = CorePi
 dispatch_types! {mut type DispatchCommandEncoder: CommandEncoderInterface = CoreCommandEncoder, WebCommandEncoder, DynCommandEncoder}
 dispatch_types! {mut type DispatchComputePass: ComputePassInterface = CoreComputePass, WebComputePassEncoder, DynComputePass}
 dispatch_types! {mut type DispatchRenderPass: RenderPassInterface = CoreRenderPass, WebRenderPassEncoder, DynRenderPass}
+// tiled-fork: begin subpass-dispatch-types
+dispatch_types! {mut type DispatchSubpassRenderPass: SubpassRenderPassInterface = CoreSubpassRenderPass, WebSubpassRenderPass, DynSubpassRenderPass}
+
+impl DispatchSubpassRenderPass {
+    /// Construct a backend-agnostic stub that returns a "subpass render
+    /// passes are unsupported on this backend" validation error from
+    /// every method. Used by the default `CommandEncoderInterface::
+    /// begin_subpass_render_pass` impl so that out-of-tree custom
+    /// backends continue to build without being modified for Phase 11d3.
+    /// Constructed only when at least one backend feature is enabled (the
+    /// `cfg` constraint matches the set of `Self::*` variants the macro
+    /// produces). Custom is preferred when present so that an out-of-tree
+    /// custom-encoder's call to the default `begin_subpass_render_pass`
+    /// returns a Custom-flavoured pass (preserves the per-backend variant
+    /// invariant; without this a Custom encoder + wgpu_core build would
+    /// dispatch its `next_subpass`/`end` to the wrong backend's stub).
+    #[cfg(any(wgpu_core, webgpu, custom))]
+    pub(crate) fn stub_unsupported() -> Self {
+        #[cfg(custom)]
+        {
+            Self::Custom(DynSubpassRenderPass::new(
+                crate::backend::custom::StubSubpassRenderPass::new_unsupported(),
+            ))
+        }
+        #[cfg(all(wgpu_core, not(custom)))]
+        {
+            Self::Core(CoreSubpassRenderPass::new_unsupported())
+        }
+        #[cfg(all(webgpu, not(any(wgpu_core, custom))))]
+        {
+            Self::WebGPU(WebSubpassRenderPass::new_unsupported())
+        }
+    }
+}
+// tiled-fork: end subpass-dispatch-types
 dispatch_types! {mut type DispatchCommandBuffer: CommandBufferInterface = CoreCommandBuffer, WebCommandBuffer, DynCommandBuffer}
 dispatch_types! {mut type DispatchRenderBundleEncoder: RenderBundleEncoderInterface = CoreRenderBundleEncoder, WebRenderBundleEncoder, DynRenderBundleEncoder}
 dispatch_types! {ref type DispatchRenderBundle: RenderBundleInterface = CoreRenderBundle, WebRenderBundle, DynRenderBundle}

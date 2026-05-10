@@ -85,6 +85,34 @@ impl CommandEncoder {
         }
     }
 
+    // tiled-fork: begin subpass-encoder
+    /// Begins recording of a multi-subpass render pass.
+    ///
+    /// This is the public entry point for tile-based deferred rendering's
+    /// multi-subpass machinery (Phase 11d3 of the upstream-friendly fork
+    /// plan). The returned [`SubpassRenderPass`] supports
+    /// [`SubpassRenderPass::next_subpass`] to advance subpasses,
+    /// [`SubpassRenderPass::current_subpass_index`] to query the current
+    /// index, and [`SubpassRenderPass::end`] (or `Drop`) to end the pass.
+    /// Per-subpass `set_pipeline`/`draw`/etc. methods land in Phase 11d4.
+    ///
+    /// As long as the returned [`SubpassRenderPass`] has not ended, any
+    /// mutating operation on this command encoder causes an error and
+    /// invalidates it. Note that the `'encoder` lifetime relationship
+    /// protects against this, but it is possible to opt out of it by
+    /// calling [`SubpassRenderPass::forget_lifetime`].
+    pub fn begin_subpass_render_pass<'encoder>(
+        &'encoder mut self,
+        desc: &SubpassRenderPassDescriptor<'_>,
+    ) -> SubpassRenderPass<'encoder> {
+        let inner = self.inner.begin_subpass_render_pass(desc);
+        SubpassRenderPass {
+            inner,
+            _encoder_guard: api::PhantomDrop::default(),
+        }
+    }
+    // tiled-fork: end subpass-encoder
+
     /// Begins recording of a compute pass.
     ///
     /// This function returns a [`ComputePass`] object which records a single compute pass.

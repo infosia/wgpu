@@ -90,6 +90,37 @@ dyn_type!(pub ref struct DynPipelineCache(dyn PipelineCacheInterface));
 dyn_type!(pub mut struct DynCommandEncoder(dyn CommandEncoderInterface));
 dyn_type!(pub mut struct DynComputePass(dyn ComputePassInterface));
 dyn_type!(pub mut struct DynRenderPass(dyn RenderPassInterface));
+// tiled-fork: begin subpass-dyn
+dyn_type!(pub mut struct DynSubpassRenderPass(dyn SubpassRenderPassInterface));
+
+/// Stub subpass render pass for the custom backend, used by
+/// `DispatchSubpassRenderPass::stub_unsupported` when an out-of-tree
+/// custom encoder relies on the default `begin_subpass_render_pass`
+/// trait body. Per Phase 11d3 review M3, marked `pub(crate)` to keep
+/// it out of the public `wgpu::custom` API surface.
+#[derive(Debug)]
+pub(crate) struct StubSubpassRenderPass {
+    _private: (),
+}
+
+impl StubSubpassRenderPass {
+    pub(crate) fn new_unsupported() -> Self {
+        Self { _private: () }
+    }
+}
+
+impl SubpassRenderPassInterface for StubSubpassRenderPass {
+    fn next_subpass(&mut self) {}
+    fn current_subpass_index(&self) -> Option<u32> {
+        None
+    }
+    fn end(&mut self) {}
+}
+
+impl Drop for StubSubpassRenderPass {
+    fn drop(&mut self) {}
+}
+// tiled-fork: end subpass-dyn
 dyn_type!(pub mut struct DynCommandBuffer(dyn CommandBufferInterface));
 dyn_type!(pub mut struct DynRenderBundleEncoder(dyn RenderBundleEncoderInterface));
 dyn_type!(pub ref struct DynRenderBundle(dyn RenderBundleInterface));
