@@ -279,7 +279,7 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
     - [x] Phase 11d3 — public wgpu::SubpassRenderPassDescriptor + begin_subpass_render_pass
     - [x] Phase 11d4 — per-subpass draw machinery (set_pipeline, set_bind_group, set_vertex_buffer, set_index_buffer, draw, draw_indexed, set_viewport, set_scissor_rect)
   - [ ] Phase 11e — `RenderPass::next_subpass` + `current_subpass_index`
-  - [ ] Phase 11f — Public `SubpassRenderPipelineDescriptor` + `Device::create_subpass_render_pipeline`
+  - [x] Phase 11f — Public `SubpassRenderPipelineDescriptor` + `Device::create_subpass_render_pipeline`
 
 ## Snapshot at session end (2026-05-10)
 

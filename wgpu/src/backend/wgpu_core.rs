@@ -1558,6 +1558,102 @@ impl dispatch::DeviceInterface for CoreDevice {
         .into()
     }
 
+    // tiled-fork: begin subpass-pipeline-impl
+    fn create_subpass_render_pipeline(
+        &self,
+        desc: &crate::SubpassRenderPipelineDescriptor<'_>,
+    ) -> dispatch::DispatchRenderPipeline {
+        use wgc::pipeline as pipe;
+
+        let base = &desc.base;
+
+        let vertex_buffers: ArrayVec<_, { wgc::MAX_VERTEX_BUFFERS }> = base
+            .vertex
+            .buffers
+            .iter()
+            .map(|vbuf| pipe::VertexBufferLayout {
+                array_stride: vbuf.array_stride,
+                step_mode: vbuf.step_mode,
+                attributes: Borrowed(vbuf.attributes),
+            })
+            .collect();
+
+        let vert_constants = base
+            .vertex
+            .compilation_options
+            .constants
+            .iter()
+            .map(|&(key, value)| (String::from(key), value))
+            .collect();
+
+        let descriptor = pipe::RenderPipelineDescriptor {
+            label: base.label.map(Borrowed),
+            layout: base.layout.map(|layout| layout.inner.as_core().id),
+            vertex: pipe::VertexState {
+                stage: pipe::ProgrammableStageDescriptor {
+                    module: base.vertex.module.inner.as_core().id,
+                    entry_point: base.vertex.entry_point.map(Borrowed),
+                    constants: vert_constants,
+                    zero_initialize_workgroup_memory: base
+                        .vertex
+                        .compilation_options
+                        .zero_initialize_workgroup_memory,
+                },
+                buffers: Borrowed(&vertex_buffers),
+            },
+            primitive: base.primitive,
+            depth_stencil: base.depth_stencil.clone(),
+            multisample: base.multisample,
+            fragment: base.fragment.as_ref().map(|frag| {
+                let frag_constants = frag
+                    .compilation_options
+                    .constants
+                    .iter()
+                    .map(|&(key, value)| (String::from(key), value))
+                    .collect();
+                pipe::FragmentState {
+                    stage: pipe::ProgrammableStageDescriptor {
+                        module: frag.module.inner.as_core().id,
+                        entry_point: frag.entry_point.map(Borrowed),
+                        constants: frag_constants,
+                        zero_initialize_workgroup_memory: frag
+                            .compilation_options
+                            .zero_initialize_workgroup_memory,
+                    },
+                    targets: Borrowed(frag.targets),
+                }
+            }),
+            multiview_mask: base.multiview_mask,
+            cache: base.cache.map(|cache| cache.inner.as_core().id),
+        };
+
+        let (id, error) = self.context.0.device_create_subpass_render_pipeline(
+            self.id,
+            &descriptor,
+            &desc.subpass_target,
+            None,
+        );
+        if let Some(cause) = error {
+            if let wgc::pipeline::CreateRenderPipelineError::Internal { stage, ref error } = cause {
+                log::error!("Shader translation error for stage {stage:?}: {error}");
+                log::error!("Please report it to https://github.com/gfx-rs/wgpu");
+            }
+            self.context.handle_error(
+                &self.error_sink,
+                cause,
+                base.label,
+                "Device::create_subpass_render_pipeline",
+            );
+        }
+        CoreRenderPipeline {
+            context: self.context.clone(),
+            id,
+            error_sink: Arc::clone(&self.error_sink),
+        }
+        .into()
+    }
+    // tiled-fork: end subpass-pipeline-impl
+
     fn create_mesh_pipeline(
         &self,
         desc: &crate::MeshPipelineDescriptor<'_>,

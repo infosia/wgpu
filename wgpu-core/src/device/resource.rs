@@ -3984,6 +3984,26 @@ impl Device {
         self: &Arc<Self>,
         desc: pipeline::ResolvedGeneralRenderPipelineDescriptor,
     ) -> Result<Arc<pipeline::RenderPipeline>, pipeline::CreateRenderPipelineError> {
+        // tiled-fork: begin subpass-pipeline-forwarder
+        // Forward to the subpass-aware path with no target; the cold branch
+        // inside that function preserves the upstream HAL call exactly.
+        self.create_general_render_pipeline_inner(desc, None)
+        // tiled-fork: end subpass-pipeline-forwarder
+    }
+
+    // tiled-fork: begin subpass-pipeline-inner
+    /// Internal helper used by both [`Self::create_render_pipeline`] and
+    /// [`crate::global::Global::device_create_subpass_render_pipeline`].
+    /// When `subpass_target` is `Some`, the final HAL pipeline-creation
+    /// call is routed through the tiled extension surface so backends
+    /// like Vulkan can build a compatible render pass at
+    /// pipeline-creation time.
+    pub(crate) fn create_general_render_pipeline_inner(
+        self: &Arc<Self>,
+        desc: pipeline::ResolvedGeneralRenderPipelineDescriptor,
+        subpass_target: Option<&wgt::SubpassTarget>,
+    ) -> Result<Arc<pipeline::RenderPipeline>, pipeline::CreateRenderPipelineError> {
+        // tiled-fork: end subpass-pipeline-inner
         use wgt::TextureFormatFeatureFlags as Tfff;
 
         self.check_is_valid()?;
@@ -4691,25 +4711,36 @@ impl Device {
                 multiview_mask: desc.multiview_mask,
                 cache: cache.as_ref().map(|it| it.raw()),
             };
-            unsafe { self.raw().create_render_pipeline(&pipeline_desc) }.map_err(
-                |err| match err {
-                    hal::PipelineError::Device(error) => {
-                        pipeline::CreateRenderPipelineError::Device(self.handle_hal_error(error))
-                    }
-                    hal::PipelineError::Linkage(stage, msg) => {
-                        pipeline::CreateRenderPipelineError::Internal { stage, error: msg }
-                    }
-                    hal::PipelineError::EntryPoint(stage) => {
-                        pipeline::CreateRenderPipelineError::Internal {
-                            stage: hal::auxil::map_naga_stage(stage),
-                            error: ENTRYPOINT_FAILURE_ERROR.to_string(),
-                        }
-                    }
-                    hal::PipelineError::PipelineConstants(stage, error) => {
-                        pipeline::CreateRenderPipelineError::PipelineConstants { stage, error }
-                    }
+            // tiled-fork: begin subpass-pipeline-hal-call
+            // Branch on whether this pipeline targets a specific subpass: the
+            // upstream path goes through `Device::create_render_pipeline`,
+            // the fork-only subpass path routes through the tiled extension
+            // surface so Vulkan can build a compatible `VkRenderPass`.
+            let raw_result = match subpass_target {
+                Some(target) => unsafe {
+                    self.raw_tiled()
+                        .create_subpass_render_pipeline_dyn(&pipeline_desc, target)
                 },
-            )?
+                None => unsafe { self.raw().create_render_pipeline(&pipeline_desc) },
+            };
+            raw_result.map_err(|err| match err {
+                hal::PipelineError::Device(error) => {
+                    pipeline::CreateRenderPipelineError::Device(self.handle_hal_error(error))
+                }
+                hal::PipelineError::Linkage(stage, msg) => {
+                    pipeline::CreateRenderPipelineError::Internal { stage, error: msg }
+                }
+                hal::PipelineError::EntryPoint(stage) => {
+                    pipeline::CreateRenderPipelineError::Internal {
+                        stage: hal::auxil::map_naga_stage(stage),
+                        error: ENTRYPOINT_FAILURE_ERROR.to_string(),
+                    }
+                }
+                hal::PipelineError::PipelineConstants(stage, error) => {
+                    pipeline::CreateRenderPipelineError::PipelineConstants { stage, error }
+                }
+            })?
+            // tiled-fork: end subpass-pipeline-hal-call
         };
 
         let pass_context = RenderPassContext {

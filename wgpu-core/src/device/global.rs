@@ -1341,8 +1341,47 @@ impl Global {
 
         let device = self.hub.devices.get(device_id);
 
-        self.device_create_general_render_pipeline(desc.clone().into(), device, fid)
+        self.device_create_general_render_pipeline(desc.clone().into(), device, fid, None)
     }
+
+    // tiled-fork: begin device_create_subpass_render_pipeline
+    /// Create a render pipeline that targets a specific subpass within a
+    /// multi-subpass render pass.
+    ///
+    /// This is the fork-only counterpart to [`Self::device_create_render_pipeline`].
+    /// It re-uses the entire resolve/validate path of the upstream creator
+    /// but threads a [`wgt::SubpassTarget`] through to the final HAL call so
+    /// that backends like Vulkan can construct a *compatible* render pass at
+    /// pipeline-creation time. Metal and GLES backends consult the target
+    /// only for input-attachment format derivation; backends with no need
+    /// for either (DX12) return `Err(PipelineError::Device(Unexpected))` at
+    /// the HAL layer, which is surfaced here via the device error sink.
+    pub fn device_create_subpass_render_pipeline(
+        &self,
+        device_id: DeviceId,
+        desc: &pipeline::RenderPipelineDescriptor,
+        subpass_target: &wgt::SubpassTarget,
+        id_in: Option<id::RenderPipelineId>,
+    ) -> (
+        id::RenderPipelineId,
+        Option<pipeline::CreateRenderPipelineError>,
+    ) {
+        profiling::scope!("Device::create_subpass_render_pipeline");
+
+        let hub = &self.hub;
+
+        let fid = hub.render_pipelines.prepare(id_in);
+
+        let device = self.hub.devices.get(device_id);
+
+        self.device_create_general_render_pipeline(
+            desc.clone().into(),
+            device,
+            fid,
+            Some(subpass_target),
+        )
+    }
+    // tiled-fork: end device_create_subpass_render_pipeline
 
     pub fn device_create_mesh_pipeline(
         &self,
@@ -1358,7 +1397,7 @@ impl Global {
         let fid = hub.render_pipelines.prepare(id_in);
 
         let device = self.hub.devices.get(device_id);
-        self.device_create_general_render_pipeline(desc.clone().into(), device, fid)
+        self.device_create_general_render_pipeline(desc.clone().into(), device, fid, None)
     }
 
     fn device_create_general_render_pipeline(
@@ -1366,6 +1405,11 @@ impl Global {
         desc: pipeline::GeneralRenderPipelineDescriptor,
         device: Arc<crate::device::resource::Device>,
         fid: crate::registry::FutureId<Fallible<pipeline::RenderPipeline>>,
+        // tiled-fork: begin subpass-target-arg
+        // `Some` routes the final HAL pipeline call through the tiled
+        // extension surface; `None` preserves the upstream behavior exactly.
+        subpass_target: Option<&wgt::SubpassTarget>,
+        // tiled-fork: end subpass-target-arg
     ) -> (
         id::RenderPipelineId,
         Option<pipeline::CreateRenderPipelineError>,
@@ -1538,7 +1582,9 @@ impl Global {
             #[cfg(feature = "trace")]
             let trace_desc = desc.clone().into_trace();
 
-            let res = device.create_render_pipeline(desc);
+            // tiled-fork: begin subpass-pipeline-route
+            let res = device.create_general_render_pipeline_inner(desc, subpass_target);
+            // tiled-fork: end subpass-pipeline-route
 
             #[cfg(feature = "trace")]
             if let Some(ref mut trace) = *device.trace.lock() {

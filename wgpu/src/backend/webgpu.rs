@@ -2312,6 +2312,26 @@ impl dispatch::DeviceInterface for WebDevice {
         panic!("MESH_SHADER feature must be enabled to call create_mesh_pipeline")
     }
 
+    // tiled-fork: begin subpass-pipeline-impl
+    fn create_subpass_render_pipeline(
+        &self,
+        desc: &crate::SubpassRenderPipelineDescriptor<'_>,
+    ) -> dispatch::DispatchRenderPipeline {
+        // The WebGPU backend has no multi-subpass concept; the `subpass_target`
+        // is intentionally dropped here and we fall back to an ordinary
+        // render pipeline built from the upstream descriptor. A
+        // SubpassRenderPass on the WebGPU backend is itself a stub that
+        // surfaces a validation error, so the pipeline produced here will
+        // never actually be used inside a real subpass.
+        log::error!(
+            "tiled-fork: WebDevice::create_subpass_render_pipeline: WebGPU does not \
+             support multi-subpass render passes; falling back to create_render_pipeline \
+             (subpass_target ignored)"
+        );
+        self.create_render_pipeline(&desc.base)
+    }
+    // tiled-fork: end subpass-pipeline-impl
+
     fn create_compute_pipeline(
         &self,
         desc: &crate::ComputePipelineDescriptor<'_>,

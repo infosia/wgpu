@@ -23,6 +23,42 @@ use core::ops::Range;
 
 use crate::*;
 
+// tiled-fork: begin subpass-pipeline-descriptor
+/// Wrapper descriptor for creating a render pipeline that targets a
+/// specific subpass within a multi-subpass render pass.
+///
+/// Wraps [`RenderPipelineDescriptor`] per the fork's no-breaking-changes
+/// rule (TILED.md "Two key wraps" #2). The base descriptor stays
+/// upstream-unchanged; this fork-only wrapper carries the additional
+/// [`wgt::SubpassTarget`] that Vulkan needs at pipeline-creation time to
+/// build a compatible `VkRenderPass`. Metal and GLES consult the target
+/// for input-attachment format derivation; backends that do not need
+/// per-subpass pipeline binding simply forward to
+/// [`Device::create_render_pipeline`].
+///
+/// Pass to [`Device::create_subpass_render_pipeline`] to build a
+/// pipeline that targets the named subpass. The struct is
+/// `#[non_exhaustive]`, so external callers must construct it via a
+/// helper or using struct-update syntax against a value the fork's
+/// own code returns; today this is only viable inside the `wgpu`
+/// crate (Phase 11f -- a public Default impl is a candidate
+/// follow-up).
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct SubpassRenderPipelineDescriptor<'a> {
+    /// The upstream descriptor for the pipeline.
+    pub base: RenderPipelineDescriptor<'a>,
+    /// Subpass target metadata: which subpass this pipeline runs in,
+    /// the full pass's color/depth formats, subpass descriptors, and
+    /// dependencies. Used by Vulkan to build a compatible `VkRenderPass`
+    /// at pipeline-creation time; Metal/GLES consult this for
+    /// input-attachment format derivation.
+    pub subpass_target: wgt::SubpassTarget,
+}
+#[cfg(send_sync)]
+static_assertions::assert_impl_all!(SubpassRenderPipelineDescriptor<'_>: Send, Sync);
+// tiled-fork: end subpass-pipeline-descriptor
+
 /// Per-subpass color attachment.
 ///
 /// Mirrors [`wgc::command::SubpassColorAttachment`]. The `Persistent`

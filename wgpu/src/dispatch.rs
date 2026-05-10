@@ -183,6 +183,29 @@ pub trait DeviceInterface: CommonTraits {
         &self,
         desc: &crate::RenderPipelineDescriptor<'_>,
     ) -> DispatchRenderPipeline;
+    // tiled-fork: begin subpass-pipeline-dispatch
+    /// Create a render pipeline that targets a specific subpass within a
+    /// multi-subpass render pass.
+    ///
+    /// A default implementation is provided so out-of-tree custom backends
+    /// continue to compile without modification; built-in backends
+    /// (`wgpu_core` / `webgpu`) override it. The default impl logs a
+    /// warning and falls back to building an ordinary render pipeline
+    /// from the base descriptor — callers will then hit a validation
+    /// error inside the subpass render pass if the backend actually
+    /// needed the subpass target.
+    fn create_subpass_render_pipeline(
+        &self,
+        desc: &crate::SubpassRenderPipelineDescriptor<'_>,
+    ) -> DispatchRenderPipeline {
+        log::warn!(
+            "tiled-fork: DeviceInterface::create_subpass_render_pipeline default impl: \
+             backend does not support subpass-aware pipelines; falling back to \
+             create_render_pipeline (subpass_target ignored)"
+        );
+        self.create_render_pipeline(&desc.base)
+    }
+    // tiled-fork: end subpass-pipeline-dispatch
     fn create_mesh_pipeline(
         &self,
         desc: &crate::MeshPipelineDescriptor<'_>,

@@ -258,6 +258,28 @@ impl Device {
         RenderPipeline { inner: pipeline }
     }
 
+    // tiled-fork: begin subpass-pipeline
+    /// Creates a [`RenderPipeline`] that targets a specific subpass within
+    /// a multi-subpass render pass started by
+    /// [`CommandEncoder::begin_subpass_render_pass`].
+    ///
+    /// The returned pipeline is an ordinary [`RenderPipeline`]: once built,
+    /// it is consumed via [`SubpassRenderPass::set_pipeline`] like any other
+    /// pipeline. Per the fork's "wrap, don't extend" rule the wrapper
+    /// descriptor [`SubpassRenderPipelineDescriptor`] embeds the upstream
+    /// [`RenderPipelineDescriptor`] unchanged and adds a
+    /// [`wgt::SubpassTarget`] that Vulkan uses to build a compatible
+    /// `VkRenderPass` at pipeline-creation time.
+    #[must_use]
+    pub fn create_subpass_render_pipeline(
+        &self,
+        desc: &SubpassRenderPipelineDescriptor<'_>,
+    ) -> RenderPipeline {
+        let pipeline = self.inner.create_subpass_render_pipeline(desc);
+        RenderPipeline { inner: pipeline }
+    }
+    // tiled-fork: end subpass-pipeline
+
     /// Creates a mesh shader based [`RenderPipeline`].
     #[must_use]
     pub fn create_mesh_pipeline(&self, desc: &MeshPipelineDescriptor<'_>) -> RenderPipeline {
