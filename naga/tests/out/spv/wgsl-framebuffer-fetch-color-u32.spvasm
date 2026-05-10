@@ -1,0 +1,31 @@
+; SPIR-V
+; Version: 1.1
+; Generator: rspirv
+; Bound: 16
+OpCapability Shader
+OpCapability TileImageColorReadAccessEXT
+OpExtension "SPV_EXT_shader_tile_image"
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %13 "main" %6 %11
+OpExecutionMode %13 OriginUpperLeft
+OpDecorate %6 Location 0
+OpDecorate %11 Location 0
+%2 = OpTypeVoid
+%4 = OpTypeInt 32 0
+%3 = OpTypeVector %4 4
+%7 = OpTypeImage %4 TileImageDataEXT 0 0 0 2 Unknown
+%8 = OpTypePointer TileImageEXT %7
+%6 = OpVariable  %8  TileImageEXT
+%12 = OpTypePointer Output %3
+%11 = OpVariable  %12  Output
+%14 = OpTypeFunction %2
+%13 = OpFunction  %2  None %14
+%5 = OpLabel
+%9 = OpLoad  %7  %6
+%10 = OpColorAttachmentReadEXT  %3  %9
+OpBranch %15
+%15 = OpLabel
+OpStore %11 %10
+OpReturn
+OpFunctionEnd

@@ -261,6 +261,6 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
 - [x] Phase 6d — naga MSL backend: [[color(N)]] fragment-arg emission for subpass + framebuffer fetch
 - [x] Phase 6e — naga GLSL backend: subpassInput/inout dual-mode emission
 - [ ] Phase 7 — Examples
-- [ ] Phase 8 — Tests + benches
+- [x] Phase 8 — Tests + benches (naga snapshot fixtures: subpass-* + framebuffer-fetch-*)
 - [ ] Phase 9 — Backend real impls (Vulkan, Metal, GLES)
 - [ ] Phase 10 — Docs
