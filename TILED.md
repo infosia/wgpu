@@ -266,6 +266,8 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
   - [x] Phase 9a1 — Vulkan TransientAttachment (real VkImage + LAZILY_ALLOCATED)
   - [x] Phase 9a2 — Vulkan multi-subpass VkRenderPass + state machine
   - [x] Phase 9a3 — Vulkan input-attachment descriptor sets + create_subpass_render_pipeline
+  - [x] Phase 9c — GLES TransientAttachment + multi-subpass state machine (Tier A/B detection)
+  - [ ] Phase 9b — Metal real impl (deferred: needs macOS to compile-test)
 - [x] Phase 10 — Docs (`docs/tiled-fork-conventions.md` + this status block)
 
 ## Snapshot at session end (2026-05-10)

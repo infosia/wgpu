@@ -667,6 +667,42 @@ impl super::Adapter {
             super::PrivateCapabilities::MULTISAMPLED_RENDER_TO_TEXTURE,
             extensions.contains("GL_EXT_multisampled_render_to_texture"),
         );
+        // tiled-fork: begin private-caps (SHADER_FRAMEBUFFER_FETCH)
+        // Detect coherent `EXT_shader_framebuffer_fetch` only. The non-coherent
+        // variant requires explicit `glFramebufferFetchBarrierEXT` calls between
+        // overlapping reads/writes, which we don't currently emit.
+        let has_framebuffer_fetch = extensions.contains("GL_EXT_shader_framebuffer_fetch")
+            || extensions.contains("EXT_shader_framebuffer_fetch");
+        private_caps.set(
+            super::PrivateCapabilities::SHADER_FRAMEBUFFER_FETCH,
+            has_framebuffer_fetch,
+        );
+        // tiled-fork: end private-caps (SHADER_FRAMEBUFFER_FETCH)
+
+        // tiled-fork: begin features (TRANSIENT_ATTACHMENTS / MULTI_SUBPASS / FRAMEBUFFER_FETCH)
+        // Multi-subpass execution on GLES needs *either* the
+        // `EXT_shader_framebuffer_fetch` Tier A path (single FBO, `inout`
+        // reads) *or* the Tier B FBO-rebind-per-subpass path. Phase 9c lands
+        // the Tier-A no-op `next_subpass` plus per-subpass
+        // `glInvalidateFramebuffer` discard hints, but the Tier-B FBO rebind
+        // (rewiring attachments at every subpass advance) is not yet wired,
+        // so a multi-subpass pass without framebuffer-fetch would silently
+        // render only into the first subpass's attachments. Gate
+        // advertisement on the framebuffer-fetch extension to avoid that
+        // miscompile until the Tier-B rebind path lands.
+        //
+        // `TRANSIENT_ATTACHMENTS` is similarly gated even though renderbuffer
+        // creation works in either tier: anything that *uses* a transient
+        // slot in `begin_subpass_render_pass` currently logs and bails (the
+        // wgpu-core bridge that resolves the transient table is the
+        // remaining dependency), so advertising the bit unconditionally
+        // would mislead callers.
+        features.set(
+            wgt::Features::TRANSIENT_ATTACHMENTS | wgt::Features::MULTI_SUBPASS,
+            has_framebuffer_fetch,
+        );
+        features.set(wgt::Features::FRAMEBUFFER_FETCH, has_framebuffer_fetch);
+        // tiled-fork: end features (TRANSIENT_ATTACHMENTS / MULTI_SUBPASS / FRAMEBUFFER_FETCH)
 
         // GLSL ES 3.10+ / GLSL 4.30+ natively support coherent/volatile qualifiers
         // on storage buffers. These were introduced alongside storage buffer support.

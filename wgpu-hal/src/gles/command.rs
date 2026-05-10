@@ -27,7 +27,11 @@ pub(super) struct State {
     texture_slots: [TextureSlotDesc; super::MAX_TEXTURE_SLOTS],
     render_size: wgt::Extent3d,
     resolve_attachments: ArrayVec<(u32, super::TextureView), { crate::MAX_COLOR_ATTACHMENTS }>,
-    invalidate_attachments: ArrayVec<u32, { crate::MAX_COLOR_ATTACHMENTS + 2 }>,
+    // tiled-fork: begin invalidate-attachments-vis
+    /// `pub(super)` so the multi-subpass `next_subpass` impl in
+    /// `gles::tiled` can drain this list at subpass boundaries.
+    pub(super) invalidate_attachments: ArrayVec<u32, { crate::MAX_COLOR_ATTACHMENTS + 2 }>,
+    // tiled-fork: end invalidate-attachments-vis
     has_pass_label: bool,
     instance_vbuf_mask: usize,
     dirty_vbuf_mask: usize,
@@ -262,6 +266,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
 
     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
         self.state = State::default();
+        // tiled-fork: begin clear-subpass-state
+        self.subpass_state = None;
+        // tiled-fork: end clear-subpass-state
         self.cmd_buffer.label = label.map(String::from);
         Ok(())
     }
@@ -695,6 +702,12 @@ impl crate::CommandEncoder for super::CommandEncoder {
         Ok(())
     }
     unsafe fn end_render_pass(&mut self) {
+        // tiled-fork: begin clear-subpass-state
+        // Drop any active multi-subpass tracking. For Tier B we already
+        // emitted per-advance invalidate hints in `next_subpass`; the
+        // tail-end invalidate is handled by the upstream code below.
+        self.subpass_state = None;
+        // tiled-fork: end clear-subpass-state
         for (attachment, dst) in self.state.resolve_attachments.drain(..) {
             self.cmd_buffer.commands.push(C::ResolveAttachment {
                 attachment,

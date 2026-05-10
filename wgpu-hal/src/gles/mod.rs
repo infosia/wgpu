@@ -237,6 +237,10 @@ bitflags::bitflags! {
         const FULLY_FEATURED_INSTANCING = 1 << 16;
         /// Supports direct multisampled rendering to a texture without needing a resolve texture.
         const MULTISAMPLED_RENDER_TO_TEXTURE = 1 << 17;
+        // tiled-fork: begin private-cap (SHADER_FRAMEBUFFER_FETCH)
+        /// Supports `EXT_shader_framebuffer_fetch` (coherent variant only).
+        const SHADER_FRAMEBUFFER_FETCH = 1 << 18;
+        // tiled-fork: end private-cap (SHADER_FRAMEBUFFER_FETCH)
     }
 }
 
@@ -1057,7 +1061,36 @@ pub struct CommandEncoder {
     state: command::State,
     private_caps: PrivateCapabilities,
     counters: Arc<wgt::HalCounters>,
+    // tiled-fork: begin subpass-state
+    /// Multi-subpass render pass tracking. `Some(_)` between a
+    /// `begin_subpass_render_pass` call and the matching `end_render_pass`,
+    /// `None` otherwise (including for legacy single-subpass render passes).
+    pub(super) subpass_state: Option<SubpassState>,
+    // tiled-fork: end subpass-state
 }
+
+// tiled-fork: begin subpass-state-struct
+/// State machine tracking position inside a multi-subpass GLES render pass.
+///
+/// On GLES the "advance" boundary becomes either a no-op (Tier A,
+/// `EXT_shader_framebuffer_fetch`) or a fresh FBO bind with explicit
+/// `glInvalidateFramebuffer` of the previous attachments (Tier B).
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SubpassState {
+    /// Total subpass count declared in the active subpass render pass.
+    pub(super) subpass_count: u32,
+    /// Index of the currently-recording subpass, or `None` when every
+    /// subpass has been culled by `active_subpass_mask`.
+    pub(super) current_index: Option<u32>,
+    /// Bitmask filter on which subpasses receive draw calls. `None`
+    /// means every subpass is active.
+    pub(super) active_subpass_mask: Option<wgt::ActiveSubpassMask>,
+    /// Whether this run is using `EXT_shader_framebuffer_fetch` (Tier A) or
+    /// the multi-pass fallback (Tier B). Tier A keeps a single FBO across
+    /// subpasses; Tier B rebinds a fresh FBO on every advance.
+    pub(super) use_framebuffer_fetch: bool,
+}
+// tiled-fork: end subpass-state-struct
 
 impl fmt::Debug for CommandEncoder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

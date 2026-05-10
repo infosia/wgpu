@@ -1150,6 +1150,9 @@ impl crate::Device for super::Device {
             state: Default::default(),
             private_caps: self.shared.private_caps,
             counters: Arc::clone(&self.counters),
+            // tiled-fork: begin subpass-state-init
+            subpass_state: None,
+            // tiled-fork: end subpass-state-init
         })
     }
 
