@@ -46,6 +46,9 @@ mod send_sync;
 mod shader;
 mod surface;
 mod texture;
+// tiled-fork: begin module
+mod tiled;
+// tiled-fork: end module
 mod tokens;
 mod transfers;
 mod vertex;
@@ -68,6 +71,9 @@ pub use send_sync::*;
 pub use shader::*;
 pub use surface::*;
 pub use texture::*;
+// tiled-fork: begin re-export
+pub use tiled::*;
+// tiled-fork: end re-export
 pub use tokens::*;
 pub use transfers::*;
 pub use vertex::*;
