@@ -269,59 +269,185 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
   - [x] Phase 9c — GLES TransientAttachment + multi-subpass state machine (Tier A/B detection)
   - [x] Phase 9b — Metal TransientAttachment + multi-subpass state machine + create_subpass_render_pipeline validation
 - [x] Phase 10 — Docs (`docs/tiled-fork-conventions.md` + this status block)
-- [ ] Phase 11 — wgpu-core bridge to expose Phase 9 HAL through the public API
+- [x] Phase 11 — wgpu-core bridge to expose Phase 9 HAL through the public API
   - [x] Phase 11a — Box<dyn DynTiledDevice> storage in wgpu-core's `Device::raw`
   - [x] Phase 11b — `Adapter::tiled_capabilities()` reports real values from HAL
   - [x] Phase 11c — `Device::create_transient_attachment` actually invokes HAL
-  - [ ] Phase 11d — Public `wgpu::SubpassRenderPassDescriptor` API + `begin_subpass_render_pass`
+  - [x] Phase 11d — Public `wgpu::SubpassRenderPassDescriptor` API + `begin_subpass_render_pass`
     - [x] Phase 11d1 — `DynTiledCommandEncoder: DynCommandEncoder` + Box storage
     - [x] Phase 11d2 — wgpu-core SubpassRenderPass machinery (begin/next/end; persistent attachments)
     - [x] Phase 11d3 — public wgpu::SubpassRenderPassDescriptor + begin_subpass_render_pass
     - [x] Phase 11d4 — per-subpass draw machinery (set_pipeline, set_bind_group, set_vertex_buffer, set_index_buffer, draw, draw_indexed, set_viewport, set_scissor_rect)
-  - [ ] Phase 11e — `RenderPass::next_subpass` + `current_subpass_index`
+  - [ ] Phase 11e — `RenderPass::next_subpass` + `current_subpass_index` on upstream `RenderPass`
+        (absorbed: the new `SubpassRenderPass` handle already exposes both methods; this sub-phase is
+        only needed if we ever want subpass advance from inside an *upstream* single-pass `RenderPass`,
+        which has no obvious caller. Left open as a marker, low priority.)
   - [x] Phase 11f — Public `SubpassRenderPipelineDescriptor` + `Device::create_subpass_render_pipeline`
 
-## Snapshot at session end (2026-05-10)
+## Snapshot at session end (2026-05-11)
 
-The fork landed Phases 0-6e, 8, 10 across 14 commits. Cumulative diff
-against the branch base is ~5,000 LOC of fork-only new code in
-~25 new files plus ~250 LOC of marker-tagged upstream-shared edits.
-`git grep "tiled-fork:"` enumerates every divergence point.
+The fork has landed Phases 0-6e, 8, 9 (a1/a2/a3, b, c), 10, 11 (a, b, c,
+d1/d2/d3/d4, f) across 28 commits on `feature/tiled`. Cumulative diff
+against the branch base is ~12,000 LOC across ~130 files (~95% of it
+in fork-only new files). `git grep "tiled-fork:"` enumerates every
+divergence point against upstream-shared files.
 
-What works end-to-end:
-- WGSL `subpass_input<T>` / `subpass_input_depth` / `subpass_input_stencil`
-  (with `_multisampled` variants) + `subpassLoad(s[, sample])` parses
-  and validates.
-- WGSL `@color(N)` fragment-arg attribute parses (fragment-stage only).
-- Modules using these compile to SPIR-V (with `OpDecorate
-  InputAttachmentIndex` + `OpTypeImage SubpassData` + `OpImageRead` +
-  `OpCapability InputAttachment`; `SPV_EXT_shader_tile_image` for
-  framebuffer fetch), MSL (`[[color(N)]]` fragment-args), GLSL (dual
-  mode: `uniform subpassInput` / `subpassLoad` for the default,
-  `EXT_shader_framebuffer_fetch` `inout` for `Options::use_framebuffer_fetch
-  = true`), and re-emit cleanly to WGSL.
-- `wgpu_types::TiledCapabilities` is queryable via
-  `Adapter::tiled_capabilities()` (returns `none()` until backends
-  populate real values in Phase 9).
-- The wgpu-core scaffolding (resource wrappers, IDs, registry slots,
-  tracker allocators, stub `Global` methods) is in place so Phase 9
-  has a target.
+### What works end-to-end on Vulkan / Metal / GLES
 
-What's deferred:
-- Phase 7: visual examples (`deferred_rendering`,
-  `subpass_render_graph`, `subpass_msaa`) require Phase 9 backends
-  to actually render. The WGSL these use already compiles correctly.
-- Phase 9: real implementations on Vulkan (transient images,
-  multi-subpass `VkRenderPass`, descriptor sets), Metal
-  (`MTLStorageModeMemoryless`, single-encoder tile shading), and
-  GLES (renderbuffer transients, `glInvalidateFramebuffer`,
-  framebuffer-fetch runtime path).
-- Subpass-input *globals* on MSL: Phase 6d returns a
-  `FeatureNotImplemented` error for the global-variable form; the
-  entry-point `@color(N)` form works. Lifting globals to
-  `[[color(N)]]` arguments needs an `Options` plumbing that's a
-  follow-up.
-- `naga::back::glsl::Options` was extended with `use_framebuffer_fetch`
-  as a non-`#[non_exhaustive]` struct field, which is a known-breaking
-  change for external naga consumers. See `docs/tiled-fork-conventions.md`
+A user can drive a full multi-subpass deferred-shading pipeline from
+the public `wgpu` API:
+
+```rust
+let caps = adapter.tiled_capabilities();
+//   -> real max_subpasses / max_input_attachments / max_color_attachments
+//      / estimated_tile_memory_bytes from the physical device.
+
+let transient = device.create_transient_attachment(&desc)?;
+//   -> Vulkan: real `VkImage` with `TRANSIENT_ATTACHMENT | INPUT_ATTACHMENT`
+//      and `LAZILY_ALLOCATED` memory.
+//      Metal: `MTLTexture` with `MTLStorageMode::Memoryless`.
+//      GLES:  `glRenderbuffer` (MSAA-capable).
+//   Drop cleans up via `device.raw_tiled().destroy_transient_attachment_dyn`.
+
+let pipeline = device.create_subpass_render_pipeline(&SubpassRenderPipelineDescriptor {
+    base: rp_desc,
+    subpass_target: target,
+})?;
+//   -> Vulkan: builds a compatible VkRenderPass from `SubpassTarget` and
+//      records input-attachment descriptor-set bindings.
+//      Metal / GLES: forwards to `create_render_pipeline` (no compat pass
+//      needed; format derivation will land later).
+
+let mut pass = encoder.begin_subpass_render_pass(&SubpassRenderPassDescriptor { ... });
+//   -> Vulkan: vkCmdBeginRenderPass on the multi-subpass VkRenderPass +
+//      allocates per-subpass `VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT` sets.
+//      Metal: prepares a single-encoder multi-subpass state machine.
+//      GLES:  Tier A (framebuffer fetch) no-op advance OR Tier B
+//             FBO-rebind path with `glInvalidateFramebuffer`.
+pass.set_pipeline(&pipeline);
+pass.set_bind_group(0, Some(&bg), &[]);
+pass.set_vertex_buffer(0, vbuf.slice(..));
+pass.set_index_buffer(ibuf.slice(..), IndexFormat::Uint32);
+pass.set_viewport(0.0, 0.0, w, h, 0.0, 1.0);
+pass.set_scissor_rect(0, 0, w as u32, h as u32);
+pass.draw_indexed(0..n, 0, 0..1);
+pass.next_subpass();
+pass.set_pipeline(&pipeline_lighting);
+pass.draw(0..6, 0..1);
+pass.end();
+//   -> vkCmdEndRenderPass + unlock encoder. Drop is idempotent so
+//      forgetting `.end()` still releases the HAL render pass.
+
+// WGSL using the new types compiles correctly to every backend:
+//   var gbuffer: subpass_input<f32>;
+//   ... subpassLoad(gbuffer) ...
+//   @fragment fn main(@color(0) prev: vec4<f32>) -> ... { ... }
+```
+
+Cross-cutting verifications:
+- `cargo check --workspace`               : clean
+- `cargo clippy --workspace -D warnings`  : clean (every backend combo)
+- `cargo test -p wgpu-types`              : 85 unit + 14 doc tests
+- `cargo test -p wgpu-hal --features vulkan,gles tiled` : 18 tests
+- `cargo test -p naga --lib`              : 135 tests
+- `cargo test -p naga --test naga`        : 200 snapshot tests (incl.
+                                            subpass-* + framebuffer-fetch-*)
+- `cargo test -p wgpu-core --lib`         : 42 tests
+- `cargo test -p wgpu --lib`              : 17 tests
+
+### What's deferred / still rough
+
+These are documented limitations that wouldn't block visual examples
+but should be addressed in subsequent passes:
+
+- **Phase 7 — visual examples.** Porting `deferred_rendering`,
+  `subpass_render_graph`, `subpass_msaa` from `../wgpu-tiled` is the
+  next concrete deliverable. Everything they depend on now exists
+  end-to-end on Vulkan; Metal / GLES should also work for the simpler
+  subpass-render-graph example. Estimated ~2,000+ LOC of example code
+  + shaders.
+
+- **Resource-tracker registration in `SubpassRenderPass`.** Upstream
+  `RenderPass` inserts every bound pipeline / bind-group / buffer Arc
+  into the parent command buffer's tracker so the resources live
+  until queue submission. The Phase 11d4 subpass path does *not* yet
+  do this — callers must keep handles alive themselves until the
+  command buffer is submitted. Mirroring upstream's `RenderPassInfo`
+  machinery here is the next correctness item.
+
+- **wgpu-side draw validation gaps in `SubpassRenderPass`.**
+  `set_pipeline` skips `pass_context.check_compatible` and pipeline
+  format checks. `set_bind_group` skips `BindGroupLayout::is_compatible`
+  against the pipeline layout and `same_device`. `set_*_buffer` skips
+  `BufferUsages::INDEX | VERTEX` and `same_device` checks.
+  `draw` / `draw_indexed` skip vertex-buffer-limit checks.
+  `set_viewport` / `set_scissor_rect` skip range / zero-size checks.
+  All of these mirror upstream's checks; replicating them is layered
+  validation work, not architectural.
+
+- **`set_bind_group(index, None, &[])`** silently elides the HAL call
+  rather than unbinding. State drifts from the upstream binder model;
+  should be either an explicit unbind or an error.
+
+- **`Transient` subpass attachments.** `SubpassColorAttachment::Transient`
+  and `SubpassDepthStencilAttachment::Transient` arms currently return
+  `SubpassRenderPassError::TransientNotWired`. The wgpu-core
+  transient-attachment table that resolves `transient_index` to an
+  `Arc<TransientAttachment>` for the render-pass binder isn't built
+  yet. Only the *Persistent* arms work today. Without this, the
+  bandwidth savings the feature exists for aren't reachable from the
+  public API even though the HAL allocator path is real.
+
+- **`dispatch_transient`.** Forward-compat scaffolding for Apple-GPU
+  programmable tile dispatch; still `todo!()` on every backend. No
+  wgpu-core path exercises it.
+
+- **Phase 11e** — `RenderPass::next_subpass` / `current_subpass_index`
+  on the upstream `RenderPass` type. Effectively absorbed by the new
+  `SubpassRenderPass` handle (which already exposes both); left in
+  the status list as a marker. Low priority unless a caller surfaces
+  that wants subpass advance from inside an upstream single-pass
+  `RenderPass`.
+
+- **Subpass-input *globals* on MSL.** Phase 6d's MSL backend returns
+  `FeatureNotImplemented` for the global-variable form
+  (`var gbuf: subpass_input<f32>;`); the entry-point `@color(N)` form
+  works. Lifting globals to `[[color(N)]]` arguments needs an
+  `Options::subpass_color_slots` mapping that's a follow-up. Vulkan
+  and GLES handle the global form.
+
+- **GLES Tier B FBO-rebind-per-subpass.** Phase 9c lit up the
+  state-machine + per-advance `glInvalidateFramebuffer` discard hint,
+  but does not yet rebind a fresh FBO with each subpass's attachment
+  set. Multi-subpass execution silently renders only into the first
+  subpass's attachments when Tier A (`EXT_shader_framebuffer_fetch`)
+  is unavailable. The adapter gates `MULTI_SUBPASS` /
+  `TRANSIENT_ATTACHMENTS` on `has_framebuffer_fetch` to avoid the
+  miscompile.
+
+- **DX12 backend.** Permanent stub: returns
+  `Err(DeviceError::Unexpected)` from every tiled-trait method.
+  `MULTI_SUBPASS` / `TRANSIENT_ATTACHMENTS` are never advertised on
+  DX12, so callers should never reach those methods.
+
+- **Eager-dispatch caller constraint on `begin_subpass_render_pass`.**
+  Documented in `wgpu-core/src/command/subpass.rs` module docs: a
+  subpass-mode render pass must be the first command-encoder
+  operation. If the caller queued any other commands (e.g.
+  `copy_buffer_to_buffer`) before calling `begin_subpass_render_pass`,
+  those commands will be replayed at `finish`-time *after* the
+  subpass pass is already encoded into the HAL stream — wrong order
+  at the HAL level. Reconciling this with upstream's deferred-replay
+  model is a future architectural pass.
+
+- **Trace surface.** wgpu-core's `trace::Action` is not extended for
+  subpass-aware pipelines. Replays of fork-recorded traces re-create
+  subpass pipelines as ordinary pipelines (loss of fidelity, not a
+  crash).
+
+- **`naga::back::glsl::Options` field addition.** The
+  `use_framebuffer_fetch` field is a known-breaking change for
+  external naga consumers; `#[non_exhaustive]` would block the
+  in-tree `wgpu-hal::gles` initializer's `Options { ... }` pattern,
+  so the breakage is accepted. See `docs/tiled-fork-conventions.md`
   "Known divergences" #2.
