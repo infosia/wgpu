@@ -74,11 +74,16 @@ impl Adapter {
     /// - `hal_device` must be created from this adapter internal handle.
     /// - `desc.features` must be a subset of `hal_device`'s supported features.
     #[cfg(wgpu_core)]
-    pub unsafe fn create_device_from_hal<A: hal::Api>(
+    pub unsafe fn create_device_from_hal<A: hal::Api + hal::TiledApi>(
         &self,
         hal_device: hal::OpenDevice<A>,
         desc: &DeviceDescriptor<'_>,
-    ) -> Result<(Device, Queue), RequestDeviceError> {
+    ) -> Result<(Device, Queue), RequestDeviceError>
+    where
+        // tiled-fork: begin trait-bound (TiledDevice)
+        <A as hal::Api>::Device: hal::TiledDevice,
+        // tiled-fork: end trait-bound (TiledDevice)
+    {
         let core_adapter = self.inner.as_core();
         let (device, queue) = unsafe {
             core_adapter

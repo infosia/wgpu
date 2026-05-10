@@ -269,6 +269,13 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
   - [x] Phase 9c — GLES TransientAttachment + multi-subpass state machine (Tier A/B detection)
   - [x] Phase 9b — Metal TransientAttachment + multi-subpass state machine + create_subpass_render_pipeline validation
 - [x] Phase 10 — Docs (`docs/tiled-fork-conventions.md` + this status block)
+- [ ] Phase 11 — wgpu-core bridge to expose Phase 9 HAL through the public API
+  - [x] Phase 11a — Box<dyn DynTiledDevice> storage in wgpu-core's `Device::raw`
+  - [ ] Phase 11b — `Adapter::tiled_capabilities()` reports real values from HAL
+  - [ ] Phase 11c — `Device::create_transient_attachment` actually invokes HAL
+  - [ ] Phase 11d — Public `wgpu::SubpassRenderPassDescriptor` API + `begin_subpass_render_pass`
+  - [ ] Phase 11e — `RenderPass::next_subpass` + `current_subpass_index`
+  - [ ] Phase 11f — Public `SubpassRenderPipelineDescriptor` + `Device::create_subpass_render_pipeline`
 
 ## Snapshot at session end (2026-05-10)
 

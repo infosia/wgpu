@@ -104,12 +104,17 @@ impl ContextWgpuCore {
         unsafe { self.0.buffer_as_hal::<A>(buffer.id) }
     }
 
-    pub unsafe fn create_device_from_hal<A: hal::Api>(
+    pub unsafe fn create_device_from_hal<A: hal::Api + hal::TiledApi>(
         &self,
         adapter: &CoreAdapter,
         hal_device: hal::OpenDevice<A>,
         desc: &crate::DeviceDescriptor<'_>,
-    ) -> Result<(CoreDevice, CoreQueue), crate::RequestDeviceError> {
+    ) -> Result<(CoreDevice, CoreQueue), crate::RequestDeviceError>
+    where
+        // tiled-fork: begin trait-bound (TiledDevice)
+        <A as hal::Api>::Device: hal::TiledDevice,
+        // tiled-fork: end trait-bound (TiledDevice)
+    {
         let (device_id, queue_id) = unsafe {
             self.0.create_device_from_hal(
                 adapter.id,

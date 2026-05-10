@@ -206,7 +206,13 @@ impl ExternalTextureParams {
 /// Structure describing a logical device. Some members are internally mutable,
 /// stored behind mutexes.
 pub struct Device {
-    raw: Box<dyn hal::DynDevice>,
+    // tiled-fork: begin field (DynTiledDevice storage)
+    // Stored as `Box<dyn DynTiledDevice>` so the fork's tiled-rendering
+    // surface is reachable. `DynTiledDevice: DynDevice` (Phase 1), so
+    // `self.raw()` -> `&dyn DynDevice` continues to work via trait
+    // upcasting (Rust 1.86+) for every existing call site.
+    raw: Box<dyn hal::DynTiledDevice>,
+    // tiled-fork: end field (DynTiledDevice storage)
     pub(crate) adapter: Arc<Adapter>,
     pub(crate) queue: OnceCellOrLock<Weak<Queue>>,
     pub(crate) zero_buffer: ManuallyDrop<Box<dyn hal::DynBuffer>>,
@@ -337,8 +343,22 @@ impl Drop for Device {
 
 impl Device {
     pub(crate) fn raw(&self) -> &dyn hal::DynDevice {
+        // tiled-fork: begin upcast-note
+        // Trait upcasting from `&dyn DynTiledDevice` to `&dyn DynDevice`
+        // (DynTiledDevice: DynDevice). Stable in Rust 1.86+.
+        // tiled-fork: end upcast-note
         self.raw.as_ref()
     }
+    // tiled-fork: begin accessor (raw_tiled)
+    /// Same backing trait object as [`Self::raw`], but typed for the
+    /// tiled-rendering extension surface. Used by Phase 11+ bridge
+    /// callers (e.g. `Device::create_transient_attachment`); marked
+    /// `#[allow(dead_code)]` until those callers land.
+    #[allow(dead_code)]
+    pub(crate) fn raw_tiled(&self) -> &dyn hal::DynTiledDevice {
+        self.raw.as_ref()
+    }
+    // tiled-fork: end accessor (raw_tiled)
     pub(crate) fn require_features(&self, feature: wgt::Features) -> Result<(), MissingFeatures> {
         if self.features.contains(feature) {
             Ok(())
@@ -389,7 +409,9 @@ impl Device {
 
 impl Device {
     pub(crate) fn new(
-        raw_device: Box<dyn hal::DynDevice>,
+        // tiled-fork: begin signature (DynTiledDevice)
+        raw_device: Box<dyn hal::DynTiledDevice>,
+        // tiled-fork: end signature (DynTiledDevice)
         adapter: &Arc<Adapter>,
         desc: &DeviceDescriptor,
         instance_flags: wgt::InstanceFlags,
