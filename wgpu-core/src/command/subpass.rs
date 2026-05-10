@@ -1,49 +1,271 @@
 // tiled-fork: begin types
-//! Phase 4 scaffolding: wgpu-core entry points for multi-subpass render passes.
+//! wgpu-core entry points for multi-subpass render passes.
 //!
-//! This module is intentionally minimal: it introduces a new
-//! [`SubpassRenderPass`] handle type and three global methods
+//! Phase 11d2: this module bridges the public `wgpu` API surface for
+//! subpass-mode render passes down to the HAL [`hal::DynTiledCommandEncoder`]
+//! installed in Phase 11d1. The three previous Phase 4 stubs
 //! (`command_encoder_begin_subpass_render_pass`,
-//! `render_pass_next_subpass`, `render_pass_current_subpass_index`).
-//! The first two return `SubpassRenderPassError::NotImplemented`; the
-//! third returns `None`. Per-backend HAL support and full validation
-//! logic land in Phase 9 of the renumbered plan.
+//! `render_pass_next_subpass`, `render_pass_current_subpass_index`) are
+//! now real, and a new `render_pass_end_subpass_render_pass` method ends
+//! the pass and unlocks the parent encoder.
 //!
-//! The wgpu public API (Phase 5) targets these stubs so that the
-//! end-to-end call path (`wgpu::CommandEncoder::begin_subpass_render_pass`
-//! → `Global::command_encoder_begin_subpass_render_pass` → HAL) is wired
-//! before any one layer is fully implemented.
+//! Per-subpass commands (`set_pipeline`, `draw`, ...) are intentionally
+//! **out of scope** here; once a subpass-mode pass is begun, only
+//! `next_subpass` and `end_subpass_render_pass` are valid until Phase
+//! 11d4 wires up the draw machinery.
+//!
+//! `Transient` color and depth/stencil attachments are also deferred:
+//! the wgpu-core transient-attachment table is not yet wired (a future
+//! bridge phase). Today, both `Transient` arms return
+//! [`SubpassRenderPassError::TransientNotWired`].
+//!
+//! ## Eager vs. deferred — known caller constraint
+//!
+//! Upstream wgpu-core's `RenderPass` records HAL commands into a
+//! deferred `commands` queue and replays them against the HAL encoder
+//! during `command_encoder_finish`. The Phase 11d2 subpass machinery
+//! diverges from that model: it issues **eager** HAL calls
+//! (`begin_subpass_render_pass_dyn`, `next_subpass_dyn`, `end_render_pass`)
+//! at the moment the corresponding `Global::*` method runs.
+//!
+//! **Caller constraint**: a subpass-mode render pass must be the first
+//! command-encoder operation. If the caller queued any other commands
+//! (e.g. `copy_buffer_to_buffer`) into `cmd_buf.commands` before calling
+//! `command_encoder_begin_subpass_render_pass`, those commands will be
+//! replayed at `finish`-time *after* the subpass pass has already been
+//! encoded into the HAL stream, producing wrong order at the HAL level.
+//!
+//! Phase 11d4 (the per-subpass-draw-machinery commit) is the natural
+//! place to either (a) reconcile these two execution models or (b)
+//! formally validate the constraint at begin-time.
 
-use alloc::sync::Arc;
+use alloc::{
+    borrow::Cow,
+    format,
+    string::{String, ToString},
+    sync::Arc,
+    vec::Vec,
+};
+use core::num::NonZeroU32;
 
+use arrayvec::ArrayVec;
 use thiserror::Error;
-use wgt::error::{ErrorType, WebGpuError};
+use wgt::{
+    error::{ErrorType, WebGpuError},
+    TextureUsages,
+};
 
-use crate::command::CommandEncoder;
-use crate::device::DeviceError;
+use crate::command::render::{
+    RenderPassColorAttachment, RenderPassDepthStencilAttachment, ResolvedPassChannel,
+};
+use crate::command::{
+    ArcPassTimestampWrites, ArcRenderPassColorAttachment, CommandBufferMutable, CommandEncoder,
+    CommandEncoderError, CommandEncoderStatus, EncoderStateError, LoadOp, PassTimestampWrites,
+    ResolvedRenderPassDepthStencilAttachment, StoreOp,
+};
+use crate::device::{Device, DeviceError, MissingFeatures};
 use crate::global::Global;
 use crate::id;
+use crate::resource::{
+    DestroyedResourceError, InvalidResourceError, Labeled, MissingTextureUsageError, ParentDevice,
+    QuerySet, RawResourceAccess, TextureView,
+};
+use crate::Label;
+
+// ----- Public descriptor types --------------------------------------------
+
+/// One subpass in a [`SubpassRenderPassDescriptor`].
+///
+/// Mirrors the HAL [`hal::Subpass`] type but uses [`id::TextureViewId`] in
+/// place of raw HAL views so wgpu-core can keep the registry as the source
+/// of truth.
+#[derive(Clone, Debug)]
+pub struct SubpassDescriptor<'a> {
+    /// Per-slot color attachment descriptions for this subpass.
+    pub color_attachments: Cow<'a, [Option<SubpassColorAttachment>]>,
+    /// Indices into [`SubpassRenderPassDescriptor::color_attachments`].
+    pub color_attachment_indices: Cow<'a, [u32]>,
+    /// Optional per-subpass depth/stencil attachment.
+    pub depth_stencil_attachment: Option<SubpassDepthStencilAttachment>,
+    /// Input attachments read by this subpass.
+    pub input_attachments: Cow<'a, [wgt::SubpassInputAttachment]>,
+}
+
+/// Per-subpass color attachment, parallel to HAL's `SubpassColorAttachment`.
+#[derive(Clone, Debug)]
+pub enum SubpassColorAttachment {
+    /// A regular DRAM-backed color attachment, slotted into the parent
+    /// render pass's `color_attachments` array via
+    /// [`SubpassDescriptor::color_attachment_indices`].
+    Persistent(RenderPassColorAttachment),
+    /// A tile-memory-only color attachment.
+    Transient {
+        /// Index into the caller's transient-attachment table.
+        transient_index: u32,
+        /// Load operation; store is implicitly `Discard`.
+        ops: wgt::TransientOps<wgt::Color>,
+        /// Clear value used when `ops.load == TransientLoadOp::Clear`.
+        clear_value: wgt::Color,
+    },
+}
+
+/// Per-subpass depth/stencil attachment, parallel to HAL's
+/// `SubpassDepthStencilAttachment`.
+#[derive(Clone, Debug)]
+pub enum SubpassDepthStencilAttachment {
+    /// A regular DRAM-backed depth/stencil attachment.
+    Persistent(RenderPassDepthStencilAttachment<id::TextureViewId>),
+    /// A tile-memory-only depth/stencil attachment.
+    Transient {
+        /// Index into the caller's transient-attachment table.
+        transient_index: u32,
+        /// Depth load operation; store is implicitly `Discard`.
+        depth_ops: wgt::TransientOps<f32>,
+        /// Stencil load operation; store is implicitly `Discard`.
+        stencil_ops: wgt::TransientOps<u32>,
+        /// Clear values for `(depth, stencil)`.
+        clear_value: (f32, u32),
+    },
+}
+
+/// Descriptor for a multi-subpass render pass.
+///
+/// Parallel to upstream `RenderPassDescriptor`, but carries the subpass list
+/// and the additional knobs required by the HAL surface
+/// ([`hal::SubpassRenderPassDescriptor`]).
+#[derive(Clone, Debug)]
+pub struct SubpassRenderPassDescriptor<'a> {
+    /// Optional human-readable label.
+    pub label: Label<'a>,
+    /// Render-target extent.
+    pub extent: wgt::Extent3d,
+    /// Sample count for all attachments.
+    pub sample_count: u32,
+    /// Persistent color attachments, indexed by
+    /// [`SubpassDescriptor::color_attachment_indices`].
+    pub color_attachments: Cow<'a, [Option<RenderPassColorAttachment>]>,
+    /// Persistent depth/stencil attachment for the render pass.
+    pub depth_stencil_attachment: Option<RenderPassDepthStencilAttachment<id::TextureViewId>>,
+    /// Subpasses, executed in order.
+    pub subpasses: Cow<'a, [SubpassDescriptor<'a>]>,
+    /// Subpass synchronization dependencies.
+    pub subpass_dependencies: Cow<'a, [wgt::SubpassDependency]>,
+    /// Backend hint for transient-memory behavior.
+    pub transient_memory_hint: wgt::TransientMemoryHint,
+    /// Optional bitmask selecting which subpasses are active.
+    pub active_subpass_mask: Option<wgt::ActiveSubpassMask>,
+    /// Multiview layer count, identical semantics to upstream.
+    pub multiview_mask: Option<NonZeroU32>,
+    /// Optional pass-level timestamp writes.
+    pub timestamp_writes: Option<PassTimestampWrites>,
+    /// Optional occlusion query set.
+    pub occlusion_query_set: Option<id::QuerySetId>,
+}
+
+// ----- Pass handle -------------------------------------------------------
 
 /// Opaque handle for an in-progress multi-subpass render pass.
 ///
-/// In Phase 4 this is a placeholder: it cannot be constructed by callers
-/// because `command_encoder_begin_subpass_render_pass` always returns
-/// `Err(...)`. The shape follows the upstream `RenderPass` so that Phase 9
-/// can flesh it out without renaming the public surface.
+/// Holds an [`Arc<CommandEncoder>`] that keeps the parent encoder locked for
+/// the lifetime of the pass. The encoder transitions back to `Recording`
+/// when [`Global::render_pass_end_subpass_render_pass`] runs, mirroring the
+/// upstream `RenderPass::end` lifecycle.
 pub struct SubpassRenderPass {
-    /// Parent command encoder; populated when
-    /// [`Global::command_encoder_begin_subpass_render_pass`] becomes real
-    /// in Phase 9. The Phase 4 stub always leaves it `None`, hence
-    /// `#[allow(dead_code)]`.
-    #[allow(dead_code)]
+    /// Parent command encoder. `Some` while the pass is open;
+    /// `None` after [`Global::render_pass_end_subpass_render_pass`].
     parent: Option<Arc<CommandEncoder>>,
+    /// Number of subpasses declared at begin-time.
+    subpass_count: u32,
+    /// Index of the subpass currently being recorded into.
+    current_subpass: u32,
+    /// Recorded label for diagnostics.
+    label: Option<String>,
+    /// First-error sticky slot. If `next_subpass`/`end` is called on a
+    /// pass that already failed, the error is reported again rather than
+    /// causing UB.
+    error: Option<SubpassRenderPassError>,
 }
 
 impl core::fmt::Debug for SubpassRenderPass {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("SubpassRenderPass").finish_non_exhaustive()
+        f.debug_struct("SubpassRenderPass")
+            .field("label", &self.label)
+            .field("subpass_count", &self.subpass_count)
+            .field("current_subpass", &self.current_subpass)
+            .field("ended", &self.parent.is_none())
+            .field("error", &self.error)
+            .finish()
     }
 }
+
+impl Drop for SubpassRenderPass {
+    /// If the user forgot to call
+    /// [`Global::render_pass_end_subpass_render_pass`], end the HAL render
+    /// pass and unlock the parent encoder so the encoder isn't left with an
+    /// active render pass when its own `Drop` runs (Vulkan requires
+    /// `vkCmdEndRenderPass` before `vkEndCommandBuffer`/discard).
+    ///
+    /// All errors during cleanup are logged. We can't surface them through
+    /// `Drop`'s `()` return.
+    fn drop(&mut self) {
+        let Some(parent) = self.parent.take() else {
+            return;
+        };
+
+        let mut cmd_buf_data = parent.data.lock();
+        let dispatch_result: Result<(), SubpassRenderPassError> =
+            with_locked_encoder_mut(&mut cmd_buf_data, |cmd_buf| {
+                // SAFETY: pass was opened successfully (parent is Some),
+                // matching the begin/end contract.
+                unsafe { cmd_buf.encoder.raw.as_mut().end_render_pass() };
+                cmd_buf.encoder.close_if_open()?;
+                Ok(())
+            });
+        let unlock_result = cmd_buf_data.unlock_encoder();
+        drop(cmd_buf_data);
+
+        if let Err(err) = dispatch_result {
+            log::error!(
+                "tiled-fork: SubpassRenderPass dropped without explicit end; HAL end_render_pass failed: {err:?}"
+            );
+        }
+        if let Err(err) = unlock_result {
+            log::error!(
+                "tiled-fork: SubpassRenderPass dropped without explicit end; encoder unlock failed: {err:?}"
+            );
+        }
+    }
+}
+
+impl SubpassRenderPass {
+    fn new_invalid(err: SubpassRenderPassError, label: Option<String>) -> Self {
+        Self {
+            parent: None,
+            subpass_count: 0,
+            current_subpass: 0,
+            label,
+            error: Some(err),
+        }
+    }
+
+    fn new_open(parent: Arc<CommandEncoder>, subpass_count: u32, label: Option<String>) -> Self {
+        Self {
+            parent: Some(parent),
+            subpass_count,
+            current_subpass: 0,
+            label,
+            error: None,
+        }
+    }
+
+    /// Returns the label originally passed to `begin_subpass_render_pass`.
+    #[inline]
+    pub fn label(&self) -> Option<&str> {
+        self.label.as_deref()
+    }
+}
+
+// ----- Errors -----------------------------------------------------------
 
 /// Errors that can occur driving a [`SubpassRenderPass`].
 #[derive(Clone, Debug, Error)]
@@ -52,61 +274,918 @@ pub enum SubpassRenderPassError {
     /// Underlying device error.
     #[error(transparent)]
     Device(#[from] DeviceError),
-    /// The fork's tiled-rendering surface is not yet wired end-to-end.
-    ///
-    /// Returned from every Phase 4 stub so that callers see a clear
-    /// "not implemented" signal rather than a misleading parse/validation
-    /// error.
-    #[error("tiled-rendering surface is not yet wired end-to-end (fork-only stub)")]
-    NotImplemented,
+    /// Encoder state machine rejected the begin/next/end call.
+    #[error(transparent)]
+    EncoderState(#[from] EncoderStateError),
+    /// The device is missing a feature required by this entry point.
+    #[error(transparent)]
+    MissingFeatures(#[from] MissingFeatures),
+    /// One of the resource handles in the descriptor was invalid.
+    #[error(transparent)]
+    InvalidResource(#[from] InvalidResourceError),
+    /// A texture view referenced by the descriptor has been destroyed.
+    #[error(transparent)]
+    DestroyedResource(#[from] DestroyedResourceError),
+    /// A texture view does not have the required usage flags.
+    #[error(transparent)]
+    MissingTextureUsage(#[from] MissingTextureUsageError),
+    /// `next_subpass` was called past the last subpass.
+    #[error("next_subpass called past the final subpass (current = {current}, count = {count})")]
+    NextSubpassPastEnd {
+        /// The current subpass index when `next_subpass` was called.
+        current: u32,
+        /// The number of subpasses declared in the descriptor.
+        count: u32,
+    },
+    /// A method on the pass was called after it had already ended.
+    #[error("subpass render pass has already ended")]
+    AlreadyEnded,
+    /// A pass-level operation was rejected because the descriptor
+    /// declared zero subpasses.
+    #[error("subpass render pass requires at least one subpass in the descriptor")]
+    EmptySubpassList,
+    /// `Transient` attachment arms are not wired in this fork bridge yet.
+    #[error(
+        "transient attachments are not yet wired through wgpu-core (follow-up bridge phase). \
+         Use Persistent attachments for now."
+    )]
+    TransientNotWired,
+    /// Generic descriptor-level validation failure (used for cases that
+    /// don't match any of the above categories yet).
+    #[error("subpass render pass descriptor failed validation: {0}")]
+    DescriptorInvalid(String),
 }
 
 impl WebGpuError for SubpassRenderPassError {
     fn webgpu_error_type(&self) -> ErrorType {
         match self {
             Self::Device(e) => e.webgpu_error_type(),
-            Self::NotImplemented => ErrorType::Internal,
+            Self::EncoderState(e) => e.webgpu_error_type(),
+            Self::MissingFeatures(e) => e.webgpu_error_type(),
+            Self::InvalidResource(e) => e.webgpu_error_type(),
+            Self::DestroyedResource(e) => e.webgpu_error_type(),
+            Self::MissingTextureUsage(e) => e.webgpu_error_type(),
+            Self::NextSubpassPastEnd { .. }
+            | Self::AlreadyEnded
+            | Self::EmptySubpassList
+            | Self::TransientNotWired
+            | Self::DescriptorInvalid(_) => ErrorType::Validation,
         }
     }
 }
 
+impl From<SubpassRenderPassError> for CommandEncoderError {
+    fn from(err: SubpassRenderPassError) -> Self {
+        match err {
+            SubpassRenderPassError::Device(e) => CommandEncoderError::Device(e),
+            SubpassRenderPassError::EncoderState(e) => CommandEncoderError::State(e),
+            SubpassRenderPassError::MissingFeatures(e) => CommandEncoderError::MissingFeatures(e),
+            SubpassRenderPassError::InvalidResource(e) => CommandEncoderError::InvalidResource(e),
+            SubpassRenderPassError::DestroyedResource(e) => {
+                CommandEncoderError::DestroyedResource(e)
+            }
+            // The remaining variants are subpass-specific validation errors
+            // that don't have a precise upstream `CommandEncoderError`
+            // counterpart. Surface them via the closest existing variant
+            // until a dedicated subpass arm is added.
+            SubpassRenderPassError::MissingTextureUsage(_)
+            | SubpassRenderPassError::NextSubpassPastEnd { .. }
+            | SubpassRenderPassError::AlreadyEnded
+            | SubpassRenderPassError::EmptySubpassList
+            | SubpassRenderPassError::TransientNotWired
+            | SubpassRenderPassError::DescriptorInvalid(_) => {
+                CommandEncoderError::State(EncoderStateError::Invalid)
+            }
+        }
+    }
+}
+
+// ----- Global methods ---------------------------------------------------
+
 impl Global {
     /// Begin a multi-subpass render pass on the given command encoder.
     ///
-    /// In Phase 4 this always returns
-    /// [`SubpassRenderPassError::NotImplemented`]. The signature is shaped
-    /// so that the public `wgpu::CommandEncoder::begin_subpass_render_pass`
-    /// API can call through unchanged once the body is real.
+    /// Phase 11d2 implementation. The descriptor is resolved to HAL types
+    /// using the registry, the encoder is transitioned to its locked
+    /// state (matching the upstream render-pass lifecycle), and the
+    /// HAL [`hal::DynTiledCommandEncoder::begin_subpass_render_pass_dyn`]
+    /// is invoked eagerly.
     pub fn command_encoder_begin_subpass_render_pass(
         &self,
-        _encoder_id: id::CommandEncoderId,
+        encoder_id: id::CommandEncoderId,
+        desc: &SubpassRenderPassDescriptor<'_>,
     ) -> (SubpassRenderPass, Option<SubpassRenderPassError>) {
-        (
-            SubpassRenderPass { parent: None },
-            Some(SubpassRenderPassError::NotImplemented),
-        )
+        profiling::scope!("CommandEncoder::begin_subpass_render_pass");
+
+        let hub = &self.hub;
+        let label_owned: Option<String> = desc.label.as_deref().map(ToString::to_string);
+
+        let cmd_enc = hub.command_encoders.get(encoder_id);
+        let device = cmd_enc.device.clone();
+
+        // Eager feature gate.
+        if let Err(e) = device.require_features(wgt::Features::MULTI_SUBPASS) {
+            let err: SubpassRenderPassError = e.into();
+            return (
+                SubpassRenderPass::new_invalid(err.clone(), label_owned),
+                Some(err),
+            );
+        }
+        if let Err(e) = device.check_is_valid() {
+            let err: SubpassRenderPassError = SubpassRenderPassError::Device(e);
+            return (
+                SubpassRenderPass::new_invalid(err.clone(), label_owned),
+                Some(err),
+            );
+        }
+
+        // Resolve & validate the descriptor against the registry.
+        let resolved = match resolve_descriptor(hub, &device, desc) {
+            Ok(resolved) => resolved,
+            Err(err) => {
+                return (
+                    SubpassRenderPass::new_invalid(err.clone(), label_owned),
+                    Some(err),
+                );
+            }
+        };
+
+        // Transition the encoder Recording -> Locked.
+        let mut cmd_buf_data = cmd_enc.data.lock();
+        match cmd_buf_data.lock_encoder() {
+            Ok(()) => {}
+            Err(state_err) => {
+                drop(cmd_buf_data);
+                let err: SubpassRenderPassError = state_err.clone().into();
+                let immediate = match state_err {
+                    EncoderStateError::Ended | EncoderStateError::Submitted => Some(err.clone()),
+                    EncoderStateError::Locked
+                    | EncoderStateError::Invalid
+                    | EncoderStateError::Unlocked => None,
+                };
+                return (SubpassRenderPass::new_invalid(err, label_owned), immediate);
+            }
+        }
+
+        // Build & dispatch the HAL descriptor while holding the lock.
+        let dispatch_result: Result<(), SubpassRenderPassError> =
+            with_locked_encoder_mut(&mut cmd_buf_data, |cmd_buf| {
+                cmd_buf.encoder.close_if_open()?;
+                let _ = cmd_buf.encoder.open_pass(label_owned.as_deref())?;
+
+                let snatch_guard = device.snatchable_lock.read();
+                dispatch_hal_begin(
+                    cmd_buf.encoder.raw.as_mut(),
+                    &resolved,
+                    &snatch_guard,
+                    &device,
+                )?;
+                drop(snatch_guard);
+                Ok(())
+            });
+
+        match dispatch_result {
+            Ok(()) => {
+                let count = resolved.subpasses.len() as u32;
+                drop(cmd_buf_data);
+                (
+                    SubpassRenderPass::new_open(cmd_enc, count, label_owned),
+                    None,
+                )
+            }
+            Err(err) => {
+                cmd_buf_data.invalidate(EncoderStateError::Invalid);
+                drop(cmd_buf_data);
+                (
+                    SubpassRenderPass::new_invalid(err.clone(), label_owned),
+                    Some(err),
+                )
+            }
+        }
     }
 
     /// Advance the active subpass-mode render pass to its next subpass.
     ///
-    /// Phase 4 stub: always returns
-    /// [`SubpassRenderPassError::NotImplemented`].
+    /// Phase 11d2 implementation: validates the current state, dispatches
+    /// to [`hal::DynTiledCommandEncoder::next_subpass_dyn`], and updates the
+    /// pass's `current_subpass` counter.
     pub fn render_pass_next_subpass(
         &self,
-        _pass: &mut SubpassRenderPass,
+        pass: &mut SubpassRenderPass,
     ) -> Result<(), SubpassRenderPassError> {
-        Err(SubpassRenderPassError::NotImplemented)
+        if let Some(err) = pass.error.clone() {
+            return Err(err);
+        }
+        let parent = pass
+            .parent
+            .as_ref()
+            .ok_or(SubpassRenderPassError::AlreadyEnded)?;
+
+        if pass.subpass_count == 0 {
+            return Err(SubpassRenderPassError::EmptySubpassList);
+        }
+        if pass.current_subpass + 1 >= pass.subpass_count {
+            return Err(SubpassRenderPassError::NextSubpassPastEnd {
+                current: pass.current_subpass,
+                count: pass.subpass_count,
+            });
+        }
+
+        let mut cmd_buf_data = parent.data.lock();
+        let dispatch_result: Result<(), SubpassRenderPassError> =
+            with_locked_encoder_mut(&mut cmd_buf_data, |cmd_buf| {
+                // SAFETY: a successful `begin` opened the pass; we are
+                // still inside the same locked encoder.
+                unsafe { cmd_buf.encoder.raw.as_mut().next_subpass_dyn() };
+                Ok(())
+            });
+        drop(cmd_buf_data);
+
+        match dispatch_result {
+            Ok(()) => {
+                pass.current_subpass += 1;
+                Ok(())
+            }
+            Err(err) => {
+                pass.error = Some(err.clone());
+                Err(err)
+            }
+        }
     }
 
     /// Returns the current subpass index of the active subpass-mode render
-    /// pass, or `None` if the pass is not in subpass mode.
+    /// pass, or `None` if the pass has already ended.
+    pub fn render_pass_current_subpass_index(&self, pass: &SubpassRenderPass) -> Option<u32> {
+        if pass.parent.is_some() {
+            Some(pass.current_subpass)
+        } else {
+            None
+        }
+    }
+
+    /// End an active multi-subpass render pass.
     ///
-    /// Phase 4 stub: always returns `None`.
-    pub fn render_pass_current_subpass_index(
+    /// Calls [`hal::CommandEncoder::end_render_pass`] on the underlying
+    /// dyn-encoder, then transitions the encoder back to `Recording`.
+    pub fn render_pass_end_subpass_render_pass(
         &self,
-        _pass: &SubpassRenderPass,
-    ) -> Option<u32> {
+        pass: &mut SubpassRenderPass,
+    ) -> Result<(), SubpassRenderPassError> {
+        let parent = pass
+            .parent
+            .take()
+            .ok_or(SubpassRenderPassError::AlreadyEnded)?;
+
+        let mut cmd_buf_data = parent.data.lock();
+
+        let dispatch_result: Result<(), SubpassRenderPassError> =
+            with_locked_encoder_mut(&mut cmd_buf_data, |cmd_buf| {
+                // SAFETY: the pass was successfully begun, so the encoder is
+                // open with a subpass-mode render pass active.
+                unsafe { cmd_buf.encoder.raw.as_mut().end_render_pass() };
+                cmd_buf.encoder.close_if_open()?;
+                Ok(())
+            });
+
+        // Always attempt to transition back to Recording, regardless of
+        // dispatch outcome. If unlocking fails (encoder was invalidated
+        // mid-pass), surface that error too.
+        let unlock_result = cmd_buf_data.unlock_encoder();
+        drop(cmd_buf_data);
+
+        if let Some(err) = pass.error.clone() {
+            return Err(err);
+        }
+        dispatch_result?;
+        unlock_result.map_err(SubpassRenderPassError::from)?;
+        Ok(())
+    }
+}
+
+// ----- Resolution / dispatch helpers (private) --------------------------
+
+struct ResolvedDescriptor {
+    label: Option<String>,
+    extent: wgt::Extent3d,
+    sample_count: u32,
+    color_attachments:
+        ArrayVec<Option<ArcRenderPassColorAttachment>, { hal::MAX_COLOR_ATTACHMENTS }>,
+    depth_stencil_attachment: Option<ResolvedRenderPassDepthStencilAttachment<Arc<TextureView>>>,
+    subpasses: Vec<ResolvedSubpass>,
+    subpass_dependencies: Vec<wgt::SubpassDependency>,
+    transient_memory_hint: wgt::TransientMemoryHint,
+    active_subpass_mask: Option<wgt::ActiveSubpassMask>,
+    multiview_mask: Option<NonZeroU32>,
+    timestamp_writes: Option<ArcPassTimestampWrites>,
+    occlusion_query_set: Option<Arc<QuerySet>>,
+}
+
+struct ResolvedSubpass {
+    color_attachments: Vec<Option<ResolvedSubpassColorAttachment>>,
+    color_attachment_indices: Vec<u32>,
+    depth_stencil_attachment: Option<ResolvedSubpassDepthStencilAttachment>,
+    input_attachments: Vec<wgt::SubpassInputAttachment>,
+}
+
+enum ResolvedSubpassColorAttachment {
+    Persistent(ArcRenderPassColorAttachment),
+    /// Reserved for future bridge phase. The resolver currently rejects
+    /// `Transient` arms before reaching this variant, but we keep it so
+    /// the resolved structure mirrors the public descriptor shape.
+    #[allow(dead_code)]
+    Transient {
+        transient_index: u32,
+        ops: wgt::TransientOps<wgt::Color>,
+        clear_value: wgt::Color,
+    },
+}
+
+enum ResolvedSubpassDepthStencilAttachment {
+    Persistent(ResolvedRenderPassDepthStencilAttachment<Arc<TextureView>>),
+    #[allow(dead_code)]
+    Transient {
+        transient_index: u32,
+        depth_ops: wgt::TransientOps<f32>,
+        stencil_ops: wgt::TransientOps<u32>,
+        clear_value: (f32, u32),
+    },
+}
+
+fn resolve_descriptor(
+    hub: &crate::hub::Hub,
+    device: &Arc<Device>,
+    desc: &SubpassRenderPassDescriptor<'_>,
+) -> Result<ResolvedDescriptor, SubpassRenderPassError> {
+    let texture_views = hub.texture_views.read();
+    let query_sets = hub.query_sets.read();
+
+    let max_color_attachments = device.limits.max_color_attachments as usize;
+    if desc.color_attachments.len() > max_color_attachments {
+        return Err(SubpassRenderPassError::DescriptorInvalid(format!(
+            "too many color attachments: given {}, limit {}",
+            desc.color_attachments.len(),
+            max_color_attachments
+        )));
+    }
+
+    // -- Persistent color attachments -------------------------------------
+    let mut resolved_colors = ArrayVec::new();
+    for color in desc.color_attachments.iter() {
+        match color {
+            Some(att) => {
+                let view = texture_views.get(att.view).get()?;
+                view.same_device(device)?;
+                if !view.desc.usage.contains(TextureUsages::RENDER_ATTACHMENT) {
+                    return Err(SubpassRenderPassError::MissingTextureUsage(
+                        MissingTextureUsageError {
+                            res: view.error_ident(),
+                            actual: view.desc.usage,
+                            expected: TextureUsages::RENDER_ATTACHMENT,
+                        },
+                    ));
+                }
+                if view.desc.usage.contains(TextureUsages::TRANSIENT)
+                    && att.store_op != StoreOp::Discard
+                {
+                    return Err(SubpassRenderPassError::DescriptorInvalid(
+                        "TRANSIENT color attachment requires StoreOp::Discard".into(),
+                    ));
+                }
+                let resolve_target = if let Some(rt_id) = att.resolve_target {
+                    let rt = texture_views.get(rt_id).get()?;
+                    rt.same_device(device)?;
+                    if !rt.desc.usage.contains(TextureUsages::RENDER_ATTACHMENT) {
+                        return Err(SubpassRenderPassError::MissingTextureUsage(
+                            MissingTextureUsageError {
+                                res: rt.error_ident(),
+                                actual: rt.desc.usage,
+                                expected: TextureUsages::RENDER_ATTACHMENT,
+                            },
+                        ));
+                    }
+                    Some(rt)
+                } else {
+                    None
+                };
+                resolved_colors.push(Some(ArcRenderPassColorAttachment {
+                    view,
+                    depth_slice: att.depth_slice,
+                    resolve_target,
+                    load_op: att.load_op,
+                    store_op: att.store_op,
+                }));
+            }
+            None => resolved_colors.push(None),
+        }
+    }
+
+    // -- Persistent depth/stencil ----------------------------------------
+    let resolved_depth_stencil = if let Some(ds) = &desc.depth_stencil_attachment {
+        Some(resolve_persistent_depth_stencil(&texture_views, device, ds)?)
+    } else {
         None
+    };
+
+    // -- Subpasses --------------------------------------------------------
+    let mut resolved_subpasses = Vec::with_capacity(desc.subpasses.len());
+    for subpass in desc.subpasses.iter() {
+        let mut sub_colors = Vec::with_capacity(subpass.color_attachments.len());
+        for color in subpass.color_attachments.iter() {
+            match color {
+                Some(SubpassColorAttachment::Persistent(att)) => {
+                    let view = texture_views.get(att.view).get()?;
+                    view.same_device(device)?;
+                    if !view.desc.usage.contains(TextureUsages::RENDER_ATTACHMENT) {
+                        return Err(SubpassRenderPassError::MissingTextureUsage(
+                            MissingTextureUsageError {
+                                res: view.error_ident(),
+                                actual: view.desc.usage,
+                                expected: TextureUsages::RENDER_ATTACHMENT,
+                            },
+                        ));
+                    }
+                    let resolve_target = if let Some(rt_id) = att.resolve_target {
+                        let rt = texture_views.get(rt_id).get()?;
+                        rt.same_device(device)?;
+                        if !rt.desc.usage.contains(TextureUsages::RENDER_ATTACHMENT) {
+                            return Err(SubpassRenderPassError::MissingTextureUsage(
+                                MissingTextureUsageError {
+                                    res: rt.error_ident(),
+                                    actual: rt.desc.usage,
+                                    expected: TextureUsages::RENDER_ATTACHMENT,
+                                },
+                            ));
+                        }
+                        Some(rt)
+                    } else {
+                        None
+                    };
+                    sub_colors.push(Some(ResolvedSubpassColorAttachment::Persistent(
+                        ArcRenderPassColorAttachment {
+                            view,
+                            depth_slice: att.depth_slice,
+                            resolve_target,
+                            load_op: att.load_op,
+                            store_op: att.store_op,
+                        },
+                    )));
+                }
+                Some(SubpassColorAttachment::Transient { .. }) => {
+                    log::error!(
+                        "tiled-fork: SubpassColorAttachment::Transient is not yet wired in wgpu-core"
+                    );
+                    return Err(SubpassRenderPassError::TransientNotWired);
+                }
+                None => sub_colors.push(None),
+            }
+        }
+        let sub_ds = match &subpass.depth_stencil_attachment {
+            Some(SubpassDepthStencilAttachment::Persistent(ds)) => Some(
+                ResolvedSubpassDepthStencilAttachment::Persistent(
+                    resolve_persistent_depth_stencil(&texture_views, device, ds)?,
+                ),
+            ),
+            Some(SubpassDepthStencilAttachment::Transient { .. }) => {
+                log::error!(
+                    "tiled-fork: SubpassDepthStencilAttachment::Transient is not yet wired in wgpu-core"
+                );
+                return Err(SubpassRenderPassError::TransientNotWired);
+            }
+            None => None,
+        };
+        resolved_subpasses.push(ResolvedSubpass {
+            color_attachments: sub_colors,
+            color_attachment_indices: subpass.color_attachment_indices.to_vec(),
+            depth_stencil_attachment: sub_ds,
+            input_attachments: subpass.input_attachments.to_vec(),
+        });
+    }
+
+    // -- Timestamp writes & occlusion query set --------------------------
+    let timestamp_writes = if let Some(tw) = &desc.timestamp_writes {
+        let qs = query_sets.get(tw.query_set).get()?;
+        qs.same_device(device)?;
+        Some(ArcPassTimestampWrites {
+            query_set: qs,
+            beginning_of_pass_write_index: tw.beginning_of_pass_write_index,
+            end_of_pass_write_index: tw.end_of_pass_write_index,
+        })
+    } else {
+        None
+    };
+
+    let occlusion_query_set = if let Some(qs_id) = desc.occlusion_query_set {
+        let qs = query_sets.get(qs_id).get()?;
+        qs.same_device(device)?;
+        Some(qs)
+    } else {
+        None
+    };
+
+    Ok(ResolvedDescriptor {
+        label: desc.label.as_deref().map(ToString::to_string),
+        extent: desc.extent,
+        sample_count: desc.sample_count,
+        color_attachments: resolved_colors,
+        depth_stencil_attachment: resolved_depth_stencil,
+        subpasses: resolved_subpasses,
+        subpass_dependencies: desc.subpass_dependencies.to_vec(),
+        transient_memory_hint: desc.transient_memory_hint,
+        active_subpass_mask: desc.active_subpass_mask,
+        multiview_mask: desc.multiview_mask,
+        timestamp_writes,
+        occlusion_query_set,
+    })
+}
+
+fn resolve_persistent_depth_stencil(
+    texture_views: &crate::lock::RwLockReadGuard<
+        '_,
+        crate::storage::Storage<crate::resource::Fallible<TextureView>>,
+    >,
+    device: &Arc<Device>,
+    ds: &RenderPassDepthStencilAttachment<id::TextureViewId>,
+) -> Result<ResolvedRenderPassDepthStencilAttachment<Arc<TextureView>>, SubpassRenderPassError> {
+    let view = texture_views.get(ds.view).get()?;
+    view.same_device(device)?;
+    if !view.desc.usage.contains(TextureUsages::RENDER_ATTACHMENT) {
+        return Err(SubpassRenderPassError::MissingTextureUsage(
+            MissingTextureUsageError {
+                res: view.error_ident(),
+                actual: view.desc.usage,
+                expected: TextureUsages::RENDER_ATTACHMENT,
+            },
+        ));
+    }
+    let format = view.desc.format;
+    let depth = if format.has_depth_aspect() {
+        resolve_pass_channel(&ds.depth, 0.0)?
+    } else {
+        ResolvedPassChannel::ReadOnly
+    };
+    let stencil = if format.has_stencil_aspect() {
+        resolve_pass_channel(&ds.stencil, 0)?
+    } else {
+        ResolvedPassChannel::ReadOnly
+    };
+    Ok(ResolvedRenderPassDepthStencilAttachment {
+        view,
+        depth,
+        stencil,
+    })
+}
+
+/// Inline implementation of `PassChannel::resolve`. We don't call the
+/// upstream private method because it lives in another module; instead,
+/// reproduce its logic with a default clear value when the channel doesn't
+/// supply one, since this entry point has no AttachmentError variant in
+/// the subpass error enum.
+fn resolve_pass_channel<V>(
+    channel: &crate::command::PassChannel<Option<V>>,
+    default_clear: V,
+) -> Result<ResolvedPassChannel<V>, SubpassRenderPassError>
+where
+    V: Copy + Default,
+{
+    if channel.read_only {
+        if channel.load_op.is_some() {
+            return Err(SubpassRenderPassError::DescriptorInvalid(
+                "depth/stencil channel marked read_only but supplies load_op".into(),
+            ));
+        }
+        if channel.store_op.is_some() {
+            return Err(SubpassRenderPassError::DescriptorInvalid(
+                "depth/stencil channel marked read_only but supplies store_op".into(),
+            ));
+        }
+        Ok(ResolvedPassChannel::ReadOnly)
+    } else {
+        let load = match channel
+            .load_op
+            .ok_or_else(|| {
+                SubpassRenderPassError::DescriptorInvalid(
+                    "depth/stencil channel missing load_op".into(),
+                )
+            })?
+        {
+            LoadOp::Clear(clear_value) => LoadOp::Clear(clear_value.unwrap_or(default_clear)),
+            LoadOp::DontCare(t) => LoadOp::DontCare(t),
+            LoadOp::Load => LoadOp::Load,
+        };
+        let store = channel.store_op.ok_or_else(|| {
+            SubpassRenderPassError::DescriptorInvalid("depth/stencil channel missing store_op".into())
+        })?;
+        Ok(ResolvedPassChannel::Operational(wgt::Operations {
+            load,
+            store,
+        }))
+    }
+}
+
+/// Build the HAL descriptor inline and call `begin_subpass_render_pass_dyn`.
+fn dispatch_hal_begin(
+    raw: &mut dyn hal::DynTiledCommandEncoder,
+    resolved: &ResolvedDescriptor,
+    snatch_guard: &crate::snatch::SnatchGuard<'_>,
+    device: &Device,
+) -> Result<(), SubpassRenderPassError> {
+    // -- Persistent color attachments -> hal::ColorAttachment ------------
+    let mut hal_colors: Vec<Option<hal::ColorAttachment<'_, dyn hal::DynTextureView>>> =
+        Vec::with_capacity(resolved.color_attachments.len());
+    for att in resolved.color_attachments.iter() {
+        match att {
+            Some(att) => {
+                let resolve = if let Some(rt) = &att.resolve_target {
+                    Some(hal::Attachment {
+                        view: rt.try_raw(snatch_guard)?,
+                        usage: wgt::TextureUses::COLOR_TARGET,
+                    })
+                } else {
+                    None
+                };
+                hal_colors.push(Some(hal::ColorAttachment {
+                    target: hal::Attachment {
+                        view: att.view.try_raw(snatch_guard)?,
+                        usage: wgt::TextureUses::COLOR_TARGET,
+                    },
+                    depth_slice: att.depth_slice,
+                    resolve_target: resolve,
+                    ops: load_store_to_hal_ops(att.load_op, att.store_op),
+                    clear_value: load_clear(att.load_op),
+                }));
+            }
+            None => hal_colors.push(None),
+        }
+    }
+
+    // -- Persistent depth/stencil -> hal::DepthStencilAttachment --------
+    let hal_depth_stencil = if let Some(ds) = &resolved.depth_stencil_attachment {
+        let usage = if ds.depth_is_readonly()
+            && ds.stencil_is_readonly()
+            && device
+                .downlevel
+                .flags
+                .contains(wgt::DownlevelFlags::READ_ONLY_DEPTH_STENCIL)
+        {
+            wgt::TextureUses::DEPTH_STENCIL_READ | wgt::TextureUses::RESOURCE
+        } else {
+            wgt::TextureUses::DEPTH_STENCIL_WRITE
+        };
+        Some(hal::DepthStencilAttachment {
+            target: hal::Attachment {
+                view: ds.view.try_raw(snatch_guard)?,
+                usage,
+            },
+            depth_ops: channel_to_hal_ops(&ds.depth),
+            stencil_ops: channel_to_hal_ops(&ds.stencil),
+            clear_value: (channel_clear(&ds.depth), channel_clear(&ds.stencil)),
+        })
+    } else {
+        None
+    };
+
+    // -- Per-subpass color attachment vectors ---------------------------
+    let mut sub_colors: Vec<Vec<Option<hal::SubpassColorAttachment<'_, dyn hal::DynTextureView>>>> =
+        Vec::with_capacity(resolved.subpasses.len());
+    let mut sub_ds: Vec<Option<hal::SubpassDepthStencilAttachment<'_, dyn hal::DynTextureView>>> =
+        Vec::with_capacity(resolved.subpasses.len());
+    for subpass in resolved.subpasses.iter() {
+        let mut colors: Vec<Option<hal::SubpassColorAttachment<'_, dyn hal::DynTextureView>>> =
+            Vec::with_capacity(subpass.color_attachments.len());
+        for color in subpass.color_attachments.iter() {
+            match color {
+                Some(ResolvedSubpassColorAttachment::Persistent(att)) => {
+                    let resolve = if let Some(rt) = &att.resolve_target {
+                        Some(hal::Attachment {
+                            view: rt.try_raw(snatch_guard)?,
+                            usage: wgt::TextureUses::COLOR_TARGET,
+                        })
+                    } else {
+                        None
+                    };
+                    colors.push(Some(hal::SubpassColorAttachment::Persistent(
+                        hal::ColorAttachment {
+                            target: hal::Attachment {
+                                view: att.view.try_raw(snatch_guard)?,
+                                usage: wgt::TextureUses::COLOR_TARGET,
+                            },
+                            depth_slice: att.depth_slice,
+                            resolve_target: resolve,
+                            ops: load_store_to_hal_ops(att.load_op, att.store_op),
+                            clear_value: load_clear(att.load_op),
+                        },
+                    )));
+                }
+                Some(ResolvedSubpassColorAttachment::Transient { .. }) => {
+                    // The resolver always rejects `Transient` arms in this
+                    // phase (returns TransientNotWired). If we ever reach
+                    // this branch, surface it as a validation error rather
+                    // than panicking.
+                    return Err(SubpassRenderPassError::TransientNotWired);
+                }
+                None => colors.push(None),
+            }
+        }
+        sub_colors.push(colors);
+
+        let ds = match &subpass.depth_stencil_attachment {
+            Some(ResolvedSubpassDepthStencilAttachment::Persistent(ds)) => {
+                let usage = if ds.depth_is_readonly()
+                    && ds.stencil_is_readonly()
+                    && device
+                        .downlevel
+                        .flags
+                        .contains(wgt::DownlevelFlags::READ_ONLY_DEPTH_STENCIL)
+                {
+                    wgt::TextureUses::DEPTH_STENCIL_READ | wgt::TextureUses::RESOURCE
+                } else {
+                    wgt::TextureUses::DEPTH_STENCIL_WRITE
+                };
+                Some(hal::SubpassDepthStencilAttachment::Persistent(
+                    hal::DepthStencilAttachment {
+                        target: hal::Attachment {
+                            view: ds.view.try_raw(snatch_guard)?,
+                            usage,
+                        },
+                        depth_ops: channel_to_hal_ops(&ds.depth),
+                        stencil_ops: channel_to_hal_ops(&ds.stencil),
+                        clear_value: (channel_clear(&ds.depth), channel_clear(&ds.stencil)),
+                    },
+                ))
+            }
+            Some(ResolvedSubpassDepthStencilAttachment::Transient { .. }) => {
+                return Err(SubpassRenderPassError::TransientNotWired);
+            }
+            None => None,
+        };
+        sub_ds.push(ds);
+    }
+
+    // Borrow-stable index/input arrays.
+    let sub_indices: Vec<&[u32]> = resolved
+        .subpasses
+        .iter()
+        .map(|s| s.color_attachment_indices.as_slice())
+        .collect();
+    let sub_inputs: Vec<&[wgt::SubpassInputAttachment]> = resolved
+        .subpasses
+        .iter()
+        .map(|s| s.input_attachments.as_slice())
+        .collect();
+
+    // Drain `sub_ds` into per-subpass `Subpass` values. `Option::take`
+    // gives us each owned attachment exactly once, sidestepping the
+    // missing `Clone` bound on `SubpassDepthStencilAttachment<'_, dyn _>`.
+    //
+    // `hal::Subpass` is `#[non_exhaustive]`, so we cannot use struct-literal
+    // syntax cross-crate. Instead, start from `Default::default()` and
+    // mutate through the public field accessors.
+    let subpass_count = resolved.subpasses.len();
+    let mut subpasses: Vec<hal::Subpass<'_, dyn hal::DynTextureView>> =
+        Vec::with_capacity(subpass_count);
+    for i in 0..subpass_count {
+        let mut sp: hal::Subpass<'_, dyn hal::DynTextureView> = Default::default();
+        sp.color_attachments = sub_colors[i].as_slice();
+        sp.color_attachment_indices = sub_indices[i];
+        sp.depth_stencil_attachment = sub_ds[i].take();
+        sp.input_attachments = sub_inputs[i];
+        subpasses.push(sp);
+    }
+
+    let timestamp_writes_hal =
+        resolved
+            .timestamp_writes
+            .as_ref()
+            .map(|tw| hal::PassTimestampWrites::<'_, dyn hal::DynQuerySet> {
+                query_set: tw.query_set.raw(),
+                beginning_of_pass_write_index: tw.beginning_of_pass_write_index,
+                end_of_pass_write_index: tw.end_of_pass_write_index,
+            });
+
+    let occlusion_qs: Option<&dyn hal::DynQuerySet> = resolved
+        .occlusion_query_set
+        .as_ref()
+        .map(|qs| qs.raw());
+
+    // `hal::SubpassRenderPassDescriptor` is `#[non_exhaustive]`; same
+    // pattern as `hal::Subpass` above.
+    let hal_label_str = resolved.label.as_deref();
+    let mut hal_desc: hal::SubpassRenderPassDescriptor<
+        '_,
+        dyn hal::DynQuerySet,
+        dyn hal::DynTextureView,
+    > = Default::default();
+    hal_desc.label = hal_label_str;
+    hal_desc.extent = resolved.extent;
+    hal_desc.sample_count = resolved.sample_count;
+    hal_desc.color_attachments = hal_colors.as_slice();
+    hal_desc.depth_stencil_attachment = hal_depth_stencil;
+    hal_desc.subpasses = subpasses.as_slice();
+    hal_desc.subpass_dependencies = resolved.subpass_dependencies.as_slice();
+    hal_desc.transient_memory_hint = resolved.transient_memory_hint;
+    hal_desc.active_subpass_mask = resolved.active_subpass_mask;
+    hal_desc.multiview_mask = resolved.multiview_mask;
+    hal_desc.timestamp_writes = timestamp_writes_hal;
+    hal_desc.occlusion_query_set = occlusion_qs;
+
+    // SAFETY: feature gate verified above; encoder is open via the
+    // caller's `open_pass`; descriptor lifetime extends to end of this
+    // function (inclusive of the synchronous HAL call).
+    unsafe { raw.begin_subpass_render_pass_dyn(&hal_desc) };
+    Ok(())
+}
+
+// Tiny extension trait so we can ask a `ResolvedRenderPassDepthStencilAttachment`
+// whether each channel is read-only without re-importing the inner enum.
+trait ResolvedDepthStencilExt {
+    fn depth_is_readonly(&self) -> bool;
+    fn stencil_is_readonly(&self) -> bool;
+}
+
+impl<TV> ResolvedDepthStencilExt for ResolvedRenderPassDepthStencilAttachment<TV> {
+    fn depth_is_readonly(&self) -> bool {
+        matches!(self.depth, ResolvedPassChannel::ReadOnly)
+    }
+    fn stencil_is_readonly(&self) -> bool {
+        matches!(self.stencil, ResolvedPassChannel::ReadOnly)
+    }
+}
+
+fn load_store_to_hal_ops<V>(load: LoadOp<V>, store: StoreOp) -> hal::AttachmentOps {
+    let load_bits = match load {
+        LoadOp::Load => hal::AttachmentOps::LOAD,
+        LoadOp::Clear(_) => hal::AttachmentOps::LOAD_CLEAR,
+        LoadOp::DontCare(_) => hal::AttachmentOps::LOAD_DONT_CARE,
+    };
+    let store_bits = match store {
+        StoreOp::Store => hal::AttachmentOps::STORE,
+        StoreOp::Discard => hal::AttachmentOps::STORE_DISCARD,
+    };
+    load_bits | store_bits
+}
+
+fn load_clear<V: Default + Copy>(load: LoadOp<V>) -> V {
+    match load {
+        LoadOp::Clear(v) => v,
+        _ => V::default(),
+    }
+}
+
+fn channel_to_hal_ops<V>(channel: &ResolvedPassChannel<V>) -> hal::AttachmentOps
+where
+    V: Copy + Default,
+{
+    match channel {
+        ResolvedPassChannel::ReadOnly => hal::AttachmentOps::LOAD | hal::AttachmentOps::STORE,
+        ResolvedPassChannel::Operational(ops) => {
+            let load = match ops.load {
+                LoadOp::Load => hal::AttachmentOps::LOAD,
+                LoadOp::Clear(_) => hal::AttachmentOps::LOAD_CLEAR,
+                LoadOp::DontCare(_) => hal::AttachmentOps::LOAD_DONT_CARE,
+            };
+            let store = match ops.store {
+                StoreOp::Store => hal::AttachmentOps::STORE,
+                StoreOp::Discard => hal::AttachmentOps::STORE_DISCARD,
+            };
+            load | store
+        }
+    }
+}
+
+fn channel_clear<V: Copy + Default>(channel: &ResolvedPassChannel<V>) -> V {
+    match channel {
+        ResolvedPassChannel::Operational(ops) => match ops.load {
+            LoadOp::Clear(v) => v,
+            _ => V::default(),
+        },
+        _ => V::default(),
+    }
+}
+
+/// Run a closure with `&mut CommandBufferMutable` while the encoder is in
+/// the [`CommandEncoderStatus::Locked`] state.
+fn with_locked_encoder_mut<R>(
+    status: &mut CommandEncoderStatus,
+    f: impl FnOnce(&mut CommandBufferMutable) -> Result<R, SubpassRenderPassError>,
+) -> Result<R, SubpassRenderPassError> {
+    match status {
+        CommandEncoderStatus::Locked(inner) => f(inner),
+        CommandEncoderStatus::Recording(_) => Err(SubpassRenderPassError::EncoderState(
+            EncoderStateError::Unlocked,
+        )),
+        CommandEncoderStatus::Finished(_) | CommandEncoderStatus::Consumed => Err(
+            SubpassRenderPassError::EncoderState(EncoderStateError::Ended),
+        ),
+        CommandEncoderStatus::Error(_) => Err(SubpassRenderPassError::EncoderState(
+            EncoderStateError::Invalid,
+        )),
+        // CommandEncoderStatus::Transitioning is only ever observed inside
+        // `mem::replace` calls in lock_encoder/unlock_encoder/finish; an
+        // outside caller can't see it. Per CLAUDE.md "no panics in library
+        // code" we surface a benign Invalid error rather than `unreachable!()`.
+        CommandEncoderStatus::Transitioning => Err(SubpassRenderPassError::EncoderState(
+            EncoderStateError::Invalid,
+        )),
     }
 }
 // tiled-fork: end types

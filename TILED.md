@@ -275,6 +275,7 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
   - [x] Phase 11c — `Device::create_transient_attachment` actually invokes HAL
   - [ ] Phase 11d — Public `wgpu::SubpassRenderPassDescriptor` API + `begin_subpass_render_pass`
     - [x] Phase 11d1 — `DynTiledCommandEncoder: DynCommandEncoder` + Box storage
+    - [x] Phase 11d2 — wgpu-core SubpassRenderPass machinery (begin/next/end; persistent attachments)
   - [ ] Phase 11e — `RenderPass::next_subpass` + `current_subpass_index`
   - [ ] Phase 11f — Public `SubpassRenderPipelineDescriptor` + `Device::create_subpass_render_pipeline`
 

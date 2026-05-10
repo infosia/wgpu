@@ -71,7 +71,10 @@ pub use self::{
     transition_resources::TransitionResourcesError,
 };
 // tiled-fork: begin re-export
-pub use self::subpass::{SubpassRenderPass, SubpassRenderPassError};
+pub use self::subpass::{
+    SubpassColorAttachment, SubpassDepthStencilAttachment, SubpassDescriptor, SubpassRenderPass,
+    SubpassRenderPassDescriptor, SubpassRenderPassError,
+};
 // tiled-fork: end re-export
 pub(crate) use self::{
     clear::clear_texture,
