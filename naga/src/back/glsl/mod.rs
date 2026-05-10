@@ -529,6 +529,12 @@ impl fmt::Display for VaryingName<'_> {
             crate::Binding::BuiltIn(built_in) => {
                 write!(f, "{}", glsl_built_in(built_in, self.options))
             }
+            // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+            #[allow(clippy::todo)]
+            crate::Binding::ColorAttachmentRead { .. } => {
+                todo!("Phase 6b: framebuffer-fetch (@color) emission for the GLSL backend")
+            }
+            // tiled-fork: end arm (Binding::ColorAttachmentRead)
         }
     }
 }

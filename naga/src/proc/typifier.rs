@@ -527,6 +527,16 @@ impl<'a> ResolveContext<'a> {
                         scalar: crate::Scalar::F32,
                         size: crate::VectorSize::Quad,
                     },
+                    // tiled-fork: begin arm (Subpass)
+                    // ImageSample / ImageLoad on a Subpass image is invalid; the
+                    // validator rejects this earlier. The arm exists only to
+                    // make the match exhaustive. The type returned here is
+                    // never observed in a valid module.
+                    crate::ImageClass::Subpass { .. } => Ti::Vector {
+                        scalar: crate::Scalar::F32,
+                        size: crate::VectorSize::Quad,
+                    },
+                    // tiled-fork: end arm (Subpass)
                 }),
                 ref other => {
                     log::error!("Image type {other:?}");
@@ -820,6 +830,25 @@ impl<'a> ResolveContext<'a> {
                 })
             }
             crate::Expression::CooperativeMultiplyAdd { a: _, b: _, c } => past(c)?.clone(),
+            // tiled-fork: begin arm (SubpassLoad)
+            crate::Expression::SubpassLoad { image, .. } => match *past(image)?.inner_with(types) {
+                Ti::Image { class, .. } => TypeResolution::Value(match class {
+                    crate::ImageClass::Subpass { aspect, .. } => match aspect {
+                        crate::SubpassAspect::Color { kind } => Ti::Vector {
+                            scalar: crate::Scalar { kind, width: 4 },
+                            size: crate::VectorSize::Quad,
+                        },
+                        crate::SubpassAspect::Depth => Ti::Scalar(crate::Scalar::F32),
+                        crate::SubpassAspect::Stencil => Ti::Scalar(crate::Scalar::U32),
+                    },
+                    _ => return Err(ResolveError::InvalidImage(image)),
+                }),
+                ref other => {
+                    log::error!("SubpassLoad image type {other:?}");
+                    return Err(ResolveError::InvalidImage(image));
+                }
+            },
+            // tiled-fork: end arm (SubpassLoad)
         })
     }
 }

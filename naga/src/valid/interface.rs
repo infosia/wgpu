@@ -808,6 +808,20 @@ impl VaryingContext<'_> {
                     }
                 }
             }
+            // tiled-fork: begin arm (ColorAttachmentRead)
+            // ColorAttachmentRead is only valid as a fragment-stage input.
+            // Phase 6b will add proper validation; for Phase 6a we simply
+            // accept the binding without restricting type/aspect so
+            // exhaustiveness is satisfied.
+            crate::Binding::ColorAttachmentRead { .. } => {
+                if self.stage != crate::ShaderStage::Fragment {
+                    return Err(VaryingError::InvalidAttributeInStage(
+                        "color",
+                        self.stage,
+                    ));
+                }
+            }
+            // tiled-fork: end arm (ColorAttachmentRead)
         }
 
         Ok(())
@@ -951,6 +965,22 @@ impl super::Validator {
                                 // This should have been rejected in `validate_type`.
                                 unreachable!("binding arrays of external images are not supported");
                             }
+                            // tiled-fork: begin arm (Subpass)
+                            // Subpass-input binding arrays are not supported by
+                            // the underlying APIs (Vulkan input attachments are
+                            // not arrays). Bucketed under TEXTURE_AND_SAMPLER
+                            // capability for now; Phase 6b will refine this.
+                            crate::ImageClass::Subpass { .. } => {
+                                if !self
+                                    .capabilities
+                                    .contains(Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY)
+                                {
+                                    return Err(GlobalVariableError::UnsupportedCapability(
+                                        Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY,
+                                    ));
+                                }
+                            }
+                            // tiled-fork: end arm (Subpass)
                         },
                         crate::TypeInner::Sampler { .. } => {
                             if !self

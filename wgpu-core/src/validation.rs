@@ -233,6 +233,10 @@ pub enum BindingError {
     InconsistentlyDerivedType,
     #[error("Texture format {0:?} is not supported for storage use")]
     BadStorageFormat(wgt::TextureFormat),
+    // tiled-fork: begin variant (TiledNotImplemented)
+    #[error("Tiled-rendering surface (subpass inputs / framebuffer fetch) is not yet wired end-to-end (fork-only stub; see TILED.md Phase 9)")]
+    TiledNotImplemented,
+    // tiled-fork: end variant (TiledNotImplemented)
 }
 
 impl WebGpuError for BindingError {
@@ -724,6 +728,16 @@ impl Resource {
                         },
                     },
                     naga::ImageClass::External => BindingType::ExternalTexture,
+                    // tiled-fork: begin arm (ImageClass::Subpass)
+                    // Subpass-input bindings are not yet derivable as
+                    // BindingType -- the public wgpu API doesn't expose a
+                    // matching `BindingType::SubpassInput` variant in this
+                    // phase. Return a fork-only error so the host doesn't
+                    // panic.
+                    naga::ImageClass::Subpass { .. } => {
+                        return Err(BindingError::TiledNotImplemented);
+                    }
+                    // tiled-fork: end arm (ImageClass::Subpass)
                 }
             }
             ResourceType::AccelerationStructure { vertex_return } => {
@@ -999,6 +1013,17 @@ impl Interface {
                 log::error!("Missing binding for a varying");
                 return;
             }
+            // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+            // ColorAttachmentRead is the framebuffer-fetch binding. The
+            // public wgpu API doesn't yet know how to map it onto a Varying.
+            // Phase 6b will wire this; for Phase 6a, log the gap and skip.
+            Some(&naga::Binding::ColorAttachmentRead { .. }) => {
+                log::error!(
+                    "ColorAttachmentRead binding encountered before Phase 6b wires framebuffer fetch into wgpu-core; skipping varying registration."
+                );
+                return;
+            }
+            // tiled-fork: end arm (Binding::ColorAttachmentRead)
         };
         list.push(varying);
     }

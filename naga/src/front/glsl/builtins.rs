@@ -2139,6 +2139,12 @@ impl Frontend {
                 ImageClass::Storage { .. } => (false, true),
                 ImageClass::Sampled { .. } => (false, false),
                 ImageClass::External => unreachable!(),
+                // tiled-fork: begin arm (ImageClass::Subpass)
+                #[allow(clippy::todo)]
+                ImageClass::Subpass { .. } => {
+                    todo!("Phase 6b: subpass-input parsing for the GLSL frontend")
+                }
+                // tiled-fork: end arm (ImageClass::Subpass)
             };
 
             let coordinate = match (image_size, coord_size) {
@@ -2261,6 +2267,12 @@ pub fn sampled_to_depth(
                 meta,
             }),
             ImageClass::External => unreachable!(),
+            // tiled-fork: begin arm (ImageClass::Subpass)
+            #[allow(clippy::todo)]
+            ImageClass::Subpass { .. } => {
+                todo!("Phase 6b: subpass-input parsing for the GLSL frontend")
+            }
+            // tiled-fork: end arm (ImageClass::Subpass)
         },
         _ => errors.push(Error {
             kind: ErrorKind::SemanticError("Not a texture".into()),

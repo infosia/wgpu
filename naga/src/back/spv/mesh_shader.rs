@@ -350,6 +350,12 @@ impl super::Writer {
                     mesh_return_info.vertex_info.bindings.push(v);
                 }
                 crate::Binding::BuiltIn(_) => (),
+                // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+                #[allow(clippy::todo)]
+                crate::Binding::ColorAttachmentRead { .. } => {
+                    todo!("Phase 6b: framebuffer-fetch (@color) emission for the SPIR-V backend")
+                }
+                // tiled-fork: end arm (Binding::ColorAttachmentRead)
             }
         }
         // Write primitive binding output blocks (1 array per output struct member)
@@ -400,6 +406,12 @@ impl super::Writer {
                     mesh_return_info.primitive_info.bindings.push(v);
                 }
                 crate::Binding::BuiltIn(_) => (),
+                // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+                #[allow(clippy::todo)]
+                crate::Binding::ColorAttachmentRead { .. } => {
+                    todo!("Phase 6b: framebuffer-fetch (@color) emission for the SPIR-V backend")
+                }
+                // tiled-fork: end arm (Binding::ColorAttachmentRead)
             }
         }
 
@@ -595,6 +607,12 @@ impl super::Writer {
                     ));
                     binding_index += 1;
                 }
+                // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+                #[allow(clippy::todo)]
+                crate::Binding::ColorAttachmentRead { .. } => {
+                    todo!("Phase 6b: framebuffer-fetch (@color) emission for the SPIR-V backend")
+                }
+                // tiled-fork: end arm (Binding::ColorAttachmentRead)
             }
             body.push(Instruction::store(ptr_to_copy_to, val_to_copy, None));
             // Flip the vertex position y coordinate in some cases

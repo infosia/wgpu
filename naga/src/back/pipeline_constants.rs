@@ -700,6 +700,17 @@ fn adjust_expr(new_pos: &HandleVec<Expression, Handle<Expression>>, expr: &mut E
             adjust(b);
             adjust(c);
         }
+        // tiled-fork: begin arm (SubpassLoad)
+        Expression::SubpassLoad {
+            ref mut image,
+            ref mut sample_index,
+        } => {
+            adjust(image);
+            if let Some(s) = sample_index.as_mut() {
+                adjust(s);
+            }
+        }
+        // tiled-fork: end arm (SubpassLoad)
     }
 }
 

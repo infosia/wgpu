@@ -836,7 +836,66 @@ pub enum ImageClass {
         format: StorageFormat,
         access: StorageAccess,
     },
+    // tiled-fork: begin variant (Subpass)
+    /// Tile-memory subpass input attachment.
+    ///
+    /// Subpass inputs are tile-memory reads of an attachment written by an
+    /// earlier subpass within the same render pass. Lifetime and scope:
+    ///
+    /// - **Pass-local**: a subpass input is readable only while its render
+    ///   pass is active. Outside the pass the binding is undefined.
+    /// - **Position-implicit**: each invocation reads the current fragment's
+    ///   position only; arbitrary `(x, y)` lookups are not supported.
+    /// - **Fragment-stage only**: subpass loads are valid only from a
+    ///   fragment entry point.
+    /// - **Tile-memory backed when transient**: when the source attachment
+    ///   uses `TextureUsages::TRANSIENT` the read happens on-chip without
+    ///   ever touching DRAM. Otherwise the read still hits framebuffer
+    ///   memory.
+    ///
+    /// The only valid operation is [`Expression::SubpassLoad`].
+    ///
+    /// This is a fork-only variant for tile-based deferred rendering.
+    /// A single variant carries the aspect (color / depth / stencil) and the
+    /// multi-sampled flag; this collapses what the reference fork
+    /// (`infosia/wgpu-tiled`) modeled as three separate variants. Reduces
+    /// upstream merge churn at every exhaustive `ImageClass` match site.
+    Subpass {
+        /// Aspect kind of the subpass input.
+        aspect: SubpassAspect,
+        /// Multi-sampled subpass input.
+        multi: bool,
+    },
+    // tiled-fork: end variant (Subpass)
 }
+
+// tiled-fork: begin types (SubpassAspect)
+/// Aspect of a subpass input attachment carried by [`ImageClass::Subpass`].
+///
+/// Defined as a single type so the IR's match-arm pressure stays at one new
+/// variant on `ImageClass` rather than three. The aspect determines the
+/// per-backend lowering:
+/// - `Color` -> `subpassInput`/`isubpassInput`/`usubpassInput` in GLSL,
+///   `SampledType` matching `kind` in SPIR-V, `[[color(N)]]` in MSL.
+/// - `Depth` -> implicit depth aspect; SPIR-V uses `f32` `SampledType`.
+/// - `Stencil` -> `usubpassInput` in GLSL, `u32` `SampledType` in SPIR-V.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+#[non_exhaustive]
+pub enum SubpassAspect {
+    /// Color subpass input. The `kind` decides the scalar type of the loaded vector.
+    Color {
+        /// Kind of values in each channel.
+        kind: ScalarKind,
+    },
+    /// Depth subpass input; load returns `f32`.
+    Depth,
+    /// Stencil subpass input; load returns `u32`.
+    Stencil,
+}
+// tiled-fork: end types (SubpassAspect)
 
 /// A data type declared in the module.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -1157,6 +1216,29 @@ pub enum Binding {
         /// non-interpolated normal vector.
         per_primitive: bool,
     },
+    // tiled-fork: begin variant (ColorAttachmentRead)
+    /// Read access to color attachment `attachment` (`@color(attachment)`).
+    ///
+    /// Always rasterization-order coherent in v1. Construct via
+    /// [`Binding::color_attachment_read`].
+    ///
+    /// This is a fork-only variant for the framebuffer-fetch extension.
+    #[non_exhaustive]
+    ColorAttachmentRead {
+        /// Color attachment slot index.
+        attachment: u32,
+    },
+    // tiled-fork: end variant (ColorAttachmentRead)
+}
+
+impl Binding {
+    // tiled-fork: begin helpers
+    /// Construct a [`Binding::ColorAttachmentRead`] for the given attachment slot.
+    #[must_use]
+    pub const fn color_attachment_read(attachment: u32) -> Self {
+        Self::ColorAttachmentRead { attachment }
+    }
+    // tiled-fork: end helpers
 }
 
 /// Pipeline binding information for global resources.
@@ -1956,6 +2038,24 @@ pub enum Expression {
         b: Handle<Expression>,
         c: Handle<Expression>,
     },
+    // tiled-fork: begin variant (SubpassLoad)
+    /// Tile-memory subpass load.
+    ///
+    /// Reads from an [`ImageClass::Subpass`] global. The read is
+    /// position-implicit (the current fragment's coordinate) and may carry
+    /// an optional `sample_index` for multi-sampled subpass inputs.
+    ///
+    /// `image` must be an [`Expression::GlobalVariable`] referencing a
+    /// global whose type is an [`Image`] with [`ImageClass::Subpass`].
+    ///
+    /// [`Image`]: TypeInner::Image
+    SubpassLoad {
+        /// Handle to the subpass-input image global.
+        image: Handle<Expression>,
+        /// Sample index for multi-sampled subpass inputs; `None` otherwise.
+        sample_index: Option<Handle<Expression>>,
+    },
+    // tiled-fork: end variant (SubpassLoad)
 }
 
 /// The value of the switch case.

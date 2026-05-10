@@ -1316,6 +1316,11 @@ impl<'a> ConstantEvaluator<'a> {
             Expression::ImageSample { .. }
             | Expression::ImageLoad { .. }
             | Expression::ImageQuery { .. } => Err(ConstantEvaluatorError::ImageExpression),
+            // tiled-fork: begin arm (SubpassLoad)
+            // SubpassLoad is a runtime-only fragment-stage operation; it is not
+            // constant-evaluable. Bucketed with the other image expressions.
+            Expression::SubpassLoad { .. } => Err(ConstantEvaluatorError::ImageExpression),
+            // tiled-fork: end arm (SubpassLoad)
             Expression::RayQueryProceedResult
             | Expression::RayQueryGetIntersection { .. }
             | Expression::RayQueryVertexPositions { .. } => {

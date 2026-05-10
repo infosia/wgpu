@@ -815,7 +815,9 @@ impl super::Validator {
                             | Ex::RayQueryGetIntersection { .. }
                             | Ex::RayQueryVertexPositions { .. }
                             | Ex::CooperativeLoad { .. }
-                            | Ex::CooperativeMultiplyAdd { .. } => {
+                            | Ex::CooperativeMultiplyAdd { .. }
+                            // tiled-fork: arm (SubpassLoad) -- treated like ImageLoad
+                            | Ex::SubpassLoad { .. } => {
                                 self.emit_expression(handle, context)?
                             }
                             Ex::CallResult(_)

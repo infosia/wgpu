@@ -262,6 +262,15 @@ impl ExpressionTracer<'_> {
                 self.expressions_used.insert(b);
                 self.expressions_used.insert(c);
             }
+            // tiled-fork: begin arm (SubpassLoad)
+            Ex::SubpassLoad {
+                image,
+                sample_index,
+            } => {
+                self.expressions_used.insert(image);
+                self.expressions_used.insert_iter(sample_index);
+            }
+            // tiled-fork: end arm (SubpassLoad)
         }
     }
 }
@@ -441,6 +450,15 @@ impl ModuleMap {
                 adjust(b);
                 adjust(c);
             }
+            // tiled-fork: begin arm (SubpassLoad)
+            Ex::SubpassLoad {
+                ref mut image,
+                ref mut sample_index,
+            } => {
+                adjust(image);
+                operand_map.adjust_option(sample_index);
+            }
+            // tiled-fork: end arm (SubpassLoad)
         }
     }
 

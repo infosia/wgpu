@@ -403,6 +403,9 @@ impl crate::Binding {
         match *self {
             crate::Binding::BuiltIn(built_in) => Some(built_in),
             Self::Location { .. } => None,
+            // tiled-fork: begin arm (ColorAttachmentRead)
+            Self::ColorAttachmentRead { .. } => None,
+            // tiled-fork: end arm (ColorAttachmentRead)
         }
     }
 }
@@ -434,6 +437,9 @@ impl super::ImageClass {
             crate::ImageClass::Sampled { multi, .. } | crate::ImageClass::Depth { multi } => multi,
             crate::ImageClass::Storage { .. } => false,
             crate::ImageClass::External => false,
+            // tiled-fork: begin arm (Subpass)
+            crate::ImageClass::Subpass { multi, .. } => multi,
+            // tiled-fork: end arm (Subpass)
         }
     }
 
@@ -442,6 +448,10 @@ impl super::ImageClass {
             crate::ImageClass::Sampled { multi, .. } | crate::ImageClass::Depth { multi } => !multi,
             crate::ImageClass::Storage { .. } => false,
             crate::ImageClass::External => false,
+            // tiled-fork: begin arm (Subpass)
+            // Subpass inputs are tile-memory single-level reads -- never mipmapped.
+            crate::ImageClass::Subpass { .. } => false,
+            // tiled-fork: end arm (Subpass)
         }
     }
 

@@ -102,6 +102,9 @@ impl InterfaceKey {
             Some(&crate::Binding::Location { location, .. }) => Self::Location(location),
             Some(&crate::Binding::BuiltIn(built_in)) => Self::BuiltIn(built_in),
             None => Self::Other,
+            // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+            Some(&crate::Binding::ColorAttachmentRead { .. }) => Self::Other,
+            // tiled-fork: end arm (Binding::ColorAttachmentRead)
         }
     }
 }
@@ -563,6 +566,12 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                 }
             }
             crate::Binding::BuiltIn(_) => {}
+            // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+            #[allow(clippy::todo)]
+            crate::Binding::ColorAttachmentRead { .. } => {
+                todo!("Phase 6b: framebuffer-fetch (@color) emission for the HLSL backend")
+            }
+            // tiled-fork: end arm (Binding::ColorAttachmentRead)
         }
 
         Ok(())
@@ -755,6 +764,9 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                 let mut push_if_location = |binding: &Option<crate::Binding>| match *binding {
                     Some(crate::Binding::Location { location, .. }) => fs_input_locs.push(location),
                     Some(crate::Binding::BuiltIn(_)) | None => {}
+                    // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+                    Some(crate::Binding::ColorAttachmentRead { .. }) => {}
+                    // tiled-fork: end arm (Binding::ColorAttachmentRead)
                 };
 
                 // NOTE: We don't need to handle struct nesting. See note in
@@ -784,6 +796,9 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                         }
                     }
                     Some(crate::Binding::BuiltIn(_)) | None => {}
+                    // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+                    Some(crate::Binding::ColorAttachmentRead { .. }) => {}
+                    // tiled-fork: end arm (Binding::ColorAttachmentRead)
                 }
             }
 
@@ -4391,6 +4406,12 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
             | Expression::RayQueryProceedResult
             | Expression::SubgroupBallotResult
             | Expression::SubgroupOperationResult { .. } => {}
+            // tiled-fork: begin arm (SubpassLoad)
+            #[allow(clippy::todo)]
+            Expression::SubpassLoad { .. } => {
+                todo!("Phase 6b: subpass-input emission for the HLSL backend")
+            }
+            // tiled-fork: end arm (SubpassLoad)
         }
 
         if !closing_bracket.is_empty() {

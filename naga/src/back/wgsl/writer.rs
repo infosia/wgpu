@@ -1951,6 +1951,12 @@ impl<W: Write> Writer<W> {
                 self.write_expr(module, c, func_ctx)?;
                 write!(self.out, ")")?;
             }
+            // tiled-fork: begin arm (SubpassLoad)
+            #[allow(clippy::todo)]
+            Expression::SubpassLoad { .. } => {
+                todo!("Phase 6b: subpass-input emission for the WGSL backend")
+            }
+            // tiled-fork: end arm (SubpassLoad)
         }
 
         Ok(())
@@ -2154,5 +2160,11 @@ fn map_binding_to_attribute(binding: &crate::Binding) -> Vec<Attribute> {
             }
             attrs
         }
+        // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+        #[allow(clippy::todo)]
+        crate::Binding::ColorAttachmentRead { .. } => {
+            todo!("Phase 6b: framebuffer-fetch (@color) emission for the WGSL backend")
+        }
+        // tiled-fork: end arm (Binding::ColorAttachmentRead)
     }
 }

@@ -598,6 +598,12 @@ impl<'a, W: Write> Writer<'a, W> {
             Ic::Depth { multi: false } => ("sampler", float, "", "Shadow"),
             Ic::Storage { format, .. } => ("image", format.into(), "", ""),
             Ic::External => unimplemented!(),
+            // tiled-fork: begin arm (ImageClass::Subpass)
+            #[allow(clippy::todo)]
+            Ic::Subpass { .. } => {
+                todo!("Phase 6b: subpass-input image emission for the GLSL backend")
+            }
+            // tiled-fork: end arm (ImageClass::Subpass)
         };
 
         let precision = if self.options.version.is_es() {
@@ -1056,6 +1062,12 @@ impl<'a, W: Write> Writer<'a, W> {
                 blend_src,
                 per_primitive: _,
             } => (location, interpolation, sampling, blend_src),
+            // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+            #[allow(clippy::todo)]
+            crate::Binding::ColorAttachmentRead { .. } => {
+                todo!("Phase 6b: framebuffer-fetch (@color) emission for the GLSL backend")
+            }
+            // tiled-fork: end arm (Binding::ColorAttachmentRead)
             crate::Binding::BuiltIn(built_in) => {
                 match built_in {
                     crate::BuiltIn::Position { invariant: true } => {
@@ -2753,6 +2765,12 @@ impl<'a, W: Write> Writer<'a, W> {
                                 self.write_expr(image, ctx)?;
                             }
                             ImageClass::External => unimplemented!(),
+                            // tiled-fork: begin arm (ImageClass::Subpass)
+                            #[allow(clippy::todo)]
+                            ImageClass::Subpass { .. } => {
+                                todo!("Phase 6b: subpass-input image emission for the GLSL backend")
+                            }
+                            // tiled-fork: end arm (ImageClass::Subpass)
                         }
                         write!(self.out, ")")?;
                         if components != 1 || self.options.version.is_es() {
@@ -2769,6 +2787,12 @@ impl<'a, W: Write> Writer<'a, W> {
                             ImageClass::Sampled { .. } | ImageClass::Depth { .. } => "textureSize",
                             ImageClass::Storage { .. } => "imageSize",
                             ImageClass::External => unimplemented!(),
+                            // tiled-fork: begin arm (ImageClass::Subpass)
+                            #[allow(clippy::todo)]
+                            ImageClass::Subpass { .. } => {
+                                todo!("Phase 6b: subpass-input image emission for the GLSL backend")
+                            }
+                            // tiled-fork: end arm (ImageClass::Subpass)
                         };
                         write!(self.out, "{fun_name}(")?;
                         self.write_expr(image, ctx)?;
@@ -2789,6 +2813,12 @@ impl<'a, W: Write> Writer<'a, W> {
                             }
                             ImageClass::Storage { .. } => "imageSamples",
                             ImageClass::External => unimplemented!(),
+                            // tiled-fork: begin arm (ImageClass::Subpass)
+                            #[allow(clippy::todo)]
+                            ImageClass::Subpass { .. } => {
+                                todo!("Phase 6b: subpass-input image emission for the GLSL backend")
+                            }
+                            // tiled-fork: end arm (ImageClass::Subpass)
                         };
                         write!(self.out, "{fun_name}(")?;
                         self.write_expr(image, ctx)?;
@@ -3792,6 +3822,12 @@ impl<'a, W: Write> Writer<'a, W> {
             | Expression::RayQueryVertexPositions { .. }
             | Expression::CooperativeLoad { .. }
             | Expression::CooperativeMultiplyAdd { .. } => unreachable!(),
+            // tiled-fork: begin arm (SubpassLoad)
+            #[allow(clippy::todo)]
+            Expression::SubpassLoad { .. } => {
+                todo!("Phase 6b: subpass-input emission for the GLSL backend")
+            }
+            // tiled-fork: end arm (SubpassLoad)
         }
 
         Ok(())
@@ -4074,6 +4110,12 @@ impl<'a, W: Write> Writer<'a, W> {
                 ))
             }
             crate::ImageClass::External => unimplemented!(),
+            // tiled-fork: begin arm (ImageClass::Subpass)
+            #[allow(clippy::todo)]
+            crate::ImageClass::Subpass { .. } => {
+                todo!("Phase 6b: subpass-input image emission for the GLSL backend")
+            }
+            // tiled-fork: end arm (ImageClass::Subpass)
         };
 
         // openGL es doesn't have 1D images so we need workaround it

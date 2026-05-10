@@ -324,6 +324,12 @@ impl Display for TypeContext<'_> {
                         };
                         ("depth", msaa_str, scalar, access)
                     }
+                    // tiled-fork: begin arm (ImageClass::Subpass)
+                    #[allow(clippy::todo)]
+                    crate::ImageClass::Subpass { .. } => {
+                        todo!("Phase 6b: subpass-input image emission for the MSL backend")
+                    }
+                    // tiled-fork: end arm (ImageClass::Subpass)
                     crate::ImageClass::Storage { format, .. } => {
                         let access = if self
                             .access
@@ -2931,6 +2937,12 @@ impl<W: Write> Writer<W> {
                 self.put_expression(c, context, true)?;
                 write!(self.out, ")")?;
             }
+            // tiled-fork: begin arm (SubpassLoad)
+            #[allow(clippy::todo)]
+            crate::Expression::SubpassLoad { .. } => {
+                todo!("Phase 6b: subpass-input emission for the MSL backend")
+            }
+            // tiled-fork: end arm (SubpassLoad)
         }
         Ok(())
     }
@@ -7108,6 +7120,12 @@ template <typename A>
                         crate::Binding::Location { location, .. } => Some(location),
                         crate::Binding::BuiltIn(crate::BuiltIn::Barycentric { .. }) => None,
                         crate::Binding::BuiltIn(_) => continue,
+                        // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+                        #[allow(clippy::todo)]
+                        crate::Binding::ColorAttachmentRead { .. } => {
+                            todo!("Phase 6b: framebuffer-fetch (@color) emission for the MSL backend")
+                        }
+                        // tiled-fork: end arm (Binding::ColorAttachmentRead)
                     };
                     if do_vertex_pulling {
                         let Some(location) = location else {
@@ -7426,6 +7444,12 @@ template <typename A>
                                             "external textures".to_string(),
                                         ));
                                     }
+                                    // tiled-fork: begin arm (ImageClass::Subpass)
+                                    #[allow(clippy::todo)]
+                                    crate::ImageClass::Subpass { .. } => {
+                                        todo!("Phase 6b: subpass-input image emission for the MSL backend")
+                                    }
+                                    // tiled-fork: end arm (ImageClass::Subpass)
                                 },
                                 _ => {
                                     return Err(Error::UnsupportedArrayOfType(base));

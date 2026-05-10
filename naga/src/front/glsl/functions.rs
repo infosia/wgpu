@@ -1422,6 +1422,12 @@ impl Context<'_> {
                 let mut location = match binding {
                     crate::Binding::Location { location, .. } => location,
                     crate::Binding::BuiltIn(_) => return Ok(()),
+                    // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+                    #[allow(clippy::todo)]
+                    crate::Binding::ColorAttachmentRead { .. } => {
+                        todo!("Phase 6b: subpass-input parsing for the GLSL frontend")
+                    }
+                    // tiled-fork: end arm (Binding::ColorAttachmentRead)
                 };
 
                 let interpolation =
@@ -1458,6 +1464,12 @@ impl Context<'_> {
                 let mut location = match binding {
                     crate::Binding::Location { location, .. } => location,
                     crate::Binding::BuiltIn(_) => return Ok(()),
+                    // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+                    #[allow(clippy::todo)]
+                    crate::Binding::ColorAttachmentRead { .. } => {
+                        todo!("Phase 6b: subpass-input parsing for the GLSL frontend")
+                    }
+                    // tiled-fork: end arm (Binding::ColorAttachmentRead)
                 };
 
                 for (i, member) in members.clone().into_iter().enumerate() {

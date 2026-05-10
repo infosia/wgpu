@@ -206,6 +206,12 @@ impl<W: Write> super::Writer<'_, W> {
                     "external images should be handled by `write_global_external_texture`"
                 );
             }
+            // tiled-fork: begin arm (ImageClass::Subpass)
+            #[allow(clippy::todo)]
+            crate::ImageClass::Subpass { .. } => {
+                todo!("Phase 6b: subpass-input image emission for the HLSL backend")
+            }
+            // tiled-fork: end arm (ImageClass::Subpass)
         }
         Ok(())
     }
@@ -572,6 +578,12 @@ impl<W: Write> super::Writer<'_, W> {
             crate::ImageClass::Sampled { multi: false, .. } => "",
             crate::ImageClass::Storage { .. } => "RW",
             crate::ImageClass::External => "External",
+            // tiled-fork: begin arm (ImageClass::Subpass)
+            #[allow(clippy::todo)]
+            crate::ImageClass::Subpass { .. } => {
+                todo!("Phase 6b: subpass-input image emission for the HLSL backend")
+            }
+            // tiled-fork: end arm (ImageClass::Subpass)
         };
         let arrayed_str = if query.arrayed { "Array" } else { "" };
         let query_str = match query.query {
@@ -662,6 +674,12 @@ impl<W: Write> super::Writer<'_, W> {
                     crate::ImageClass::Storage { .. } => 0,
                     crate::ImageClass::Sampled { .. } | crate::ImageClass::Depth { .. } => 1,
                     crate::ImageClass::External => unreachable!(),
+                    // tiled-fork: begin arm (ImageClass::Subpass)
+                    #[allow(clippy::todo)]
+                    crate::ImageClass::Subpass { .. } => {
+                        todo!("Phase 6b: subpass-input image emission for the HLSL backend")
+                    }
+                    // tiled-fork: end arm (ImageClass::Subpass)
                 };
 
                 // GetDimensions Overloaded Methods

@@ -447,6 +447,12 @@ impl<W> Writer<'_, W> {
                         ImageClass::Sampled { multi: false, .. }
                         | ImageClass::Depth { multi: false }
                         | ImageClass::External => {}
+                        // tiled-fork: begin arm (ImageClass::Subpass)
+                        #[allow(clippy::todo)]
+                        ImageClass::Subpass { .. } => {
+                            todo!("Phase 6b: subpass-input image emission for the GLSL backend")
+                        }
+                        // tiled-fork: end arm (ImageClass::Subpass)
                     }
                 }
                 _ => {}
@@ -635,6 +641,12 @@ impl<W> Writer<'_, W> {
                     }
                     _ => {}
                 },
+                // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+                #[allow(clippy::todo)]
+                Binding::ColorAttachmentRead { .. } => {
+                    todo!("Phase 6b: framebuffer-fetch (@color) emission for the GLSL backend")
+                }
+                // tiled-fork: end arm (Binding::ColorAttachmentRead)
                 Binding::Location {
                     location: _,
                     interpolation,

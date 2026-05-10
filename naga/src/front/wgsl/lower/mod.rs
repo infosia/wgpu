@@ -4450,6 +4450,12 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                     ir::ImageClass::Storage { .. } | ir::ImageClass::External => {
                         self.expression(args.next()?, ctx)?
                     }
+                    // tiled-fork: begin arm (ImageClass::Subpass)
+                    #[allow(clippy::todo)]
+                    ir::ImageClass::Subpass { .. } => {
+                        todo!("Phase 6b: subpass-input parsing for the WGSL frontend")
+                    }
+                    // tiled-fork: end arm (ImageClass::Subpass)
                 };
                 level = ir::SampleLevel::Exact(exact);
                 depth_ref = None;

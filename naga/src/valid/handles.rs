@@ -670,6 +670,17 @@ impl super::Validator {
             crate::Expression::CooperativeMultiplyAdd { a, b, c } => {
                 handle.check_dep(a)?.check_dep(b)?.check_dep(c)?;
             }
+            // tiled-fork: begin arm (SubpassLoad)
+            crate::Expression::SubpassLoad {
+                image,
+                sample_index,
+            } => {
+                handle.check_dep(image)?;
+                if let Some(idx) = sample_index {
+                    handle.check_dep(idx)?;
+                }
+            }
+            // tiled-fork: end arm (SubpassLoad)
         }
         Ok(())
     }

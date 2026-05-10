@@ -1366,6 +1366,27 @@ impl super::Validator {
                 }
                 ShaderStages::COMPUTE
             }
+            // tiled-fork: begin arm (SubpassLoad)
+            // SubpassLoad is fragment-stage only and reads a Subpass image.
+            // Validation of the image type / aspect happens elsewhere in
+            // Phase 6b (typed subpass-input binding rules); for now we
+            // restrict the stage and let the typifier resolve the result.
+            E::SubpassLoad { image, .. } => {
+                let image_ty = Self::global_var_ty(module, function, image)?;
+                match module.types[image_ty].inner {
+                    Ti::Image {
+                        class: crate::ImageClass::Subpass { .. },
+                        ..
+                    } => {}
+                    Ti::Image { class, .. } => {
+                        log::debug!("SubpassLoad image class: {class:?}");
+                        return Err(ExpressionError::InvalidImageClass(class));
+                    }
+                    _ => return Err(ExpressionError::ExpectedImageType(image_ty)),
+                }
+                ShaderStages::FRAGMENT
+            }
+            // tiled-fork: end arm (SubpassLoad)
         };
         Ok(stages)
     }

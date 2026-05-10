@@ -851,6 +851,22 @@ impl FunctionInfo {
                 non_uniform_result: self.add_ref(a).or(self.add_ref(b).or(self.add_ref(c))),
                 requirements: UniformityRequirements::COOP_OPS,
             },
+            // tiled-fork: begin arm (SubpassLoad)
+            // SubpassLoad is fragment-stage only; uniformity is the same as
+            // ImageLoad on a Storage image (non-uniform per fragment, but the
+            // image handle itself is uniform).
+            E::SubpassLoad {
+                image,
+                sample_index,
+            } => {
+                let image_uniformity = self.add_ref(image);
+                let sample_uniformity = sample_index.and_then(|s| self.add_ref(s));
+                Uniformity {
+                    non_uniform_result: image_uniformity.or(sample_uniformity),
+                    requirements: UniformityRequirements::empty(),
+                }
+            }
+            // tiled-fork: end arm (SubpassLoad)
         };
 
         let ty = resolve_context.resolve(expression, |h| Ok(&self[h].ty))?;

@@ -385,6 +385,12 @@ impl LocalImageType {
                 image_format: format.into(),
             },
             crate::ImageClass::External => unimplemented!(),
+            // tiled-fork: begin arm (ImageClass::Subpass)
+            #[allow(clippy::todo)]
+            crate::ImageClass::Subpass { .. } => {
+                todo!("Phase 6b: subpass-input image emission for the SPIR-V backend")
+            }
+            // tiled-fork: end arm (ImageClass::Subpass)
         }
     }
 }

@@ -3103,6 +3103,12 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                         }
                     }
                     Some(crate::Binding::Location { .. }) => None,
+                    // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+                    #[allow(clippy::todo)]
+                    Some(crate::Binding::ColorAttachmentRead { .. }) => {
+                        todo!("Phase 6b: subpass-input parsing for the SPIR-V frontend")
+                    }
+                    // tiled-fork: end arm (Binding::ColorAttachmentRead)
                     None => match module.types[ty].inner {
                         crate::TypeInner::Struct { ref members, .. } => {
                             let mut components = Vec::with_capacity(members.len());

@@ -253,6 +253,25 @@ where
                 Ic::External => {
                     write!(out, "texture_external")?;
                 }
+                // tiled-fork: begin arm (Subpass)
+                Ic::Subpass { aspect, multi } => {
+                    use crate::SubpassAspect as Sa;
+                    let multisampled_suffix = if multi { "_multisampled" } else { "" };
+                    match aspect {
+                        Sa::Color { kind } => {
+                            write!(out, "subpass_input{multisampled_suffix}<")?;
+                            ctx.write_scalar(Scalar { kind, width: 4 }, out)?;
+                            out.write_str(">")?;
+                        }
+                        Sa::Depth => {
+                            write!(out, "subpass_input_depth{multisampled_suffix}")?;
+                        }
+                        Sa::Stencil => {
+                            write!(out, "subpass_input_stencil{multisampled_suffix}")?;
+                        }
+                    }
+                }
+                // tiled-fork: end arm (Subpass)
             }
         }
         TypeInner::Scalar(scalar) => {

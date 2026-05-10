@@ -1922,6 +1922,12 @@ impl Writer {
                         false
                     }
                     crate::ImageClass::External => unimplemented!(),
+                    // tiled-fork: begin arm (ImageClass::Subpass)
+                    #[allow(clippy::todo)]
+                    crate::ImageClass::Subpass { .. } => {
+                        todo!("Phase 6b: subpass-input image emission for the SPIR-V backend")
+                    }
+                    // tiled-fork: end arm (ImageClass::Subpass)
                 };
 
                 match dim {
@@ -3230,6 +3236,12 @@ impl Writer {
                 }
                 Ok(BindingDecorations::BuiltIn(built_in, others))
             }
+            // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+            #[allow(clippy::todo)]
+            crate::Binding::ColorAttachmentRead { .. } => {
+                todo!("Phase 6b: framebuffer-fetch (@color) emission for the SPIR-V backend")
+            }
+            // tiled-fork: end arm (Binding::ColorAttachmentRead)
         }
     }
 

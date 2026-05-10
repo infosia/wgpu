@@ -587,6 +587,12 @@ impl Options {
                     "Unexpected Binding::Location({location}) for the Uniform mode"
                 ))),
             },
+            // tiled-fork: begin arm (Binding::ColorAttachmentRead)
+            #[allow(clippy::todo)]
+            crate::Binding::ColorAttachmentRead { .. } => {
+                todo!("Phase 6b: framebuffer-fetch (@color) emission for the MSL backend")
+            }
+            // tiled-fork: end arm (Binding::ColorAttachmentRead)
         }
     }
 

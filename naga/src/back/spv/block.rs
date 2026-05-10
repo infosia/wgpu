@@ -2187,6 +2187,12 @@ impl BlockContext<'_> {
                 ));
                 id
             }
+            // tiled-fork: begin arm (SubpassLoad)
+            #[allow(clippy::todo)]
+            crate::Expression::SubpassLoad { .. } => {
+                todo!("Phase 6b: subpass-input emission for the SPIR-V backend")
+            }
+            // tiled-fork: end arm (SubpassLoad)
         };
 
         self.cached[expr_handle] = id;
