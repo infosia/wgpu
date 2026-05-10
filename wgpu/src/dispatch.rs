@@ -137,6 +137,21 @@ pub trait AdapterInterface: CommonTraits {
     fn get_presentation_timestamp(&self) -> crate::PresentationTimestamp;
 
     fn cooperative_matrix_properties(&self) -> Vec<crate::wgt::CooperativeMatrixProperties>;
+
+    // tiled-fork: begin tiled-caps
+    /// Returns the tile-memory capabilities of the adapter.
+    ///
+    /// Backends that do not support tile-based deferred rendering return
+    /// [`TiledCapabilities::none`](crate::TiledCapabilities::none).
+    ///
+    /// A default implementation returning `none()` is provided so that
+    /// custom out-of-tree backends compile without modification; built-in
+    /// backends override this to report real values when their HAL impl
+    /// supports it.
+    fn tiled_capabilities(&self) -> crate::TiledCapabilities {
+        crate::TiledCapabilities::none()
+    }
+    // tiled-fork: end tiled-caps
 }
 
 pub trait DeviceInterface: CommonTraits {

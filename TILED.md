@@ -245,7 +245,7 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
 - [x] Phase 2 — Per-backend HAL impls (stubs; real impls in later phases)
 - [x] Phase 3 — wgpu-core scaffolding (resource wrappers, Device methods, IDs)
 - [x] Phase 4 — wgpu-core subpass scaffolding (NotImplemented stubs; full validation in Phase 9)
-- [ ] Phase 5 — wgpu public API
+- [x] Phase 5 — wgpu public API (TiledCapabilities query; descriptors & methods deferred)
 - [ ] Phase 6 — naga (cherry-pick refactored variant)
 - [ ] Phase 7 — Examples
 - [ ] Phase 8 — Tests + benches

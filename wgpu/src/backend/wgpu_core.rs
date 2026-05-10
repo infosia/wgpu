@@ -1000,6 +1000,15 @@ impl dispatch::AdapterInterface for CoreAdapter {
             .0
             .adapter_cooperative_matrix_properties(self.id)
     }
+
+    // tiled-fork: begin tiled-caps
+    fn tiled_capabilities(&self) -> crate::TiledCapabilities {
+        // Phase 5 stub: backend HAL impls don't yet report tiled
+        // capabilities; return all-zero ("no tile-based rendering support")
+        // until Phase 9 lights up the per-backend HAL implementations.
+        crate::TiledCapabilities::none()
+    }
+    // tiled-fork: end tiled-caps
 }
 
 impl Drop for CoreAdapter {

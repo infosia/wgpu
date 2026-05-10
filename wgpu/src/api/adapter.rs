@@ -165,6 +165,17 @@ impl Adapter {
         self.inner.limits()
     }
 
+    // tiled-fork: begin tiled-caps
+    /// The tile-memory capabilities of this adapter.
+    ///
+    /// Returns [`TiledCapabilities::none`] when the adapter does not support
+    /// tile-based deferred rendering, or when the per-backend HAL
+    /// implementation has not been wired yet (Phase 5 of the fork plan).
+    pub fn tiled_capabilities(&self) -> TiledCapabilities {
+        self.inner.tiled_capabilities()
+    }
+    // tiled-fork: end tiled-caps
+
     /// Get info about the adapter itself.
     pub fn get_info(&self) -> AdapterInfo {
         self.inner.get_info()

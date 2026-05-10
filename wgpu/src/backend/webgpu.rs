@@ -1749,6 +1749,13 @@ impl dispatch::AdapterInterface for WebAdapter {
     fn cooperative_matrix_properties(&self) -> Vec<wgt::CooperativeMatrixProperties> {
         Vec::new()
     }
+
+    // tiled-fork: begin tiled-caps
+    fn tiled_capabilities(&self) -> crate::TiledCapabilities {
+        // WebGPU does not expose tile-based rendering.
+        crate::TiledCapabilities::none()
+    }
+    // tiled-fork: end tiled-caps
 }
 impl Drop for WebAdapter {
     fn drop(&mut self) {
