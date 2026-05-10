@@ -386,9 +386,33 @@ impl LocalImageType {
             },
             crate::ImageClass::External => unimplemented!(),
             // tiled-fork: begin arm (ImageClass::Subpass)
-            #[allow(clippy::todo)]
-            crate::ImageClass::Subpass { .. } => {
-                todo!("Phase 6b: subpass-input image emission for the SPIR-V backend")
+            // SubpassData input attachments use Dim=SubpassData and the
+            // "unknown if sampled" mode (Sampled = 2). The SPIR-V spec
+            // encodes Sampled = 2 by clearing the SAMPLED flag (and not
+            // setting any storage-image marker).
+            crate::ImageClass::Subpass { aspect, multi } => {
+                let sampled_type = match aspect {
+                    crate::SubpassAspect::Color { kind } => crate::Scalar { kind, width: 4 },
+                    crate::SubpassAspect::Depth => crate::Scalar {
+                        kind: crate::ScalarKind::Float,
+                        width: 4,
+                    },
+                    crate::SubpassAspect::Stencil => crate::Scalar::U32,
+                };
+                let depth_marker = match aspect {
+                    crate::SubpassAspect::Depth => ImageTypeFlags::DEPTH,
+                    _ => ImageTypeFlags::empty(),
+                };
+                // Start from SAMPLED so MULTISAMPLED/ARRAYED get applied,
+                // then clear SAMPLED to encode Sampled = 2 (input attachment).
+                let mut flags = make_flags(multi, depth_marker | ImageTypeFlags::SAMPLED);
+                flags.remove(ImageTypeFlags::SAMPLED);
+                LocalImageType {
+                    sampled_type,
+                    dim: spirv::Dim::DimSubpassData,
+                    flags,
+                    image_format: spirv::ImageFormat::Unknown,
+                }
             }
             // tiled-fork: end arm (ImageClass::Subpass)
         }

@@ -501,7 +501,15 @@ impl Writer {
                 dim,
                 arrayed,
                 class,
-            } => LocalType::Image(LocalImageType::from_inner(dim, arrayed, class)),
+            } => {
+                // tiled-fork: begin capability (InputAttachment)
+                if class.is_subpass_input() {
+                    self.capabilities_used
+                        .insert(spirv::Capability::InputAttachment);
+                }
+                // tiled-fork: end capability (InputAttachment)
+                LocalType::Image(LocalImageType::from_inner(dim, arrayed, class))
+            }
             crate::TypeInner::Sampler { comparison: _ } => LocalType::Sampler,
             crate::TypeInner::AccelerationStructure { .. } => LocalType::AccelerationStructure,
             crate::TypeInner::RayQuery { .. } => LocalType::RayQuery,
@@ -1218,7 +1226,7 @@ impl Writer {
         let mut local_invocation_index_id = None;
 
         for argument in ir_function.arguments.iter() {
-            let class = spirv::StorageClass::Input;
+            let default_class = spirv::StorageClass::Input;
             let handle_ty = ir_module.types[argument.ty].inner.is_handle();
             let argument_type_id = if handle_ty {
                 self.get_handle_pointer_type_id(argument.ty, spirv::StorageClass::UniformConstant)
@@ -1229,6 +1237,15 @@ impl Writer {
             if let Some(ref mut iface) = interface {
                 let id = if let Some(ref binding) = argument.binding {
                     let name = argument.name.as_deref();
+                    // tiled-fork: begin storage-class (ColorAttachmentRead)
+                    // `@color(N)` framebuffer-fetch inputs live in the
+                    // `TileImageEXT` storage class rather than `Input`.
+                    let class = if matches!(binding, crate::Binding::ColorAttachmentRead { .. }) {
+                        spirv::StorageClass::TileImageEXT
+                    } else {
+                        default_class
+                    };
+                    // tiled-fork: end storage-class (ColorAttachmentRead)
 
                     let varying_id = self.write_varying(
                         ir_module,
@@ -1239,11 +1256,22 @@ impl Writer {
                         binding,
                     )?;
                     iface.varying_ids.push(varying_id);
-                    let id = self.load_io_with_f16_polyfill(
-                        &mut prelude.body,
-                        varying_id,
-                        argument_type_id,
-                    );
+                    // tiled-fork: begin load (ColorAttachmentRead)
+                    let id = if matches!(binding, crate::Binding::ColorAttachmentRead { .. }) {
+                        self.load_color_attachment_read(
+                            ir_module,
+                            argument.ty,
+                            varying_id,
+                            &mut prelude.body,
+                        )?
+                    } else {
+                        self.load_io_with_f16_polyfill(
+                            &mut prelude.body,
+                            varying_id,
+                            argument_type_id,
+                        )
+                    };
+                    // tiled-fork: end load (ColorAttachmentRead)
                     if binding == &crate::Binding::BuiltIn(crate::BuiltIn::LocalInvocationIndex) {
                         local_invocation_index_id = Some(id);
                         local_invocation_index_var_id = Some(varying_id);
@@ -1259,6 +1287,14 @@ impl Writer {
                         let type_id = self.get_handle_type_id(member.ty);
                         let name = member.name.as_deref();
                         let binding = member.binding.as_ref().unwrap();
+                        // tiled-fork: begin storage-class (ColorAttachmentRead member)
+                        let class =
+                            if matches!(binding, crate::Binding::ColorAttachmentRead { .. }) {
+                                spirv::StorageClass::TileImageEXT
+                            } else {
+                                default_class
+                            };
+                        // tiled-fork: end storage-class (ColorAttachmentRead member)
                         let varying_id = self.write_varying(
                             ir_module,
                             iface.stage,
@@ -1268,8 +1304,18 @@ impl Writer {
                             binding,
                         )?;
                         iface.varying_ids.push(varying_id);
-                        let id =
-                            self.load_io_with_f16_polyfill(&mut prelude.body, varying_id, type_id);
+                        // tiled-fork: begin load (ColorAttachmentRead member)
+                        let id = if matches!(binding, crate::Binding::ColorAttachmentRead { .. }) {
+                            self.load_color_attachment_read(
+                                ir_module,
+                                member.ty,
+                                varying_id,
+                                &mut prelude.body,
+                            )?
+                        } else {
+                            self.load_io_with_f16_polyfill(&mut prelude.body, varying_id, type_id)
+                        };
+                        // tiled-fork: end load (ColorAttachmentRead member)
                         constituent_ids.push(id);
                         if binding == &crate::Binding::BuiltIn(crate::BuiltIn::LocalInvocationIndex)
                         {
@@ -1923,10 +1969,10 @@ impl Writer {
                     }
                     crate::ImageClass::External => unimplemented!(),
                     // tiled-fork: begin arm (ImageClass::Subpass)
-                    #[allow(clippy::todo)]
-                    crate::ImageClass::Subpass { .. } => {
-                        todo!("Phase 6b: subpass-input image emission for the SPIR-V backend")
-                    }
+                    // SubpassData inputs use the input-attachment ("unknown
+                    // if sampled") encoding; the InputAttachment capability
+                    // is requested at type-id construction time below.
+                    crate::ImageClass::Subpass { .. } => true,
                     // tiled-fork: end arm (ImageClass::Subpass)
                 };
 
@@ -2862,6 +2908,49 @@ impl Writer {
     ) -> Result<Word, Error> {
         let id = self.id_gen.next();
         let ty_inner = &ir_module.types[ty].inner;
+
+        // tiled-fork: begin path (ColorAttachmentRead varying)
+        // `@color(N)` framebuffer-fetch inputs are declared as
+        // `OpTypeImage` of `Dim::DimTileImageDataEXT` in the
+        // `TileImageEXT` storage class, not as a plain vec4 input.
+        if matches!(binding, crate::Binding::ColorAttachmentRead { .. }) {
+            let scalar = match *ty_inner {
+                crate::TypeInner::Vector {
+                    size: crate::VectorSize::Quad,
+                    scalar,
+                } => scalar,
+                _ => {
+                    return Err(Error::Validation(
+                        "framebuffer fetch varying type must be vec4",
+                    ))
+                }
+            };
+            let image_type_id =
+                self.get_type_id(LookupType::Local(LocalType::Image(LocalImageType {
+                    sampled_type: scalar,
+                    dim: spirv::Dim::DimTileImageDataEXT,
+                    flags: super::ImageTypeFlags::empty(),
+                    image_format: spirv::ImageFormat::Unknown,
+                })));
+            let pointer_type_id = self.get_pointer_type_id(image_type_id, class);
+            Instruction::variable(pointer_type_id, id, class, None)
+                .to_words(&mut self.logical_layout.declarations);
+
+            if self
+                .flags
+                .contains(WriterFlags::DEBUG | WriterFlags::LABEL_VARYINGS)
+            {
+                if let Some(name) = debug_name {
+                    self.debugs.push(Instruction::name(id, name));
+                }
+            }
+
+            let binding = self.map_binding(ir_module, stage, class, ty, binding)?;
+            self.write_binding(id, binding);
+            return Ok(id);
+        }
+        // tiled-fork: end path (ColorAttachmentRead varying)
+
         let needs_polyfill = self.needs_f16_polyfill(ty_inner);
 
         let pointer_type_id = if needs_polyfill {
@@ -3237,13 +3326,85 @@ impl Writer {
                 Ok(BindingDecorations::BuiltIn(built_in, others))
             }
             // tiled-fork: begin arm (Binding::ColorAttachmentRead)
-            #[allow(clippy::todo)]
-            crate::Binding::ColorAttachmentRead { .. } => {
-                todo!("Phase 6b: framebuffer-fetch (@color) emission for the SPIR-V backend")
+            // Lower `@color(N)` framebuffer fetch via the
+            // `SPV_EXT_shader_tile_image` extension: the input is declared
+            // in the `TileImageEXT` storage class with a `Location`
+            // decoration matching the attachment slot, and the load uses
+            // `OpColorAttachmentReadEXT`.
+            crate::Binding::ColorAttachmentRead { attachment, .. } => {
+                if stage != crate::ShaderStage::Fragment
+                    || class != spirv::StorageClass::TileImageEXT
+                {
+                    return Err(Error::Validation(
+                        "@color framebuffer fetch is only valid on fragment TileImageEXT inputs",
+                    ));
+                }
+                self.use_extension("SPV_EXT_shader_tile_image");
+                self.require_any(
+                    "`@color(N)` framebuffer fetch",
+                    &[spirv::Capability::TileImageColorReadAccessEXT],
+                )?;
+                Ok(BindingDecorations::Location {
+                    location: attachment,
+                    others: ArrayVec::new(),
+                    blend_src: None,
+                })
             }
             // tiled-fork: end arm (Binding::ColorAttachmentRead)
         }
     }
+
+    // tiled-fork: begin fn (load_color_attachment_read)
+    /// Load a `@color(N)` framebuffer-fetch varying via
+    /// `OpColorAttachmentReadEXT` (the `SPV_EXT_shader_tile_image`
+    /// extension's "tile image" form). The varying must have been
+    /// declared in the `TileImageEXT` storage class with image type
+    /// `OpTypeImage Dim:TileImageDataEXT`.
+    fn load_color_attachment_read(
+        &mut self,
+        ir_module: &crate::Module,
+        ty: Handle<crate::Type>,
+        varying_id: Word,
+        body: &mut Vec<Instruction>,
+    ) -> Result<Word, Error> {
+        let scalar = match ir_module.types[ty].inner {
+            crate::TypeInner::Vector {
+                size: crate::VectorSize::Quad,
+                scalar,
+            } => scalar,
+            _ => {
+                return Err(Error::Validation(
+                    "framebuffer fetch argument type must be vec4",
+                ))
+            }
+        };
+
+        let image_type_id =
+            self.get_type_id(LookupType::Local(LocalType::Image(LocalImageType {
+                sampled_type: scalar,
+                dim: spirv::Dim::DimTileImageDataEXT,
+                flags: super::ImageTypeFlags::empty(),
+                image_format: spirv::ImageFormat::Unknown,
+            })));
+        let attachment_id = self.id_gen.next();
+        body.push(Instruction::load(
+            image_type_id,
+            attachment_id,
+            varying_id,
+            None,
+        ));
+
+        let result_type_id = self.get_handle_type_id(ty);
+        let result_id = self.id_gen.next();
+        let mut instruction = Instruction::new(spirv::Op::ColorAttachmentReadEXT);
+        instruction.set_type(result_type_id);
+        instruction.set_result(result_id);
+        instruction.add_operand(attachment_id);
+        body.push(instruction);
+
+        Ok(result_id)
+    }
+    // tiled-fork: end fn (load_color_attachment_read)
 
     /// Load an IO variable, converting from `f32` to `f16` if polyfill is active.
     /// Returns the id of the loaded value matching `target_type_id`.
@@ -3346,6 +3507,22 @@ impl Writer {
             let bind_target = self.resolve_resource_binding(res_binding)?;
             self.decorate(id, Decoration::DescriptorSet, &[bind_target.descriptor_set]);
             self.decorate(id, Decoration::Binding, &[bind_target.binding]);
+            // tiled-fork: begin decoration (InputAttachmentIndex)
+            // SubpassData input attachments require an
+            // `OpDecorate %id InputAttachmentIndex N` annotation. Per the
+            // typed-subpass-input redesign the binding number IS the input
+            // attachment index, so we reuse `res_binding.binding` directly.
+            if matches!(
+                ir_module.types[global_variable.ty].inner,
+                crate::TypeInner::Image { class, .. } if class.is_subpass_input()
+            ) {
+                self.decorate(
+                    id,
+                    Decoration::InputAttachmentIndex,
+                    &[res_binding.binding],
+                );
+            }
+            // tiled-fork: end decoration (InputAttachmentIndex)
 
             if let Some(remapped_binding_array_size) = bind_target.binding_array_size {
                 if let crate::TypeInner::BindingArray { base, .. } =

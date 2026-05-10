@@ -351,9 +351,12 @@ impl super::Writer {
                 }
                 crate::Binding::BuiltIn(_) => (),
                 // tiled-fork: begin arm (Binding::ColorAttachmentRead)
-                #[allow(clippy::todo)]
+                // `@color(N)` framebuffer-fetch is fragment-stage input
+                // only; it cannot appear on a mesh-shader output member.
                 crate::Binding::ColorAttachmentRead { .. } => {
-                    todo!("Phase 6b: framebuffer-fetch (@color) emission for the SPIR-V backend")
+                    return Err(Error::Validation(
+                        "@color(N) framebuffer fetch is not valid on mesh shader outputs",
+                    ));
                 }
                 // tiled-fork: end arm (Binding::ColorAttachmentRead)
             }
@@ -407,9 +410,12 @@ impl super::Writer {
                 }
                 crate::Binding::BuiltIn(_) => (),
                 // tiled-fork: begin arm (Binding::ColorAttachmentRead)
-                #[allow(clippy::todo)]
+                // `@color(N)` framebuffer-fetch is fragment-stage input
+                // only; it cannot appear on a mesh-shader output member.
                 crate::Binding::ColorAttachmentRead { .. } => {
-                    todo!("Phase 6b: framebuffer-fetch (@color) emission for the SPIR-V backend")
+                    return Err(Error::Validation(
+                        "@color(N) framebuffer fetch is not valid on mesh shader outputs",
+                    ));
                 }
                 // tiled-fork: end arm (Binding::ColorAttachmentRead)
             }
@@ -608,9 +614,17 @@ impl super::Writer {
                     binding_index += 1;
                 }
                 // tiled-fork: begin arm (Binding::ColorAttachmentRead)
-                #[allow(clippy::todo)]
+                // `@color(N)` framebuffer-fetch is fragment-stage input
+                // only; the validator already rejects it on mesh-shader
+                // outputs. If a malformed module reaches this point we
+                // skip the member rather than panicking (CLAUDE.md
+                // forbids `unreachable!()` in library code).
                 crate::Binding::ColorAttachmentRead { .. } => {
-                    todo!("Phase 6b: framebuffer-fetch (@color) emission for the SPIR-V backend")
+                    log::error!(
+                        "@color(N) framebuffer fetch on mesh shader output is invalid; \
+                         skipping member"
+                    );
+                    continue;
                 }
                 // tiled-fork: end arm (Binding::ColorAttachmentRead)
             }

@@ -120,10 +120,8 @@ impl Load {
             }
             crate::ImageClass::External => unimplemented!(),
             // tiled-fork: begin arm (ImageClass::Subpass)
-            #[allow(clippy::todo)]
-            crate::ImageClass::Subpass { .. } => {
-                todo!("Phase 6b: subpass-input image emission for the SPIR-V backend")
-            }
+            // SubpassData reads always use OpImageRead.
+            crate::ImageClass::Subpass { .. } => spirv::Op::ImageRead,
             // tiled-fork: end arm (ImageClass::Subpass)
         };
 
@@ -137,6 +135,21 @@ impl Load {
                 size: crate::VectorSize::Quad,
                 scalar: crate::Scalar::F32,
             }),
+            // tiled-fork: begin arm (ImageClass::Subpass)
+            // SubpassData reads always produce a vec4 in SPIR-V even when
+            // naga's result type is scalar (depth) or `vec4<u32>` for stencil.
+            crate::ImageClass::Subpass { aspect, .. } => {
+                let scalar = match aspect {
+                    crate::SubpassAspect::Color { kind } => crate::Scalar { kind, width: 4 },
+                    crate::SubpassAspect::Depth => crate::Scalar::F32,
+                    crate::SubpassAspect::Stencil => crate::Scalar::U32,
+                };
+                ctx.get_numeric_type_id(NumericType::Vector {
+                    size: crate::VectorSize::Quad,
+                    scalar,
+                })
+            }
+            // tiled-fork: end arm (ImageClass::Subpass)
             _ => result_type_id,
         };
 
@@ -742,6 +755,11 @@ impl BlockContext<'_> {
             crate::TypeInner::Image { class, .. } => class,
             _ => return Err(Error::Validation("image type")),
         };
+        // tiled-fork: begin guard (subpass on ImageLoad)
+        if image_class.is_subpass_input() {
+            return Err(Error::Validation("subpass input image used with ImageLoad"));
+        }
+        // tiled-fork: end guard (subpass on ImageLoad)
 
         let access = Load::from_image_expr(self, image_id, image_class, result_type_id)?;
         let coordinates = self.write_image_coordinates(coordinate, array_index, block)?;
@@ -801,6 +819,88 @@ impl BlockContext<'_> {
 
         Ok(result_id)
     }
+
+    // tiled-fork: begin fn (write_subpass_load)
+    /// Generate code for an `Expression::SubpassLoad` expression.
+    ///
+    /// Emits an `OpImageRead` against the subpass-input global with a
+    /// constant `(0, 0)` `vec2<i32>` coordinate (SPIR-V requires a
+    /// coordinate operand even though `SubpassData` ignores it). For
+    /// multi-sampled subpass inputs the entry point's
+    /// `@builtin(sample_index)` argument is supplied as a `Sample` operand.
+    /// Bounds-check policies are bypassed because `OpImageQuerySize` is
+    /// invalid on `SubpassData`.
+    pub(super) fn write_subpass_load(
+        &mut self,
+        result_type_id: Word,
+        image: Handle<crate::Expression>,
+        sample_index: Option<Handle<crate::Expression>>,
+        block: &mut Block,
+    ) -> Result<Word, Error> {
+        let image_id = self.get_handle_id(image);
+        let image_type = self.fun_info[image].ty.inner_with(&self.ir_module.types);
+        let image_class = match *image_type {
+            crate::TypeInner::Image { class, .. } => class,
+            _ => return Err(Error::Validation("image type")),
+        };
+        if !image_class.is_subpass_input() {
+            return Err(Error::Validation("non-subpass image used with SubpassLoad"));
+        }
+
+        let access = Load::from_image_expr(self, image_id, image_class, result_type_id)?;
+
+        // Synthesize a constant (0, 0) vec2<i32> coordinate; SubpassData
+        // ignores it but the SPIR-V `OpImageRead` still requires one.
+        let zero = self
+            .writer
+            .get_constant_scalar(crate::Literal::I32(0));
+        let coordinates = self.writer.get_constant_composite(
+            LookupType::Local(LocalType::Numeric(NumericType::Vector {
+                size: crate::VectorSize::Bi,
+                scalar: crate::Scalar::I32,
+            })),
+            &[zero, zero],
+        );
+
+        // For MSAA subpass inputs SPIR-V requires the Sample image operand;
+        // non-MSAA inputs must not carry it (the resulting OpImageRead would
+        // be invalid SPIR-V).
+        let sample_id = match (image_class.is_multisampled(), sample_index) {
+            (true, Some(expr)) => Some(self.cached[expr]),
+            (true, None) => {
+                return Err(Error::Validation(
+                    "MSAA subpass input requires a sample_index operand on SubpassLoad",
+                ));
+            }
+            (false, Some(_)) => {
+                return Err(Error::Validation(
+                    "non-MSAA subpass input must not carry a sample_index operand on SubpassLoad",
+                ));
+            }
+            (false, None) => None,
+        };
+
+        let access_id =
+            access.generate(&mut self.writer.id_gen, coordinates, None, sample_id, block);
+
+        let result_id = if result_type_id == access.result_type() {
+            access_id
+        } else {
+            // Depth (and any other shape) subpass loads produce a vec4 in
+            // SPIR-V; if naga's result type is a scalar, extract component 0.
+            let component_id = self.gen_id();
+            block.body.push(Instruction::composite_extract(
+                result_type_id,
+                component_id,
+                access_id,
+                &[0],
+            ));
+            component_id
+        };
+
+        Ok(result_id)
+    }
+    // tiled-fork: end fn (write_subpass_load)
 
     /// Generate code for an `ImageSample` expression.
     ///
@@ -1146,6 +1246,12 @@ impl BlockContext<'_> {
 
         let id = match query {
             Iq::Size { level } => {
+                // tiled-fork: begin guard (subpass on ImageQuery::Size)
+                // OpImageQuerySize is undefined for SubpassData images.
+                if class.is_subpass_input() {
+                    return Err(Error::Validation("image query size on subpass data"));
+                }
+                // tiled-fork: end guard (subpass on ImageQuery::Size)
                 let dim_coords = match dim {
                     Id::D1 => 1,
                     Id::D2 | Id::Cube => 2,

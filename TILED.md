@@ -249,6 +249,7 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
 - [x] Phase 6a — naga IR additions + match-arm stubs (collapsed Subpass variant; backends Phase 6b)
 - [x] Phase 6b1 — naga WGSL frontend: subpass_input types + subpassLoad builtin (excludes @color)
 - [x] Phase 6b2 — naga WGSL frontend: @color(N) framebuffer fetch attribute
+- [x] Phase 6c — naga SPIR-V backend: SubpassData type + OpImageRead emission, SPV_EXT_shader_tile_image
 - [ ] Phase 7 — Examples
 - [ ] Phase 8 — Tests + benches
 - [ ] Phase 9 — Backend real impls (Vulkan, Metal, GLES)
