@@ -88,6 +88,14 @@ pub struct TransientOps<V> {
     pub load: TransientLoadOp<V>,
 }
 
+impl<V> TransientOps<V> {
+    /// Construct a `TransientOps` with the given load op.
+    #[must_use]
+    pub const fn new(load: TransientLoadOp<V>) -> Self {
+        Self { load }
+    }
+}
+
 impl<V: Default> Default for TransientOps<V> {
     fn default() -> Self {
         Self {

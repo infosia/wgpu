@@ -4,6 +4,9 @@ mod device;
 mod instance;
 mod queue;
 mod surface;
+// tiled-fork: begin module
+mod tiled;
+// tiled-fork: end module
 
 pub use adapter::{DynAdapter, DynOpenDevice};
 pub use command::DynCommandEncoder;
@@ -11,6 +14,11 @@ pub use device::DynDevice;
 pub use instance::{DynExposedAdapter, DynInstance};
 pub use queue::DynQueue;
 pub use surface::{DynAcquiredSurfaceTexture, DynSurface};
+// tiled-fork: begin re-export
+pub use tiled::{
+    DynTiledCommandEncoder, DynTiledDevice, DynTransientAttachment, DynTransientDispatch,
+};
+// tiled-fork: end re-export
 
 use alloc::boxed::Box;
 use core::{

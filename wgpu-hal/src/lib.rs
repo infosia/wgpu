@@ -277,6 +277,9 @@ pub mod api {
 }
 
 mod dynamic;
+// tiled-fork: begin module
+mod tiled;
+// tiled-fork: end module
 #[cfg(feature = "validation_canary")]
 mod validation_canary;
 
@@ -291,6 +294,15 @@ pub use dynamic::{
     DynPipelineLayout, DynQuerySet, DynQueue, DynRenderPipeline, DynResource, DynSampler,
     DynShaderModule, DynSurface, DynSurfaceTexture, DynTexture, DynTextureView,
 };
+// tiled-fork: begin re-export
+pub use dynamic::{
+    DynTiledCommandEncoder, DynTiledDevice, DynTransientAttachment, DynTransientDispatch,
+};
+pub use tiled::{
+    Subpass, SubpassColorAttachment, SubpassDepthStencilAttachment, SubpassRenderPassDescriptor,
+    TiledApi, TiledCommandEncoder, TiledDevice,
+};
+// tiled-fork: end re-export
 
 #[allow(unused)]
 use alloc::boxed::Box;
