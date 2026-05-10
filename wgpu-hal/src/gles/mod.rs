@@ -95,6 +95,9 @@ mod conv;
 mod device;
 mod fence;
 mod queue;
+// tiled-fork: begin module
+mod tiled;
+// tiled-fork: end module
 
 pub use fence::Fence;
 

@@ -33,6 +33,9 @@ mod instance;
 mod sampler;
 mod semaphore_list;
 mod swapchain;
+// tiled-fork: begin module
+mod tiled;
+// tiled-fork: end module
 
 pub use adapter::PhysicalDeviceFeatures;
 

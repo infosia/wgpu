@@ -24,6 +24,9 @@ mod conv;
 mod device;
 mod library_from_metallib;
 mod surface;
+// tiled-fork: begin module
+mod tiled;
+// tiled-fork: end module
 mod time;
 
 use alloc::{

@@ -14,6 +14,9 @@ mod buffer;
 pub use buffer::Buffer;
 mod command;
 pub use command::CommandBuffer;
+// tiled-fork: begin module
+mod tiled;
+// tiled-fork: end module
 
 #[derive(Clone, Debug)]
 pub struct Api;

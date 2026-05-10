@@ -234,7 +234,7 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
 - [x] Plan agreed and saved to TILED.md
 - [x] Phase 0 — wgpu-types foundation
 - [x] Phase 1 — wgpu-hal extension traits
-- [ ] Phase 2 — Per-backend HAL impls
+- [x] Phase 2 — Per-backend HAL impls (stubs; real impls in later phases)
 - [ ] Phase 3 — wgpu-core integration
 - [ ] Phase 4 — wgpu public API
 - [ ] Phase 5 — naga (cherry-pick refactored variant)

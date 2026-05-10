@@ -84,6 +84,9 @@ mod pipeline_desc;
 mod sampler;
 mod shader_compilation;
 mod suballocation;
+// tiled-fork: begin module
+mod tiled;
+// tiled-fork: end module
 mod types;
 mod view;
 
