@@ -412,7 +412,11 @@ impl<W> Writer<'_, W> {
 
                     match class {
                         ImageClass::Sampled { multi: true, .. }
-                        | ImageClass::Depth { multi: true } => {
+                        | ImageClass::Depth { multi: true }
+                        // tiled-fork: begin pat (Subpass multi: true)
+                        | ImageClass::Subpass { multi: true, .. }
+                        // tiled-fork: end pat (Subpass multi: true)
+                        => {
                             self.features.request(Features::MULTISAMPLED_TEXTURES);
                             if arrayed {
                                 self.features.request(Features::MULTISAMPLED_TEXTURE_ARRAYS);
@@ -446,13 +450,10 @@ impl<W> Writer<'_, W> {
                         },
                         ImageClass::Sampled { multi: false, .. }
                         | ImageClass::Depth { multi: false }
+                        // tiled-fork: begin pat (Subpass multi: false)
+                        | ImageClass::Subpass { multi: false, .. }
+                        // tiled-fork: end pat (Subpass multi: false)
                         | ImageClass::External => {}
-                        // tiled-fork: begin arm (ImageClass::Subpass)
-                        #[allow(clippy::todo)]
-                        ImageClass::Subpass { .. } => {
-                            todo!("Phase 6b: subpass-input image emission for the GLSL backend")
-                        }
-                        // tiled-fork: end arm (ImageClass::Subpass)
                     }
                 }
                 _ => {}
@@ -642,10 +643,11 @@ impl<W> Writer<'_, W> {
                     _ => {}
                 },
                 // tiled-fork: begin arm (Binding::ColorAttachmentRead)
-                #[allow(clippy::todo)]
-                Binding::ColorAttachmentRead { .. } => {
-                    todo!("Phase 6b: framebuffer-fetch (@color) emission for the GLSL backend")
-                }
+                // Framebuffer-fetch reads do not require a baseline GLSL feature
+                // beyond the EXT_shader_framebuffer_fetch extension, which the
+                // writer emits directly when `Options::use_framebuffer_fetch`
+                // is enabled.
+                Binding::ColorAttachmentRead { .. } => {}
                 // tiled-fork: end arm (Binding::ColorAttachmentRead)
                 Binding::Location {
                     location: _,

@@ -213,6 +213,14 @@ If a planned edit is harder to merge than expected, the fallback chain is:
    support to naga IR without expanding the IR. Upstream naga adds variants
    regularly.
 
+4. **`naga::back::glsl::Options` struct field addition.** Phase 6e adds a
+   `use_framebuffer_fetch: bool` field to `naga::back::glsl::Options`. This is
+   a known-breaking change for any out-of-tree downstream `naga` consumer
+   that constructs `Options { ... }` via struct literal. We do NOT mark the
+   struct `#[non_exhaustive]` because doing so would block the standard
+   `Options { ..Default::default() }` workaround pattern in external crates
+   (including in-tree `wgpu-hal`). Mitigation: marker comment + this entry.
+
 3. **Feature-flag bit allocation.** This fork allocates bits 14, 16, 24, 25,
    and 35 inside `FeaturesWGPU` (matching `wgpu-tiled`). All five bits are
    currently free in upstream `wgpu` v29.0.3:
@@ -251,6 +259,7 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
 - [x] Phase 6b2 — naga WGSL frontend: @color(N) framebuffer fetch attribute
 - [x] Phase 6c — naga SPIR-V backend: SubpassData type + OpImageRead emission, SPV_EXT_shader_tile_image
 - [x] Phase 6d — naga MSL backend: [[color(N)]] fragment-arg emission for subpass + framebuffer fetch
+- [x] Phase 6e — naga GLSL backend: subpassInput/inout dual-mode emission
 - [ ] Phase 7 — Examples
 - [ ] Phase 8 — Tests + benches
 - [ ] Phase 9 — Backend real impls (Vulkan, Metal, GLES)

@@ -1257,6 +1257,12 @@ impl crate::Device for super::Device {
                 writer_flags,
                 binding_map,
                 zero_initialize_workgroup_memory: true,
+                // tiled-fork: begin field-init (use_framebuffer_fetch)
+                // GLES does not target the EXT_shader_framebuffer_fetch path
+                // by default in this fork; subpass inputs lower to
+                // `subpassInput` uniforms.
+                use_framebuffer_fetch: false,
+                // tiled-fork: end field-init (use_framebuffer_fetch)
             },
         })
     }

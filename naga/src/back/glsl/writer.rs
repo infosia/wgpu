@@ -144,6 +144,15 @@ impl<'a, W: Write> Writer<'a, W> {
         // preprocessor not the processor ¯\_(ツ)_/¯
         self.features.write(self.options, &mut self.out)?;
 
+        // tiled-fork: begin extension (EXT_shader_framebuffer_fetch)
+        if self.options.use_framebuffer_fetch && self.entry_point.stage == ShaderStage::Fragment {
+            writeln!(
+                self.out,
+                "#extension GL_EXT_shader_framebuffer_fetch : require"
+            )?;
+        }
+        // tiled-fork: end extension (EXT_shader_framebuffer_fetch)
+
         // glsl es requires a precision to be specified for floats and ints
         // TODO: Should this be user configurable?
         if es {
@@ -354,19 +363,91 @@ impl<'a, W: Write> Writer<'a, W> {
                         None
                     };
 
+                    // tiled-fork: begin block (subpass-input emission)
+                    // For subpass inputs we either emit an `inout` framebuffer-fetch
+                    // global or a `uniform subpassInput*` with an
+                    // `input_attachment_index`.
+                    if class.is_subpass_input() {
+                        // MSAA + framebuffer-fetch is not representable in GLSL:
+                        // `inout` does not interact with multi-sample shading.
+                        // Reject explicitly rather than silently falling through
+                        // to the subpassInputMS path.
+                        if self.options.use_framebuffer_fetch
+                            && matches!(
+                                class,
+                                crate::ImageClass::Subpass {
+                                    aspect: crate::SubpassAspect::Color { .. },
+                                    multi: true,
+                                }
+                            )
+                        {
+                            return Err(Error::MsaaSubpassInputUnsupported);
+                        }
+                        // A subpass-input global must carry a binding; without one
+                        // we cannot emit the required `input_attachment_index`
+                        // qualifier. Producing GLSL without it would be invalid
+                        // Vulkan-GLSL.
+                        if global.binding.is_none() {
+                            return Err(Error::Custom(
+                                "subpass-input globals require a `@binding(N)` to emit \
+                                 `input_attachment_index`".into(),
+                            ));
+                        }
+                    }
+                    let use_framebuffer_fetch =
+                        self.is_framebuffer_fetch_subpass_image(class);
+                    if use_framebuffer_fetch {
+                        // Emit `layout(location = N) inout vec4 name;`.
+                        // The location index is taken from the global's
+                        // `binding` -- for the wgpu `@color(N)` framebuffer-fetch
+                        // path this is the color attachment slot the host will
+                        // wire to.
+                        let attachment = global.binding.as_ref().map(|br| br.binding);
+                        if let Some(location) = attachment {
+                            write!(self.out, "layout(location = {location}) ")?;
+                        }
+                        write!(self.out, "inout ")?;
+                        self.write_framebuffer_fetch_type(class)?;
+                        let global_name = self.get_global_name(handle, global);
+                        writeln!(self.out, " {global_name};")?;
+                        writeln!(self.out)?;
+                        self.reflection_names_globals.insert(handle, global_name);
+                        continue;
+                    }
+
+                    let input_attachment_index = if class.is_subpass_input() {
+                        global.binding.as_ref().map(|br| br.binding)
+                    } else {
+                        None
+                    };
+                    // tiled-fork: end block (subpass-input emission)
+
                     // Write all the layout qualifiers
-                    if layout_binding.is_some() || storage_format_access.is_some() {
+                    if layout_binding.is_some()
+                        || storage_format_access.is_some()
+                        || input_attachment_index.is_some()
+                    {
                         write!(self.out, "layout(")?;
+                        let mut needs_separator = false;
                         if let Some(binding) = layout_binding {
                             write!(self.out, "binding = {binding}")?;
+                            needs_separator = true;
                         }
+                        // tiled-fork: begin layout (input_attachment_index)
+                        if let Some(index) = input_attachment_index {
+                            if needs_separator {
+                                write!(self.out, ", ")?;
+                            }
+                            write!(self.out, "input_attachment_index = {index}")?;
+                            needs_separator = true;
+                        }
+                        // tiled-fork: end layout (input_attachment_index)
                         if let Some((format, _)) = storage_format_access {
                             let format_str = glsl_storage_format(format)?;
-                            let separator = match layout_binding {
-                                Some(_) => ",",
-                                None => "",
-                            };
-                            write!(self.out, "{separator}{format_str}")?;
+                            if needs_separator {
+                                write!(self.out, ", ")?;
+                            }
+                            write!(self.out, "{format_str}")?;
                         }
                         write!(self.out, ") ")?;
                     }
@@ -563,6 +644,81 @@ impl<'a, W: Write> Writer<'a, W> {
         }
     }
 
+    // tiled-fork: begin helpers (subpass-input + framebuffer-fetch)
+    /// Whether this color subpass-input global should be emitted as an
+    /// `EXT_shader_framebuffer_fetch` `inout` variable rather than a
+    /// `subpassInput` uniform.
+    fn is_framebuffer_fetch_subpass_image(&self, class: crate::ImageClass) -> bool {
+        self.options.use_framebuffer_fetch
+            && self.entry_point.stage == ShaderStage::Fragment
+            && matches!(
+                class,
+                crate::ImageClass::Subpass {
+                    aspect: crate::SubpassAspect::Color { .. },
+                    multi: false,
+                }
+            )
+    }
+
+    /// Write the GLSL type used for a framebuffer-fetch `inout` global
+    /// (e.g. `vec4`, `ivec4`, `uvec4`).
+    fn write_framebuffer_fetch_type(&mut self, class: crate::ImageClass) -> BackendResult {
+        match class {
+            crate::ImageClass::Subpass {
+                aspect: crate::SubpassAspect::Color { kind },
+                multi: false,
+            } => {
+                let prefix = glsl_scalar(crate::Scalar { kind, width: 4 })?.prefix;
+                write!(self.out, "{prefix}vec4")?;
+                Ok(())
+            }
+            crate::ImageClass::Subpass { multi: true, .. } => {
+                Err(Error::MsaaSubpassInputUnsupported)
+            }
+            _ => Err(Error::Custom(
+                "Framebuffer fetch globals must be non-multisampled color subpass inputs"
+                    .to_string(),
+            )),
+        }
+    }
+
+    /// Write the GLSL `subpassInput*` type for a subpass-input image global.
+    fn write_subpass_input_type(&mut self, class: crate::ImageClass) -> BackendResult {
+        match class {
+            crate::ImageClass::Subpass {
+                aspect: crate::SubpassAspect::Color { kind },
+                multi,
+            } => {
+                let prefix = glsl_scalar(crate::Scalar { kind, width: 4 })?.prefix;
+                let ms = if multi { "MS" } else { "" };
+                write!(self.out, "{prefix}subpassInput{ms}")?;
+                Ok(())
+            }
+            crate::ImageClass::Subpass {
+                aspect: crate::SubpassAspect::Depth,
+                multi,
+            } => {
+                let ms = if multi { "MS" } else { "" };
+                write!(self.out, "subpassInput{ms}")?;
+                Ok(())
+            }
+            crate::ImageClass::Subpass {
+                aspect: crate::SubpassAspect::Stencil,
+                multi,
+            } => {
+                let ms = if multi { "MS" } else { "" };
+                // Stencil values are u32; GLSL has no dedicated stencil
+                // subpass-input type, so use `usubpassInput`.
+                write!(self.out, "usubpassInput{ms}")?;
+                Ok(())
+            }
+            _ => Err(Error::Custom(
+                "write_subpass_input_type called on non-subpass image class".to_string(),
+            )),
+        }
+    }
+    // tiled-fork: end helpers (subpass-input + framebuffer-fetch)
+
     /// Helper method to write a image type
     ///
     /// # Notes
@@ -573,6 +729,14 @@ impl<'a, W: Write> Writer<'a, W> {
         arrayed: bool,
         class: crate::ImageClass,
     ) -> BackendResult {
+        // tiled-fork: begin block (subpass-input image type)
+        // Subpass-input images map to GLSL `subpassInput`/`isubpassInput`/`usubpassInput`
+        // (or `*MS` for multisampled). They have no `dim`/`arrayed` part.
+        if class.is_subpass_input() {
+            return self.write_subpass_input_type(class);
+        }
+        // tiled-fork: end block (subpass-input image type)
+
         // glsl images consist of four parts the scalar prefix, the image "type", the dimensions
         // and modifiers
         //
@@ -599,9 +763,12 @@ impl<'a, W: Write> Writer<'a, W> {
             Ic::Storage { format, .. } => ("image", format.into(), "", ""),
             Ic::External => unimplemented!(),
             // tiled-fork: begin arm (ImageClass::Subpass)
-            #[allow(clippy::todo)]
+            // Handled above in `write_subpass_input_type`; this arm is unreachable
+            // because `class.is_subpass_input()` would have returned earlier.
             Ic::Subpass { .. } => {
-                todo!("Phase 6b: subpass-input image emission for the GLSL backend")
+                return Err(Error::Custom(
+                    "subpass input image reached non-subpass image-type writer".to_string(),
+                ))
             }
             // tiled-fork: end arm (ImageClass::Subpass)
         };
@@ -1063,10 +1230,10 @@ impl<'a, W: Write> Writer<'a, W> {
                 per_primitive: _,
             } => (location, interpolation, sampling, blend_src),
             // tiled-fork: begin arm (Binding::ColorAttachmentRead)
-            #[allow(clippy::todo)]
-            crate::Binding::ColorAttachmentRead { .. } => {
-                todo!("Phase 6b: framebuffer-fetch (@color) emission for the GLSL backend")
-            }
+            // Framebuffer-fetch (`@color(N)`) reads are emitted as `inout`
+            // globals during global emission. They are not entry-point
+            // varyings, so `write_varying` has nothing to do here.
+            crate::Binding::ColorAttachmentRead { .. } => return Ok(()),
             // tiled-fork: end arm (Binding::ColorAttachmentRead)
             crate::Binding::BuiltIn(built_in) => {
                 match built_in {
@@ -2712,6 +2879,13 @@ impl<'a, W: Write> Writer<'a, W> {
                     } => (dim, class),
                     _ => unreachable!(),
                 };
+                // tiled-fork: begin guard (ImageQuery on subpass input)
+                if class.is_subpass_input() {
+                    return Err(Error::Custom(
+                        "ImageQuery on a subpass input is not supported in GLSL".to_string(),
+                    ));
+                }
+                // tiled-fork: end guard (ImageQuery on subpass input)
                 let components = match dim {
                     crate::ImageDimension::D1 => 1,
                     crate::ImageDimension::D2 => 2,
@@ -2766,9 +2940,13 @@ impl<'a, W: Write> Writer<'a, W> {
                             }
                             ImageClass::External => unimplemented!(),
                             // tiled-fork: begin arm (ImageClass::Subpass)
-                            #[allow(clippy::todo)]
+                            // Subpass-input ImageQueries are rejected by the
+                            // guard above; this arm is defensive.
                             ImageClass::Subpass { .. } => {
-                                todo!("Phase 6b: subpass-input image emission for the GLSL backend")
+                                return Err(Error::Custom(
+                                    "ImageQuery on a subpass input is not supported in GLSL"
+                                        .to_string(),
+                                ))
                             }
                             // tiled-fork: end arm (ImageClass::Subpass)
                         }
@@ -2788,9 +2966,13 @@ impl<'a, W: Write> Writer<'a, W> {
                             ImageClass::Storage { .. } => "imageSize",
                             ImageClass::External => unimplemented!(),
                             // tiled-fork: begin arm (ImageClass::Subpass)
-                            #[allow(clippy::todo)]
+                            // Subpass-input ImageQueries are rejected by the
+                            // guard above; this arm is defensive.
                             ImageClass::Subpass { .. } => {
-                                todo!("Phase 6b: subpass-input image emission for the GLSL backend")
+                                return Err(Error::Custom(
+                                    "ImageQuery on a subpass input is not supported in GLSL"
+                                        .to_string(),
+                                ))
                             }
                             // tiled-fork: end arm (ImageClass::Subpass)
                         };
@@ -2814,9 +2996,13 @@ impl<'a, W: Write> Writer<'a, W> {
                             ImageClass::Storage { .. } => "imageSamples",
                             ImageClass::External => unimplemented!(),
                             // tiled-fork: begin arm (ImageClass::Subpass)
-                            #[allow(clippy::todo)]
+                            // Subpass-input ImageQueries are rejected by the
+                            // guard above; this arm is defensive.
                             ImageClass::Subpass { .. } => {
-                                todo!("Phase 6b: subpass-input image emission for the GLSL backend")
+                                return Err(Error::Custom(
+                                    "ImageQuery on a subpass input is not supported in GLSL"
+                                        .to_string(),
+                                ))
                             }
                             // tiled-fork: end arm (ImageClass::Subpass)
                         };
@@ -3823,10 +4009,10 @@ impl<'a, W: Write> Writer<'a, W> {
             | Expression::CooperativeLoad { .. }
             | Expression::CooperativeMultiplyAdd { .. } => unreachable!(),
             // tiled-fork: begin arm (SubpassLoad)
-            #[allow(clippy::todo)]
-            Expression::SubpassLoad { .. } => {
-                todo!("Phase 6b: subpass-input emission for the GLSL backend")
-            }
+            Expression::SubpassLoad {
+                image,
+                sample_index,
+            } => self.write_subpass_load(ctx, image, sample_index)?,
             // tiled-fork: end arm (SubpassLoad)
         }
 
@@ -4111,9 +4297,14 @@ impl<'a, W: Write> Writer<'a, W> {
             }
             crate::ImageClass::External => unimplemented!(),
             // tiled-fork: begin arm (ImageClass::Subpass)
-            #[allow(clippy::todo)]
+            // Subpass inputs are loaded via [`Expression::SubpassLoad`], not
+            // via `textureLoad`/[`Expression::ImageLoad`]. The validator should
+            // reject this in normal use.
             crate::ImageClass::Subpass { .. } => {
-                todo!("Phase 6b: subpass-input image emission for the GLSL backend")
+                return Err(Error::Custom(
+                    "subpass input image used with ImageLoad; use SubpassLoad instead"
+                        .to_string(),
+                ))
             }
             // tiled-fork: end arm (ImageClass::Subpass)
         };
@@ -4330,6 +4521,110 @@ impl<'a, W: Write> Writer<'a, W> {
 
         Ok(())
     }
+
+    // tiled-fork: begin method (write_subpass_load)
+    /// Write a [`SubpassLoad`] expression as either a framebuffer-fetch
+    /// `inout` read or a `subpassLoad(...)` call, depending on
+    /// [`Options::use_framebuffer_fetch`].
+    ///
+    /// [`SubpassLoad`]: crate::Expression::SubpassLoad
+    /// [`Options::use_framebuffer_fetch`]: super::Options::use_framebuffer_fetch
+    fn write_subpass_load(
+        &mut self,
+        ctx: &back::FunctionCtx,
+        image: Handle<crate::Expression>,
+        sample_index: Option<Handle<crate::Expression>>,
+    ) -> BackendResult {
+        let class = match *ctx.resolve_type(image, &self.module.types) {
+            TypeInner::Image { class, .. } => class,
+            _ => {
+                return Err(Error::Custom(
+                    "SubpassLoad target is not an image".to_string(),
+                ))
+            }
+        };
+
+        match class {
+            crate::ImageClass::Subpass {
+                aspect: crate::SubpassAspect::Color { .. },
+                multi: false,
+            } => {
+                if self.is_framebuffer_fetch_subpass_image(class) {
+                    // Framebuffer-fetch path: the global itself is an `inout`
+                    // variable, so reading it directly returns the prior color.
+                    self.write_expr(image, ctx)?;
+                } else {
+                    write!(self.out, "subpassLoad(")?;
+                    self.write_expr(image, ctx)?;
+                    write!(self.out, ")")?;
+                }
+            }
+            crate::ImageClass::Subpass {
+                aspect: crate::SubpassAspect::Depth,
+                multi: false,
+            } => {
+                write!(self.out, "subpassLoad(")?;
+                self.write_expr(image, ctx)?;
+                write!(self.out, ").x")?;
+            }
+            crate::ImageClass::Subpass {
+                aspect: crate::SubpassAspect::Stencil,
+                multi: false,
+            } => {
+                write!(self.out, "subpassLoad(")?;
+                self.write_expr(image, ctx)?;
+                write!(self.out, ").x")?;
+            }
+            crate::ImageClass::Subpass {
+                aspect: crate::SubpassAspect::Color { .. },
+                multi: true,
+            } => {
+                // Multisampled color subpass input: `subpassLoad(s, sample)`.
+                let sample = sample_index.ok_or(Error::Custom(
+                    "MSAA SubpassLoad requires a sample_index".to_string(),
+                ))?;
+                write!(self.out, "subpassLoad(")?;
+                self.write_expr(image, ctx)?;
+                write!(self.out, ", ")?;
+                self.write_expr(sample, ctx)?;
+                write!(self.out, ")")?;
+            }
+            crate::ImageClass::Subpass {
+                aspect: crate::SubpassAspect::Depth,
+                multi: true,
+            } => {
+                let sample = sample_index.ok_or(Error::Custom(
+                    "MSAA SubpassLoad requires a sample_index".to_string(),
+                ))?;
+                write!(self.out, "subpassLoad(")?;
+                self.write_expr(image, ctx)?;
+                write!(self.out, ", ")?;
+                self.write_expr(sample, ctx)?;
+                write!(self.out, ").x")?;
+            }
+            crate::ImageClass::Subpass {
+                aspect: crate::SubpassAspect::Stencil,
+                multi: true,
+            } => {
+                let sample = sample_index.ok_or(Error::Custom(
+                    "MSAA SubpassLoad requires a sample_index".to_string(),
+                ))?;
+                write!(self.out, "subpassLoad(")?;
+                self.write_expr(image, ctx)?;
+                write!(self.out, ", ")?;
+                self.write_expr(sample, ctx)?;
+                write!(self.out, ").x")?;
+            }
+            _ => {
+                return Err(Error::Custom(
+                    "non-subpass image used with SubpassLoad".to_string(),
+                ))
+            }
+        }
+
+        Ok(())
+    }
+    // tiled-fork: end method (write_subpass_load)
 
     fn write_named_expr(
         &mut self,

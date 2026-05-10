@@ -321,6 +321,15 @@ bitflags::bitflags! {
 }
 
 /// Configuration used in the [`Writer`].
+//
+// tiled-fork: note: this struct gained a fork-only `use_framebuffer_fetch`
+// field. Adding fields to a non-`#[non_exhaustive]` public struct is a
+// breaking change for any downstream `naga` consumer that constructs
+// `Options { ... }` via struct literal. Documented in TILED.md "Known
+// unavoidable sources of upstream divergence". We deliberately do NOT
+// add `#[non_exhaustive]` here, because doing so would block external
+// crates from using the standard `Options { ..Default::default() }`
+// pattern at all -- including the in-tree wgpu-hal initializer.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 #[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
@@ -338,6 +347,18 @@ pub struct Options {
     pub binding_map: BindingMap,
     /// Should workgroup variables be zero initialized (by polyfilling)?
     pub zero_initialize_workgroup_memory: bool,
+    // tiled-fork: begin field (use_framebuffer_fetch)
+    /// Emit `GL_EXT_shader_framebuffer_fetch`-style `inout` globals for
+    /// subpass input attachments in fragment shaders.
+    ///
+    /// When `true`, color subpass inputs are lowered to `inout` framebuffer-fetch
+    /// variables and [`Expression::SubpassLoad`] becomes a plain read of that
+    /// variable. When `false` (default), subpass inputs use the standard
+    /// `subpassInput`/`isubpassInput`/`usubpassInput` types and `subpassLoad(...)`.
+    ///
+    /// [`Expression::SubpassLoad`]: crate::Expression::SubpassLoad
+    pub use_framebuffer_fetch: bool,
+    // tiled-fork: end field (use_framebuffer_fetch)
 }
 
 impl Default for Options {
@@ -347,6 +368,9 @@ impl Default for Options {
             writer_flags: WriterFlags::ADJUST_COORDINATE_SPACE,
             binding_map: BindingMap::default(),
             zero_initialize_workgroup_memory: true,
+            // tiled-fork: begin field-init (use_framebuffer_fetch)
+            use_framebuffer_fetch: false,
+            // tiled-fork: end field-init (use_framebuffer_fetch)
         }
     }
 }
@@ -530,9 +554,8 @@ impl fmt::Display for VaryingName<'_> {
                 write!(f, "{}", glsl_built_in(built_in, self.options))
             }
             // tiled-fork: begin arm (Binding::ColorAttachmentRead)
-            #[allow(clippy::todo)]
-            crate::Binding::ColorAttachmentRead { .. } => {
-                todo!("Phase 6b: framebuffer-fetch (@color) emission for the GLSL backend")
+            crate::Binding::ColorAttachmentRead { attachment, .. } => {
+                write!(f, "_color_attachment_read{attachment}")
             }
             // tiled-fork: end arm (Binding::ColorAttachmentRead)
         }
@@ -595,6 +618,11 @@ pub enum Error {
     /// [`crate::Sampling::First`] is unsupported.
     #[error("`{:?}` sampling is unsupported", crate::Sampling::First)]
     FirstSamplingNotSupported,
+    // tiled-fork: begin variants (subpass / framebuffer-fetch errors)
+    /// MSAA subpass inputs are not supported by the GLSL backend.
+    #[error("MSAA subpass inputs are not supported by the GLSL backend")]
+    MsaaSubpassInputUnsupported,
+    // tiled-fork: end variants (subpass / framebuffer-fetch errors)
     #[error(transparent)]
     ResolveArraySizeError(#[from] proc::ResolveArraySizeError),
 }

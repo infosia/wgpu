@@ -472,6 +472,9 @@ pub fn backends(ctx: BenchmarkContext) -> anyhow::Result<Vec<SubBenchResult>> {
                 writer_flags: naga::back::glsl::WriterFlags::empty(),
                 binding_map: Default::default(),
                 zero_initialize_workgroup_memory: true,
+                // tiled-fork: begin field-init (use_framebuffer_fetch)
+                use_framebuffer_fetch: false,
+                // tiled-fork: end field-init (use_framebuffer_fetch)
             };
             for input in &inputs.inner {
                 if !input.options.targets.unwrap().contains(Targets::GLSL) {
