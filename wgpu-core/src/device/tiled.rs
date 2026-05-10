@@ -1,14 +1,18 @@
 // tiled-fork: begin types
-//! Phase 3 scaffolding: `Device` methods for creating tile-memory resources.
+//! `Device` methods for creating tile-memory resources.
 //!
-//! These methods currently call `check_is_valid()` and the
-//! feature-gate, then immediately return `Err(DeviceError::Unexpected)`.
-//! The per-backend HAL stubs do the same. Real plumbing lands in a later
-//! phase along with the backend-real implementations.
+//! `create_transient_attachment` is fully wired (Phase 11c) and routes
+//! through to the per-backend HAL implementations from Phase 9.
+//! `create_transient_dispatch` is still a stub returning
+//! `Err(DeviceError::Unexpected)`; the programmable-tile-dispatch
+//! surface is reserved for a future Apple-GPU phase.
 
+use alloc::format;
 use alloc::sync::Arc;
+use core::mem::ManuallyDrop;
 
 use crate::device::{Device, DeviceError};
+use crate::resource::TrackingData;
 use crate::resource_tiled::{
     CreateTransientAttachmentError, CreateTransientDispatchError, TransientAttachment,
     TransientDispatch,
@@ -22,16 +26,39 @@ impl Device {
     /// [`Features::TRANSIENT_ATTACHMENTS`]: wgt::Features::TRANSIENT_ATTACHMENTS
     pub fn create_transient_attachment(
         self: &Arc<Self>,
-        _desc: &wgt::TransientAttachmentDescriptor,
+        desc: &wgt::TransientAttachmentDescriptor,
     ) -> Result<Arc<TransientAttachment>, CreateTransientAttachmentError> {
         self.check_is_valid()?;
         self.require_features(wgt::Features::TRANSIENT_ATTACHMENTS)?;
-        // Backends do not yet implement the HAL surface end-to-end; route
-        // every call through `DeviceError::Unexpected` for now. The per-
-        // backend `tiled.rs` stubs return the same error.
-        Err(CreateTransientAttachmentError::Device(
-            DeviceError::from_hal(hal::DeviceError::Unexpected),
-        ))
+
+        // SAFETY: HAL backends validate the descriptor (size, sample count,
+        // format); see the per-backend `tiled.rs` files. No caller-side
+        // preconditions for this dyn-dispatched call.
+        let raw = unsafe { self.raw_tiled().create_transient_attachment_dyn(desc) }
+            .map_err(|hal_err| {
+                CreateTransientAttachmentError::Device(self.handle_hal_error(hal_err))
+            })?;
+
+        // Synthesize a diagnostics label until
+        // `wgt::TransientAttachmentDescriptor` gains a `label` field.
+        let extent = match desc.size {
+            wgt::TransientSize::Explicit { width, height } => format!("{width}x{height}"),
+            _ => "match-target".into(),
+        };
+        let label = format!(
+            "TransientAttachment<{:?},{},samples={}>",
+            desc.format, extent, desc.sample_count
+        );
+
+        let attachment = TransientAttachment {
+            raw: ManuallyDrop::new(raw),
+            device: self.clone(),
+            label,
+            tracking_data: TrackingData::new(self.tracker_indices.transient_attachments.clone()),
+            desc: *desc,
+        };
+
+        Ok(Arc::new(attachment))
     }
 
     /// Create a programmable tile-dispatch resource.
@@ -45,6 +72,8 @@ impl Device {
     ) -> Result<Arc<TransientDispatch>, CreateTransientDispatchError> {
         self.check_is_valid()?;
         self.require_features(wgt::Features::PROGRAMMABLE_TILE_DISPATCH)?;
+        // Programmable tile dispatch is reserved for a future Apple-GPU
+        // phase; no backend implements it today.
         Err(CreateTransientDispatchError::Device(
             DeviceError::from_hal(hal::DeviceError::Unexpected),
         ))

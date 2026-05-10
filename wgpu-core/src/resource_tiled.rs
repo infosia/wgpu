@@ -1,22 +1,26 @@
 // tiled-fork: begin types
 //! Resource wrappers for tile-based deferred rendering.
 //!
-//! Phase 3 of the upstream-friendly fork plan in `TILED.md`.
-//!
-//! These wrap the HAL transient-resource handles. In Phase 3 the wrappers
-//! exist as types and are wired into the registry/tracker, but they hold
-//! no HAL resource yet — `Device::create_transient_attachment` /
-//! `Device::create_transient_dispatch` return `Err(DeviceError::Unexpected)`
-//! until the per-backend HAL implementations land in a later phase.
+//! Phase 3 introduced these as scaffolding placeholders. Phase 11c lit up
+//! `TransientAttachment` end-to-end: the wrapper now owns a real
+//! `Box<dyn hal::DynTransientAttachment>` allocated by Phase 9 backends
+//! (Vulkan: `VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT` + `LAZILY_ALLOCATED`,
+//! Metal: `MTLStorageMode::Memoryless`, GLES: `glRenderbuffer` +
+//! `glInvalidateFramebuffer`). `TransientDispatch` is still scaffolding
+//! (the programmable-tile-dispatch surface is reserved for a future
+//! Apple-GPU phase).
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
+use core::mem::ManuallyDrop;
 
 use thiserror::Error;
 use wgt::error::{ErrorType, WebGpuError};
 
 use crate::device::{Device, DeviceError, MissingFeatures};
-use crate::resource::TrackingData;
+use crate::resource::{Labeled, TrackingData};
+use crate::resource_log;
 
 /// A tile-memory-only render attachment.
 ///
@@ -25,18 +29,41 @@ use crate::resource::TrackingData;
 /// renderbuffer that gets `glInvalidateFramebuffer`-d on GLES.
 #[derive(Debug)]
 pub struct TransientAttachment {
-    // The four fields below become live once
-    // `Device::create_transient_attachment` does real HAL work and the
-    // render graph queries them. The per-field `#[allow(dead_code)]`
-    // markers can be removed in the same patch that lights up that path.
-    #[allow(dead_code)]
+    pub(crate) raw: ManuallyDrop<Box<dyn hal::DynTransientAttachment>>,
     pub(crate) device: Arc<Device>,
-    #[allow(dead_code)]
+    /// The `label` carried for diagnostics; `wgt::TransientAttachmentDescriptor`
+    /// does not currently have a `label` field, so this is a synthetic
+    /// identifier derived from the format + extent. When that descriptor
+    /// gains a label, this field will mirror it.
     pub(crate) label: String,
-    #[allow(dead_code)]
     pub(crate) tracking_data: TrackingData,
+    /// Stored for the render-graph and validation work in Phase 11d+; the
+    /// HAL handle does not expose its descriptor and the resource may need
+    /// to be matched against a `SubpassRenderPassDescriptor`'s transient
+    /// table.
     #[allow(dead_code)]
     pub(crate) desc: wgt::TransientAttachmentDescriptor,
+}
+
+impl Drop for TransientAttachment {
+    fn drop(&mut self) {
+        resource_log!("Destroy raw {}", self.error_ident());
+        // SAFETY: We are in the Drop impl and we don't use self.raw anymore after this point.
+        let raw = unsafe { ManuallyDrop::take(&mut self.raw) };
+        unsafe {
+            self.device.raw_tiled().destroy_transient_attachment_dyn(raw);
+        }
+    }
+}
+
+impl TransientAttachment {
+    /// Direct access to the underlying HAL resource. Used by the render-graph
+    /// build path in subsequent bridge phases; marked `#[allow(dead_code)]`
+    /// until those callers land.
+    #[allow(dead_code)]
+    pub(crate) fn raw(&self) -> &dyn hal::DynTransientAttachment {
+        self.raw.as_ref()
+    }
 }
 
 crate::impl_resource_type!(TransientAttachment);
@@ -52,9 +79,9 @@ crate::impl_trackable!(TransientAttachment);
 /// [`Device::create_transient_dispatch`](crate::device::Device::create_transient_dispatch).
 #[derive(Debug)]
 pub struct TransientDispatch {
-    // Same scaffolding pattern as `TransientAttachment` above; the
-    // per-field `#[allow(dead_code)]` markers can be removed in the same
-    // patch that lights up the real backend path.
+    // Same scaffolding pattern as the original `TransientAttachment` above;
+    // the per-field `#[allow(dead_code)]` markers can be removed in the
+    // same patch that lights up the programmable-tile-dispatch surface.
     #[allow(dead_code)]
     pub(crate) device: Arc<Device>,
     #[allow(dead_code)]
