@@ -172,10 +172,13 @@ pub enum SubpassInputSource {
 }
 
 /// Input attachment declaration for one binding.
+//
+// tiled-fork: non-exhaustive-relax — construction-side descriptor; users
+// must literal-construct this in `SubpassDescriptor::input_attachments`.
+// See TILED.md "Known divergence" #5.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
-#[non_exhaustive]
 pub struct SubpassInputAttachment {
     /// Binding slot used by the shader.
     pub binding: u32,
@@ -202,10 +205,14 @@ pub enum SubpassDependencyType {
 }
 
 /// Synchronization dependency between two subpasses.
+//
+// tiled-fork: non-exhaustive-relax — construction-side descriptor; users
+// must literal-construct this in
+// `SubpassRenderPassDescriptor::subpass_dependencies`. See TILED.md
+// "Known divergence" #5.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
-#[non_exhaustive]
 pub struct SubpassDependency {
     /// Source subpass.
     pub src_subpass: SubpassIndex,

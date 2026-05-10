@@ -128,6 +128,14 @@ const EXAMPLES: &[ExampleDesc] = &[
         webgl: false, // No storage textures
         webgpu: true,
     },
+    // tiled-fork: begin examples
+    ExampleDesc {
+        name: "subpass_render_graph",
+        function: wgpu_examples::subpass_render_graph::main,
+        webgl: false,  // No multi-subpass on GLES until Tier B FBO-rebind lands
+        webgpu: false, // No multi-subpass on WebGPU
+    },
+    // tiled-fork: end examples
     ExampleDesc {
         name: "texture_arrays",
         function: wgpu_examples::texture_arrays::main,

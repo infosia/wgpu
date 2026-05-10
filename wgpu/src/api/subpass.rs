@@ -37,12 +37,14 @@ use crate::*;
 /// [`Device::create_render_pipeline`].
 ///
 /// Pass to [`Device::create_subpass_render_pipeline`] to build a
-/// pipeline that targets the named subpass. The struct is
-/// `#[non_exhaustive]`, so external callers must construct it via a
-/// helper or using struct-update syntax against a value the fork's
-/// own code returns; today this is only viable inside the `wgpu`
-/// crate (Phase 11f -- a public Default impl is a candidate
-/// follow-up).
+/// pipeline that targets the named subpass.
+///
+/// Unlike the other public subpass descriptors (see TILED.md "Known
+/// divergence" #5), this wrapper retains `#[non_exhaustive]` so future
+/// fork-internal subpass-target fields can be added; external callers
+/// will need a helper or struct-update syntax against a constructor we
+/// haven't yet exposed. The remaining Phase-7 visual examples (7b/7c)
+/// will need such a constructor before they can be ported.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct SubpassRenderPipelineDescriptor<'a> {
@@ -67,8 +69,12 @@ static_assertions::assert_impl_all!(SubpassRenderPipelineDescriptor<'_>: Send, S
 /// `Transient` variant is reserved for the future tile-memory bridge phase
 /// and currently returns
 /// [`wgc::command::SubpassRenderPassError::TransientNotWired`].
+//
+// tiled-fork: non-exhaustive-relax — intentionally NOT `#[non_exhaustive]`
+// so external callers can literal-construct via struct-expression syntax.
+// Matches upstream `RenderPassDescriptor`'s shape (also not `#[non_exhaustive]`).
+// See TILED.md "Known unavoidable sources of upstream divergence" #5.
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub enum SubpassColorAttachment<'a> {
     /// A regular DRAM-backed color attachment, slotted into the parent
     /// render pass's `color_attachments` array via
@@ -90,8 +96,10 @@ static_assertions::assert_impl_all!(SubpassColorAttachment<'_>: Send, Sync);
 /// Per-subpass depth/stencil attachment.
 ///
 /// Mirrors [`wgc::command::SubpassDepthStencilAttachment`].
+//
+// tiled-fork: non-exhaustive-relax — see `SubpassColorAttachment` above
+// for rationale. Documented at TILED.md "Known divergence" #5.
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub enum SubpassDepthStencilAttachment<'a> {
     /// A regular DRAM-backed depth/stencil attachment.
     Persistent(RenderPassDepthStencilAttachment<'a>),
@@ -113,8 +121,10 @@ static_assertions::assert_impl_all!(SubpassDepthStencilAttachment<'_>: Send, Syn
 /// One subpass in a [`SubpassRenderPassDescriptor`].
 ///
 /// Mirrors [`wgc::command::SubpassDescriptor`].
+//
+// tiled-fork: non-exhaustive-relax — construction-side descriptor; see
+// `SubpassColorAttachment` above. Documented at TILED.md "Known divergence" #5.
 #[derive(Clone, Debug, Default)]
-#[non_exhaustive]
 pub struct SubpassDescriptor<'a> {
     /// Per-slot color attachment descriptions for this subpass.
     pub color_attachments: &'a [Option<SubpassColorAttachment<'a>>],
@@ -134,8 +144,11 @@ static_assertions::assert_impl_all!(SubpassDescriptor<'_>: Send, Sync);
 /// persistent color and depth/stencil attachments are described with the
 /// same [`RenderPassColorAttachment`] / [`RenderPassDepthStencilAttachment`]
 /// shape used by [`RenderPassDescriptor`].
+//
+// tiled-fork: non-exhaustive-relax — top-level construction-side
+// descriptor; matches upstream `RenderPassDescriptor` shape. See
+// TILED.md "Known divergence" #5.
 #[derive(Clone, Debug, Default)]
-#[non_exhaustive]
 pub struct SubpassRenderPassDescriptor<'a> {
     /// Debug label of the subpass render pass. Shown in graphics
     /// debuggers for easy identification.

@@ -32,6 +32,9 @@ pub mod skybox;
 pub mod srgb_blend;
 pub mod stencil_triangles;
 pub mod storage_texture;
+// tiled-fork: begin examples
+pub mod subpass_render_graph;
+// tiled-fork: end examples
 pub mod texture_arrays;
 pub mod timestamp_queries;
 pub mod uniform_values;

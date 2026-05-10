@@ -237,6 +237,30 @@ If a planned edit is harder to merge than expected, the fallback chain is:
    later allocates one of these bits, we collide and must renumber. Mitigation:
    `tiled-fork:` markers on every flag site make a renumber a 5-line edit.
 
+5. **Construction-side subpass descriptors are not `#[non_exhaustive]`.**
+   The Type-design convention in this document mandates `#[non_exhaustive]`
+   on every new public type with named fields or variants, exempting only
+   `repr(transparent)` newtypes. Phase 7a takes a documented exception for
+   six construction-side public types because external callers must
+   literal-construct them via struct expressions (just like upstream's
+   `RenderPassDescriptor`, which is also not `#[non_exhaustive]`):
+
+   - `wgpu::SubpassRenderPassDescriptor`
+   - `wgpu::SubpassDescriptor`
+   - `wgpu::SubpassColorAttachment`
+   - `wgpu::SubpassDepthStencilAttachment`
+   - `wgt::SubpassInputAttachment`
+   - `wgt::SubpassDependency`
+
+   `SubpassRenderPipelineDescriptor` keeps `#[non_exhaustive]` because its
+   only required public field is the upstream `RenderPipelineDescriptor` it
+   wraps; future fork-internal subpass-target fields can be added without
+   pinning down a full struct-literal contract. All six exempted sites carry
+   a `// tiled-fork: non-exhaustive-relax` marker so a future merge that
+   re-applies upstream's attribute is grep-detectable. Mitigation if upstream
+   ever marks one of these types `#[non_exhaustive]`: drop the marker comment
+   and re-add the attribute — the change is one line per site.
+
 ## Reference
 
 The reference implementation is `../wgpu-tiled` at branch `main`,
@@ -260,7 +284,10 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
 - [x] Phase 6c — naga SPIR-V backend: SubpassData type + OpImageRead emission, SPV_EXT_shader_tile_image
 - [x] Phase 6d — naga MSL backend: [[color(N)]] fragment-arg emission for subpass + framebuffer fetch
 - [x] Phase 6e — naga GLSL backend: subpassInput/inout dual-mode emission
-- [ ] Phase 7 — Examples (deferred; depends on Phase 9 backend impls)
+- [~] Phase 7 — Examples
+  - [x] Phase 7a — `subpass_render_graph` headless smoke test (2-subpass persistent attachments; no shaders/draws yet)
+  - [ ] Phase 7b — `deferred_rendering` (3-subpass G-buffer/lighting/composite) — requires rewriting away from reference's `RenderGraphBuilder` declarative surface (not ported) and `Limits::max_subpasses` (not added per "no breaking changes" rule)
+  - [ ] Phase 7c — `subpass_msaa` (2-subpass MSAA line demo) — same surface mismatch as 7b
 - [x] Phase 8 — Tests + benches (naga snapshot fixtures: subpass-* + framebuffer-fetch-*)
 - [x] Phase 9 — Backend real impls (Vulkan, Metal, GLES)
   - [x] Phase 9a1 — Vulkan TransientAttachment (real VkImage + LAZILY_ALLOCATED)
@@ -361,12 +388,20 @@ Cross-cutting verifications:
 These are documented limitations that wouldn't block visual examples
 but should be addressed in subsequent passes:
 
-- **Phase 7 — visual examples.** Porting `deferred_rendering`,
-  `subpass_render_graph`, `subpass_msaa` from `../wgpu-tiled` is the
-  next concrete deliverable. Everything they depend on now exists
-  end-to-end on Vulkan; Metal / GLES should also work for the simpler
-  subpass-render-graph example. Estimated ~2,000+ LOC of example code
-  + shaders.
+- **Phase 7 — visual examples.** Phase 7a landed a headless
+  `subpass_render_graph` smoke test (2-subpass persistent attachments,
+  no shaders/draws — exercises `begin_subpass_render_pass` +
+  `next_subpass` + drop end-to-end). Phases 7b (`deferred_rendering`)
+  and 7c (`subpass_msaa`) are deferred: both reference-fork examples
+  rely on `RenderGraphBuilder` (declarative subpass graph) and the
+  reference's extended `Limits` (`max_subpasses`,
+  `max_input_attachments`, `max_subpass_color_attachments`), neither
+  of which is ported in this fork per the "no breaking changes" rule.
+  Porting them requires rewriting the example bodies to build
+  `SubpassRenderPassDescriptor` / `SubpassDescriptor` arrays
+  literally and using `TiledCapabilities` for capacity queries — a
+  ~1,500-LOC follow-up that mirrors the reference scene visually but
+  uses a different declaration surface.
 
 - ~~Resource-tracker registration in `SubpassRenderPass`~~ — **fixed
   in Phase 11g.** `set_pipeline`, `set_bind_group`, `set_vertex_buffer`,

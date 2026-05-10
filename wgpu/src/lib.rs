@@ -156,6 +156,14 @@ pub use wgt::{
     QUERY_RESOLVE_BUFFER_ALIGNMENT, QUERY_SET_MAX_QUERIES, QUERY_SIZE, VERTEX_ALIGNMENT,
 };
 
+// tiled-fork: begin re-export (subpass types)
+pub use wgt::{
+    ActiveSubpassMask, SubpassDependency, SubpassDependencyType, SubpassIndex,
+    SubpassInputAttachment, SubpassInputSource, TransientAttachmentDescriptor, TransientLoadOp,
+    TransientMemoryHint, TransientOps, TransientSize,
+};
+// tiled-fork: end re-export (subpass types)
+
 #[expect(deprecated)]
 pub use wgt::VERTEX_STRIDE_ALIGNMENT;
 
