@@ -326,6 +326,9 @@ struct CapabilitiesQuery {
     max_task_payload_size: u32,
     supported_vertex_amplification_factor: u32,
     shader_barycentrics: bool,
+    // tiled-fork: begin caps-query
+    supports_tile_shading: bool,
+    // tiled-fork: end caps-query
     supports_memoryless_storage: bool,
     supports_raytracing: bool,
 }
@@ -337,6 +340,9 @@ struct PrivateCapabilities {
     headless: bool,
     has_unified_memory: Option<bool>,
     timestamp_query_support: TimestampQuerySupport,
+    // tiled-fork: begin private-caps
+    supports_tile_shading: bool,
+    // tiled-fork: end private-caps
     supports_memoryless_storage: bool,
     mesh_shaders: bool,
     max_buffers_per_stage: ResourceIndex,
@@ -1117,7 +1123,28 @@ pub struct CommandEncoder {
     state: CommandState,
     temp: Temp,
     counters: Arc<wgt::HalCounters>,
+    // tiled-fork: begin command-encoder
+    /// Multi-subpass tracking, populated by
+    /// [`crate::TiledCommandEncoder::begin_subpass_render_pass`] and cleared
+    /// when the surrounding pass ends or the encoding is reset.
+    pub(super) subpass_state: Option<SubpassState>,
+    // tiled-fork: end command-encoder
 }
+
+// tiled-fork: begin subpass-state-struct
+/// State machine tracking position inside a multi-subpass render pass.
+///
+/// `current_index` starts at `tiled::first_active_subpass_index(...)` and
+/// advances on each `next_subpass`; it becomes `None` once every active
+/// subpass has been advanced past, or when `active_subpass_mask` culls all
+/// of them.
+#[derive(Debug)]
+pub(super) struct SubpassState {
+    pub(super) subpass_count: u32,
+    pub(super) current_index: Option<u32>,
+    pub(super) active_subpass_mask: Option<wgt::ActiveSubpassMask>,
+}
+// tiled-fork: end subpass-state-struct
 
 impl fmt::Debug for CommandEncoder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

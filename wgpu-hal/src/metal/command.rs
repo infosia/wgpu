@@ -504,6 +504,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
         if let Some(encoder) = self.state.compute.take() {
             encoder.endEncoding();
         }
+        // tiled-fork: begin discard-subpass-state
+        self.subpass_state = None;
+        // tiled-fork: end discard-subpass-state
         let had_command_buffer = self.raw_cmd_buf.is_some();
         // Clear the Option first so the underlying `metal::CommandBuffer` is
         // dropped before we update the counter.
@@ -1049,6 +1052,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
 
     unsafe fn end_render_pass(&mut self) {
         self.state.render.take().unwrap().endEncoding();
+        // tiled-fork: begin end-render-pass-subpass-state
+        self.subpass_state = None;
+        // tiled-fork: end end-render-pass-subpass-state
     }
 
     unsafe fn set_bind_group(

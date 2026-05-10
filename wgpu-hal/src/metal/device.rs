@@ -396,7 +396,162 @@ impl super::Device {
     pub fn raw_device(&self) -> &Retained<ProtocolObject<dyn MTLDevice>> {
         &self.shared.device
     }
+
+    // tiled-fork: begin device-tiled-helpers
+    /// Whether this device advertises tile-shading hardware support, i.e.
+    /// the prerequisite for the multi-subpass pipeline path on Metal.
+    pub(super) fn supports_tile_shading(&self) -> bool {
+        self.shared.private_caps.supports_tile_shading
+    }
+    // tiled-fork: end device-tiled-helpers
 }
+
+// tiled-fork: begin pipeline-helpers
+/// Validate that a subpass's `color_attachment_indices` remap is a
+/// well-formed bijection from fragment-output locations to color attachment
+/// slots in the parent pass.
+///
+/// `output_remap` is the per-subpass mapping from fragment-output `@location N`
+/// to a parent-pass color attachment slot. `color_target_count` is the
+/// pipeline's `color_targets` count, and `color_attachment_count` is the
+/// number of color attachment slots on the parent render pass.
+pub(super) fn validate_subpass_output_remap(
+    output_remap: &[u32],
+    color_target_count: usize,
+    color_attachment_count: usize,
+) -> Result<(), alloc::string::String> {
+    if output_remap.len() != color_target_count {
+        return Err(alloc::format!(
+            "subpass output remap count ({}) does not match pipeline color target count ({color_target_count})",
+            output_remap.len(),
+        ));
+    }
+    let mut seen = alloc::vec![false; color_attachment_count];
+    for (location, &attachment_index) in output_remap.iter().enumerate() {
+        let attachment_index = attachment_index as usize;
+        if attachment_index >= color_attachment_count {
+            return Err(alloc::format!(
+                "subpass output remap for fragment output {location} points at color attachment {attachment_index}, but the render pass only declares {color_attachment_count} color attachment slots",
+            ));
+        }
+        if core::mem::replace(&mut seen[attachment_index], true) {
+            return Err(alloc::format!(
+                "subpass output remap assigns fragment output {location} to color attachment {attachment_index}, which is already used by another fragment output",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Extract the (input-attachment, color-attachment) remap pair for the
+/// pipeline's active subpass.
+pub(super) fn get_subpass_attachment_remaps(
+    target: &wgt::SubpassTarget,
+) -> Result<(Vec<u32>, Vec<u32>), alloc::string::String> {
+    let subpass_index = target.index as usize;
+    let subpass_desc = target.subpass_descs.get(subpass_index).ok_or_else(|| {
+        alloc::format!(
+            "subpass target index {} is out of bounds for {} declared subpasses",
+            target.index,
+            target.subpass_descs.len(),
+        )
+    })?;
+    Ok((
+        subpass_desc.input_attachment_indices.clone(),
+        subpass_desc.color_attachment_indices.clone(),
+    ))
+}
+
+/// Build the `(group, binding) -> color attachment slot` map that the MSL
+/// backend uses to lower `var<storage> _: subpass_input<...>` globals to
+/// `[[color(N)]]` fragment-arguments.
+///
+/// The map is populated by walking the fragment shader's globals and looking
+/// up each `subpass_input` binding's parent-pass color slot via
+/// `subpass_desc.input_attachment_indices`. Globals that do not point at a
+/// subpass-input (e.g. `DEPTH_STENCIL_INPUT_ATTACHMENT_INDEX`) are skipped.
+pub(super) fn build_subpass_color_slot_map(
+    stage: &crate::ProgrammableStage<super::ShaderModule>,
+    target: Option<&wgt::SubpassTarget>,
+) -> Result<naga::FastHashMap<(u32, u32), u32>, crate::PipelineError> {
+    let mut slots = naga::FastHashMap::default();
+    let Some(target) = target else {
+        return Ok(slots);
+    };
+    let subpass_desc = target
+        .subpass_descs
+        .get(target.index as usize)
+        .ok_or_else(|| {
+            crate::PipelineError::Linkage(
+                wgt::ShaderStages::FRAGMENT,
+                alloc::format!(
+                    "subpass target index {} is out of bounds for {} declared subpasses",
+                    target.index,
+                    target.subpass_descs.len()
+                ),
+            )
+        })?;
+    let ShaderModuleSource::Naga(ref naga_shader) = stage.module.source else {
+        return Ok(slots);
+    };
+
+    for (_, global) in naga_shader.module.global_variables.iter() {
+        let Some(binding) = global.binding else {
+            continue;
+        };
+        let class = match naga_shader.module.types[global.ty].inner {
+            naga::TypeInner::Image { class, .. } => class,
+            _ => continue,
+        };
+        if !class.is_subpass_input() {
+            continue;
+        }
+
+        let Some(&attachment_slot) = subpass_desc
+            .input_attachment_indices
+            .get(binding.binding as usize)
+        else {
+            return Err(crate::PipelineError::Linkage(
+                wgt::ShaderStages::FRAGMENT,
+                alloc::format!(
+                    "subpass input binding {} is out of range for {} declared input attachments",
+                    binding.binding,
+                    subpass_desc.input_attachment_indices.len()
+                ),
+            ));
+        };
+
+        if attachment_slot != u32::MAX {
+            slots.insert((binding.group, binding.binding), attachment_slot);
+        }
+    }
+
+    Ok(slots)
+}
+
+/// True when a multi-subpass pipeline omits its own depth/stencil state but
+/// the active subpass's parent render pass has a depth/stencil attachment.
+/// In that case the Metal pipeline must install a "depth disabled" state to
+/// preserve compatibility with the render-pass descriptor.
+///
+/// Currently only consumed by the helper unit tests; the
+/// `create_subpass_render_pipeline` consumer that installs the disabled
+/// state on the `MTLRenderPipelineDescriptor` lands alongside the
+/// `Options::subpass_color_slots` MSL-globals lowering follow-up. The
+/// dead-code allow is gated on `not(test)` so an accidental unused-fn
+/// regression is caught later if the production caller lands but happens
+/// to drop the call site.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn should_use_disabled_depth_stencil_state_for_subpass(
+    depth_stencil: Option<&wgt::DepthStencilState>,
+    subpass_target: Option<&wgt::SubpassTarget>,
+) -> bool {
+    depth_stencil.is_none()
+        && subpass_target
+            .and_then(|target| target.depth_stencil_format)
+            .is_some()
+}
+// tiled-fork: end pipeline-helpers
 
 impl crate::Device for super::Device {
     type A = super::Api;
@@ -696,6 +851,9 @@ impl crate::Device for super::Device {
             state: super::CommandState::default(),
             temp: super::Temp::default(),
             counters: Arc::clone(&self.counters),
+            // tiled-fork: begin command-encoder-init
+            subpass_state: None,
+            // tiled-fork: end command-encoder-init
         })
     }
 
@@ -2026,3 +2184,74 @@ impl crate::Device for super::Device {
         Ok(())
     }
 }
+
+// tiled-fork: begin pipeline-helpers-tests
+#[cfg(test)]
+mod tiled_pipeline_helper_tests {
+    use super::{
+        get_subpass_attachment_remaps, should_use_disabled_depth_stencil_state_for_subpass,
+        validate_subpass_output_remap,
+    };
+
+    #[test]
+    fn validate_subpass_output_remap_accepts_matching_remap() {
+        assert!(validate_subpass_output_remap(&[2, 3], 2, 4).is_ok());
+    }
+
+    #[test]
+    fn validate_subpass_output_remap_rejects_length_mismatch() {
+        let err = validate_subpass_output_remap(&[2], 2, 4).unwrap_err();
+        assert!(err.contains("does not match pipeline color target count"));
+    }
+
+    #[test]
+    fn validate_subpass_output_remap_rejects_out_of_bounds_attachment() {
+        let err = validate_subpass_output_remap(&[2], 1, 2).unwrap_err();
+        assert!(err.contains("only declares"));
+    }
+
+    #[test]
+    fn validate_subpass_output_remap_rejects_duplicate_attachment() {
+        let err = validate_subpass_output_remap(&[1, 1], 2, 3).unwrap_err();
+        assert!(err.contains("already used by another fragment output"));
+    }
+
+    fn make_subpass_desc() -> wgt::SubpassTargetDesc {
+        wgt::SubpassTargetDesc::default()
+    }
+
+    fn make_target_with_subpass_count(count: usize) -> wgt::SubpassTarget {
+        let mut target = wgt::SubpassTarget::default();
+        target.subpass_descs = (0..count).map(|_| make_subpass_desc()).collect();
+        target
+    }
+
+    #[test]
+    fn get_subpass_attachment_remaps_rejects_invalid_subpass_index() {
+        let mut target = make_target_with_subpass_count(1);
+        target.index = 5;
+        let err = get_subpass_attachment_remaps(&target).unwrap_err();
+        assert!(err.contains("out of bounds"));
+    }
+
+    #[test]
+    fn should_disable_depth_stencil_when_pass_has_depth_but_pipeline_does_not() {
+        let mut target = make_target_with_subpass_count(1);
+        target.depth_stencil_format = Some(wgt::TextureFormat::Depth32Float);
+        target.subpass_descs[0].uses_depth_stencil = true;
+        assert!(should_use_disabled_depth_stencil_state_for_subpass(
+            None,
+            Some(&target)
+        ));
+    }
+
+    #[test]
+    fn should_not_disable_depth_stencil_when_pass_has_no_depth() {
+        let target = make_target_with_subpass_count(1);
+        assert!(!should_use_disabled_depth_stencil_state_for_subpass(
+            None,
+            Some(&target)
+        ));
+    }
+}
+// tiled-fork: end pipeline-helpers-tests

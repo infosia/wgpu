@@ -995,6 +995,16 @@ impl super::CapabilitiesQuery {
                     // visionOS: Always rely on family check
                     available!(ios = 10.0, tvos = 10.0)
                 },
+            // tiled-fork: begin caps-detect
+            // Tile-shading support tracks Apple4+ and Mac2 families. Required
+            // (together with `supports_memoryless_storage`) to advertise
+            // `MULTI_SUBPASS` and `TRANSIENT_ATTACHMENTS` because multi-subpass
+            // rendering is implemented via Metal's programmable-tile-shading
+            // path with on-chip storage.
+            supports_tile_shading: family_check
+                && (device.supportsFamily(MTLGPUFamily::Apple4)
+                    || device.supportsFamily(MTLGPUFamily::Mac2)),
+            // tiled-fork: end caps-detect
             supported_vertex_amplification_factor: {
                 let mut factor = 1;
                 // https://developer.apple.com/documentation/metal/mtldevice/supportsvertexamplificationcount(_:)
@@ -1151,6 +1161,18 @@ impl super::CapabilitiesQuery {
         if self.supported_vertex_amplification_factor > 1 {
             features.insert(F::MULTIVIEW);
         }
+
+        // tiled-fork: begin features
+        // Subpasses require tile-shading-capable hardware and memoryless
+        // storage for transient attachment backing. Apple GPUs implement
+        // framebuffer fetch via `[[color(N)]]` fragment-args in MSL
+        // unconditionally on the families wgpu targets, so we can advertise
+        // `SHADER_FRAMEBUFFER_FETCH` independently of subpass support.
+        let supports_subpasses = self.supports_tile_shading && self.supports_memoryless_storage;
+        features.set(F::MULTI_SUBPASS, supports_subpasses);
+        features.set(F::TRANSIENT_ATTACHMENTS, supports_subpasses);
+        features.set(F::SHADER_FRAMEBUFFER_FETCH, true);
+        // tiled-fork: end features
 
         features.set(F::EXPERIMENTAL_RAY_QUERY, self.supports_raytracing);
 
@@ -1327,6 +1349,9 @@ impl super::CapabilitiesQuery {
             headless: self.headless,
             has_unified_memory: self.has_unified_memory,
             timestamp_query_support: self.timestamp_query_support,
+            // tiled-fork: begin private-caps-fwd
+            supports_tile_shading: self.supports_tile_shading,
+            // tiled-fork: end private-caps-fwd
             supports_memoryless_storage: self.supports_memoryless_storage,
             mesh_shaders: self.mesh_shaders,
             max_buffers_per_stage: self.max_buffers_per_stage,
