@@ -427,7 +427,12 @@ impl super::Device {
         }
     }
 
-    fn find_memory_type_index(
+    // tiled-fork: begin visibility (find_memory_type_index)
+    // Bumped from private to `pub(super)` so the sibling `tiled.rs` can
+    // request `LAZILY_ALLOCATED` memory for transient attachments. Body
+    // unchanged.
+    pub(super) fn find_memory_type_index(
+    // tiled-fork: end visibility (find_memory_type_index)
         &self,
         type_bits_req: u32,
         flags_req: vk::MemoryPropertyFlags,
@@ -776,11 +781,15 @@ impl super::Device {
         &self.shared.instance
     }
 
-    fn error_if_would_oom_on_resource_allocation(
+    // tiled-fork: begin visibility
+    // Bumped from private to `pub(super)` so the fork's `tiled.rs` can use it
+    // when allocating transient attachments. Otherwise unchanged.
+    pub(super) fn error_if_would_oom_on_resource_allocation(
         &self,
         needs_host_access: bool,
         size: u64,
     ) -> Result<(), crate::DeviceError> {
+        // tiled-fork: end visibility
         let Some(threshold) = self
             .shared
             .instance

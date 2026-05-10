@@ -2214,12 +2214,26 @@ impl super::Instance {
             return None;
         }
 
-        let (available_features, mut downlevel_flags) = phd_features.to_wgpu(
+        let (mut available_features, mut downlevel_flags) = phd_features.to_wgpu(
             &self.shared.raw,
             phd,
             &phd_capabilities,
             queue_family_properties,
         );
+
+        // tiled-fork: begin features (TRANSIENT_ATTACHMENTS)
+        // Only advertise `TRANSIENT_ATTACHMENTS` when the device exposes a
+        // memory type with `LAZILY_ALLOCATED` set. Vulkan permits the
+        // `TRANSIENT_ATTACHMENT` usage bit on any device, but lazily-allocated
+        // memory is what makes the feature actually save tile-local memory on
+        // tile-based GPUs. Without it the optimization collapses to a normal
+        // attachment, so we hide the feature there to keep the contract
+        // honest.
+        available_features.set(
+            wgt::Features::TRANSIENT_ATTACHMENTS,
+            supports_lazily_allocated,
+        );
+        // tiled-fork: end features (TRANSIENT_ATTACHMENTS)
 
         if info.driver == "llvmpipe" {
             // The `F16_IN_F32` instructions do not normally require native `F16` support, but on

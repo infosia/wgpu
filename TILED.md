@@ -263,6 +263,7 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
 - [ ] Phase 7 — Examples (deferred; depends on Phase 9 backend impls)
 - [x] Phase 8 — Tests + benches (naga snapshot fixtures: subpass-* + framebuffer-fetch-*)
 - [ ] Phase 9 — Backend real impls (Vulkan, Metal, GLES)
+  - [x] Phase 9a1 — Vulkan TransientAttachment (real VkImage + LAZILY_ALLOCATED)
 - [x] Phase 10 — Docs (`docs/tiled-fork-conventions.md` + this status block)
 
 ## Snapshot at session end (2026-05-10)
