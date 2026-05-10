@@ -24,6 +24,47 @@ use crate::TextureFormat;
 /// Used in [`SubpassTargetDesc::input_attachment_indices`] entries.
 pub const DEPTH_STENCIL_INPUT_ATTACHMENT_INDEX: u32 = u32::MAX;
 
+/// Tile-memory adapter capabilities reported by an adapter.
+///
+/// Returned from `Adapter::tiled_capabilities()` (in the `wgpu` crate).
+///
+/// All fields are advisory: a value of `0` means "the adapter does not
+/// support tile-based rendering or does not report this metric". Real
+/// values are populated by per-backend HAL implementations (Vulkan,
+/// Metal, GLES); other backends return [`TiledCapabilities::none`].
+///
+/// `TiledCapabilities` is a sibling type to [`Limits`](crate::Limits) so
+/// upstream `Limits` can stay untouched.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+#[non_exhaustive]
+pub struct TiledCapabilities {
+    /// Maximum number of subpasses in a single render pass.
+    pub max_subpasses: u32,
+    /// Maximum color attachments writable from a single subpass.
+    pub max_subpass_color_attachments: u32,
+    /// Maximum input attachments readable in a single subpass.
+    pub max_input_attachments: u32,
+    /// Estimated tile-memory size in bytes, advisory.
+    pub estimated_tile_memory_bytes: u32,
+}
+
+impl TiledCapabilities {
+    /// Returns capabilities that report no tile-based rendering support.
+    ///
+    /// This is the same as [`TiledCapabilities::default()`].
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            max_subpasses: 0,
+            max_subpass_color_attachments: 0,
+            max_input_attachments: 0,
+            estimated_tile_memory_bytes: 0,
+        }
+    }
+}
+
 /// Size specification for a transient attachment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -361,6 +402,20 @@ mod tests {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         value.hash(&mut hasher);
         hasher.finish()
+    }
+
+    #[test]
+    fn tiled_capabilities_none_equals_default() {
+        assert_eq!(TiledCapabilities::none(), TiledCapabilities::default());
+    }
+
+    #[test]
+    fn tiled_capabilities_none_is_all_zero() {
+        let caps = TiledCapabilities::none();
+        assert_eq!(caps.max_subpasses, 0);
+        assert_eq!(caps.max_subpass_color_attachments, 0);
+        assert_eq!(caps.max_input_attachments, 0);
+        assert_eq!(caps.estimated_tile_memory_bytes, 0);
     }
 
     #[test]

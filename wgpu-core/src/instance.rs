@@ -731,6 +731,17 @@ impl Adapter {
         self.raw.capabilities.cooperative_matrix_properties.clone()
     }
 
+    // tiled-fork: begin tiled-caps
+    /// Returns the tile-based deferred rendering capabilities of this adapter.
+    ///
+    /// Forwards to [`hal::Adapter::tiled_capabilities`] via the dynamic-dispatch
+    /// adapter. Backends that do not support tiled rendering return
+    /// [`wgt::TiledCapabilities::default`] (all-zero).
+    pub fn tiled_capabilities(&self) -> wgt::TiledCapabilities {
+        self.raw.adapter.tiled_capabilities()
+    }
+    // tiled-fork: end tiled-caps
+
     pub fn get_texture_format_features(
         &self,
         format: wgt::TextureFormat,
@@ -1181,6 +1192,16 @@ impl Global {
         let adapter = self.hub.adapters.get(adapter_id);
         adapter.cooperative_matrix_properties()
     }
+
+    // tiled-fork: begin tiled-caps
+    pub fn adapter_tiled_capabilities(
+        &self,
+        adapter_id: AdapterId,
+    ) -> wgt::TiledCapabilities {
+        let adapter = self.hub.adapters.get(adapter_id);
+        adapter.tiled_capabilities()
+    }
+    // tiled-fork: end tiled-caps
 
     pub fn adapter_drop(&self, adapter_id: AdapterId) {
         profiling::scope!("Adapter::drop");

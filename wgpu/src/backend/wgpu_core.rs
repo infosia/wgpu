@@ -1008,10 +1008,11 @@ impl dispatch::AdapterInterface for CoreAdapter {
 
     // tiled-fork: begin tiled-caps
     fn tiled_capabilities(&self) -> crate::TiledCapabilities {
-        // Phase 5 stub: backend HAL impls don't yet report tiled
-        // capabilities; return all-zero ("no tile-based rendering support")
-        // until Phase 9 lights up the per-backend HAL implementations.
-        crate::TiledCapabilities::none()
+        // Forwards to the per-backend HAL implementation through wgpu-core.
+        // Backends without tile-based rendering support (DX12, noop, WebGPU)
+        // return `TiledCapabilities::default()` (all-zero) via the
+        // default-impl on `hal::Adapter::tiled_capabilities`.
+        self.context.0.adapter_tiled_capabilities(self.id)
     }
     // tiled-fork: end tiled-caps
 }

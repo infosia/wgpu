@@ -59,6 +59,11 @@ pub trait DynAdapter: DynResource {
     fn get_ordered_buffer_usages(&self) -> wgt::BufferUses;
 
     fn get_ordered_texture_usages(&self) -> wgt::TextureUses;
+
+    // tiled-fork: begin tiled-caps
+    /// Forwards to [`Adapter::tiled_capabilities`].
+    fn tiled_capabilities(&self) -> wgt::TiledCapabilities;
+    // tiled-fork: end tiled-caps
 }
 
 impl<A: Adapter + DynResource> DynAdapter for A
@@ -108,4 +113,10 @@ where
     fn get_ordered_texture_usages(&self) -> wgt::TextureUses {
         A::get_ordered_texture_usages(self)
     }
+
+    // tiled-fork: begin tiled-caps
+    fn tiled_capabilities(&self) -> wgt::TiledCapabilities {
+        A::tiled_capabilities(self)
+    }
+    // tiled-fork: end tiled-caps
 }

@@ -271,7 +271,7 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
 - [x] Phase 10 — Docs (`docs/tiled-fork-conventions.md` + this status block)
 - [ ] Phase 11 — wgpu-core bridge to expose Phase 9 HAL through the public API
   - [x] Phase 11a — Box<dyn DynTiledDevice> storage in wgpu-core's `Device::raw`
-  - [ ] Phase 11b — `Adapter::tiled_capabilities()` reports real values from HAL
+  - [x] Phase 11b — `Adapter::tiled_capabilities()` reports real values from HAL
   - [ ] Phase 11c — `Device::create_transient_attachment` actually invokes HAL
   - [ ] Phase 11d — Public `wgpu::SubpassRenderPassDescriptor` API + `begin_subpass_render_pass`
   - [ ] Phase 11e — `RenderPass::next_subpass` + `current_subpass_index`

@@ -816,6 +816,20 @@ pub trait Adapter: WasmNotSendSync {
     /// If a usage is ordered, then if the buffer state doesn't change between draw calls,
     /// there are no barriers needed for synchronization.
     fn get_ordered_texture_usages(&self) -> wgt::TextureUses;
+
+    // tiled-fork: begin tiled-caps
+    /// Returns the tile-based deferred rendering capabilities of this adapter.
+    ///
+    /// Backends that do not support tile-based rendering (or have not yet
+    /// implemented the query) return [`wgt::TiledCapabilities::default`],
+    /// which reports `0` for all fields ("no tile-based rendering support").
+    ///
+    /// Default-impl is provided so out-of-tree backends compile without
+    /// modification.
+    fn tiled_capabilities(&self) -> wgt::TiledCapabilities {
+        wgt::TiledCapabilities::default()
+    }
+    // tiled-fork: end tiled-caps
 }
 
 /// A connection to a GPU and a pool of resources to use with it.

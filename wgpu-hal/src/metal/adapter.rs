@@ -450,6 +450,24 @@ impl crate::Adapter for super::Adapter {
             | wgt::TextureUses::COLOR_TARGET
             | wgt::TextureUses::DEPTH_STENCIL_WRITE
     }
+
+    // tiled-fork: begin tiled-caps
+    fn tiled_capabilities(&self) -> wgt::TiledCapabilities {
+        // Metal exposes the color-attachment limit via `MTLDevice` (cached
+        // in `PrivateCapabilities::max_color_render_targets`). Metal does
+        // not have a Vulkan-style "input attachment" concept; since color
+        // attachments can be read in-place via tile memory / framebuffer
+        // fetch, we report `max_color_render_targets` as both. Tile memory
+        // size is approximated by the threadgroup-memory limit.
+        let pc = &self.shared.private_caps;
+        let mut caps = wgt::TiledCapabilities::default();
+        caps.max_subpasses = wgt::ActiveSubpassMask::MAX_SUBPASSES;
+        caps.max_subpass_color_attachments = pc.max_color_render_targets as u32;
+        caps.max_input_attachments = pc.max_color_render_targets as u32;
+        caps.estimated_tile_memory_bytes = pc.max_total_threadgroup_memory;
+        caps
+    }
+    // tiled-fork: end tiled-caps
 }
 
 const RESOURCE_HEAP_SUPPORT: &[MTLFeatureSet] = &[

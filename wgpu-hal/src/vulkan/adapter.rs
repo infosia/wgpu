@@ -3109,6 +3109,24 @@ impl crate::Adapter for super::Adapter {
     fn get_ordered_texture_usages(&self) -> wgt::TextureUses {
         wgt::TextureUses::INCLUSIVE
     }
+
+    // tiled-fork: begin tiled-caps
+    fn tiled_capabilities(&self) -> wgt::TiledCapabilities {
+        // Vulkan exposes color- and input-attachment maxima through the
+        // physical-device limits. `max_subpasses` is bounded by our
+        // `ActiveSubpassMask` capacity (32). Vulkan does not expose
+        // tile-memory size, so `estimated_tile_memory_bytes` stays 0.
+        let limits = self.phd_capabilities.properties.limits;
+        let mut caps = wgt::TiledCapabilities::default();
+        caps.max_subpasses = wgt::ActiveSubpassMask::MAX_SUBPASSES;
+        caps.max_subpass_color_attachments = limits.max_color_attachments;
+        caps.max_input_attachments = limits
+            .max_per_stage_descriptor_input_attachments
+            .min(limits.max_descriptor_set_input_attachments);
+        caps.estimated_tile_memory_bytes = 0;
+        caps
+    }
+    // tiled-fork: end tiled-caps
 }
 
 fn is_format_16bit_norm_supported(instance: &ash::Instance, phd: vk::PhysicalDevice) -> bool {

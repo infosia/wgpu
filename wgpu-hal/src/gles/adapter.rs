@@ -1332,6 +1332,25 @@ impl crate::Adapter for super::Adapter {
             | wgt::TextureUses::COLOR_TARGET
             | wgt::TextureUses::DEPTH_STENCIL_WRITE
     }
+
+    // tiled-fork: begin tiled-caps
+    fn tiled_capabilities(&self) -> wgt::TiledCapabilities {
+        // GLES has no native multi-subpass concept; the fork emulates
+        // subpasses with multi-pass execution and uses
+        // `EXT_shader_framebuffer_fetch` for input-attachment reads when
+        // available. We therefore report the `max_color_attachments` GL
+        // query as both the color- and input-attachment limit, capped to
+        // `ActiveSubpassMask::MAX_SUBPASSES` for the subpass count. GL has
+        // no portable tile-memory query, so leave the estimate at 0.
+        let limits = &self.shared.limits;
+        let mut caps = wgt::TiledCapabilities::default();
+        caps.max_subpasses = wgt::ActiveSubpassMask::MAX_SUBPASSES;
+        caps.max_subpass_color_attachments = limits.max_color_attachments;
+        caps.max_input_attachments = limits.max_color_attachments;
+        caps.estimated_tile_memory_bytes = 0;
+        caps
+    }
+    // tiled-fork: end tiled-caps
 }
 
 impl super::AdapterShared {
