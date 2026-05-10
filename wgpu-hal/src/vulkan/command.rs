@@ -179,6 +179,12 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.rpass_debug_marker_active = false;
         // tiled-fork: begin reset-subpass-state-begin-encoding
         self.subpass_state = None;
+        self.subpass_input_attachment_descriptor_sets.clear();
+        self.active_subpass_input_attachments.clear();
+        self.active_subpass_color_attachment_indices.clear();
+        self.active_color_attachment_views.clear();
+        self.active_depth_stencil_view = None;
+        self.active_input_attachment_descriptor_set = None;
         // tiled-fork: end reset-subpass-state-begin-encoding
 
         let vk_info = vk::CommandBufferBeginInfo::default()
@@ -219,6 +225,15 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.temp.clear();
         // tiled-fork: begin reset-subpass-state-reset-all
         self.subpass_state = None;
+        self.subpass_input_attachment_descriptor_sets.clear();
+        self.active_subpass_input_attachments.clear();
+        self.active_subpass_color_attachment_indices.clear();
+        self.active_color_attachment_views.clear();
+        self.active_depth_stencil_view = None;
+        self.active_input_attachment_descriptor_set = None;
+        for pool in self.input_attachment_descriptor_pools.drain(..) {
+            unsafe { self.device.raw.destroy_descriptor_pool(pool, None) };
+        }
         // tiled-fork: end reset-subpass-state-reset-all
         self.free
             .extend(cmd_bufs.into_iter().map(|cmd_buf| cmd_buf.raw));
@@ -993,6 +1008,14 @@ impl crate::CommandEncoder for super::CommandEncoder {
             }
             self.rpass_debug_marker_active = false;
         }
+        // tiled-fork: begin reset-input-attachment-state-end-pass
+        self.subpass_input_attachment_descriptor_sets.clear();
+        self.active_subpass_input_attachments.clear();
+        self.active_subpass_color_attachment_indices.clear();
+        self.active_color_attachment_views.clear();
+        self.active_depth_stencil_view = None;
+        self.active_input_attachment_descriptor_set = None;
+        // tiled-fork: end reset-input-attachment-state-end-pass
     }
 
     unsafe fn set_bind_group(
@@ -1060,6 +1083,13 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 pipeline.raw,
             )
         };
+        // tiled-fork: begin set-render-pipeline-input-attachments
+        // If the pipeline declares subpass-input bindings, find the
+        // descriptor set the active subpass owns and bind it on the spare
+        // descriptor-set slot. Pipelines without subpass inputs leave the
+        // slot untouched.
+        unsafe { super::tiled::bind_pipeline_input_attachments(self, pipeline) };
+        // tiled-fork: end set-render-pipeline-input-attachments
     }
 
     unsafe fn set_index_buffer<'a>(

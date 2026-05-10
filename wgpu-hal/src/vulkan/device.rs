@@ -616,10 +616,11 @@ impl
     }
 }
 
-struct CompiledStage {
-    create_info: vk::PipelineShaderStageCreateInfo<'static>,
+// tiled-fork: visibility relaxed for `vulkan/tiled.rs`.
+pub(super) struct CompiledStage {
+    pub(super) create_info: vk::PipelineShaderStageCreateInfo<'static>,
     _entry_point: CString,
-    temp_raw_module: Option<vk::ShaderModule>,
+    pub(super) temp_raw_module: Option<vk::ShaderModule>,
 }
 
 impl super::Device {
@@ -865,7 +866,9 @@ impl super::Device {
         Ok(raw)
     }
 
-    fn compile_stage(
+    // tiled-fork: visibility relaxed to `pub(super)` so the tiled-fork
+    // helpers in `vulkan/tiled.rs` can reuse the SPIR-V compile path.
+    pub(super) fn compile_stage(
         &self,
         stage: &crate::ProgrammableStage<super::ShaderModule>,
         naga_stage: naga::ShaderStage,
@@ -1515,6 +1518,15 @@ impl crate::Device for super::Device {
             // tiled-fork: begin subpass-state-init
             subpass_state: None,
             // tiled-fork: end subpass-state-init
+            // tiled-fork: begin input-attachment-state-init
+            subpass_input_attachment_descriptor_sets: Vec::new(),
+            active_subpass_input_attachments: Vec::new(),
+            active_subpass_color_attachment_indices: Vec::new(),
+            active_color_attachment_views: Vec::new(),
+            active_depth_stencil_view: None,
+            active_input_attachment_descriptor_set: None,
+            input_attachment_descriptor_pools: Vec::new(),
+            // tiled-fork: end input-attachment-state-init
         })
     }
 
@@ -1658,7 +1670,9 @@ impl crate::Device for super::Device {
         desc: &crate::PipelineLayoutDescriptor<super::BindGroupLayout>,
     ) -> Result<super::PipelineLayout, crate::DeviceError> {
         //Note: not bothering with on stack array here as it's low frequency
-        let vk_set_layouts = desc
+        // tiled-fork: begin pipeline-layout-spare-slot
+        let mut vk_set_layouts = desc
+        // tiled-fork: end pipeline-layout-spare-slot
             .bind_group_layouts
             .iter()
             .map(|bgl| match bgl {
@@ -1675,6 +1689,21 @@ impl crate::Device for super::Device {
                 }
             })
             .collect::<Vec<_>>();
+        // tiled-fork: begin pipeline-layout-input-attachment-set
+        // Reserve a set-slot for the shared input-attachment descriptor-set
+        // layout when the user's bind groups leave room. When all
+        // `maxBoundDescriptorSets` slots are already in use we leave the
+        // pipeline as-is; subpass-input pipelines targeting that layout will
+        // be rejected at `create_subpass_render_pipeline` time.
+        let input_attachment_descriptor_set_index =
+            if (vk_set_layouts.len() as u32) < self.shared.max_bound_descriptor_sets {
+                let index = vk_set_layouts.len() as u32;
+                vk_set_layouts.push(self.shared.input_attachment_descriptor_set_layout);
+                index
+            } else {
+                u32::MAX
+            };
+        // tiled-fork: end pipeline-layout-input-attachment-set
         let vk_immediates_ranges: Option<vk::PushConstantRange> = if desc.immediate_size != 0 {
             Some(vk::PushConstantRange {
                 stage_flags: vk::ShaderStageFlags::ALL,
@@ -1726,7 +1755,13 @@ impl crate::Device for super::Device {
         }
 
         self.counters.pipeline_layouts.add(1);
-        Ok(super::PipelineLayout { raw, binding_map })
+        Ok(super::PipelineLayout {
+            raw,
+            binding_map,
+            // tiled-fork: begin pipeline-layout-result
+            input_attachment_descriptor_set_index,
+            // tiled-fork: end pipeline-layout-result
+        })
     }
     unsafe fn destroy_pipeline_layout(&self, pipeline_layout: super::PipelineLayout) {
         unsafe {
@@ -2323,6 +2358,12 @@ impl crate::Device for super::Device {
         Ok(super::RenderPipeline {
             raw,
             is_multiview: desc.multiview_mask.is_some(),
+            // tiled-fork: begin pipeline-fields-init
+            layout: desc.layout.raw,
+            input_attachment_descriptor_set_index: desc.layout.input_attachment_descriptor_set_index,
+            input_attachments: Vec::new(),
+            subpass_index: 0,
+            // tiled-fork: end pipeline-fields-init
         })
     }
 

@@ -9,9 +9,12 @@
 use alloc::boxed::Box;
 use core::fmt;
 
-use super::{DynDevice, DynResource};
+use super::{
+    DynDevice, DynPipelineCache, DynPipelineLayout, DynRenderPipeline, DynResource,
+    DynResourceExt as _, DynShaderModule,
+};
 use crate::tiled::{TiledApi, TiledCommandEncoder, TiledDevice};
-use crate::{CommandEncoder, Device, DeviceError};
+use crate::{Api, CommandEncoder, Device, DeviceError, PipelineError, RenderPipelineDescriptor};
 
 // ----- Resource marker traits ---------------------------------------------
 
@@ -60,6 +63,20 @@ pub trait DynTiledDevice: DynDevice {
     /// # Safety
     /// See [`TiledDevice::destroy_transient_dispatch`].
     unsafe fn destroy_transient_dispatch_dyn(&self, dispatch: Box<dyn DynTransientDispatch>);
+
+    /// Create a render pipeline that targets a specific subpass.
+    ///
+    /// # Safety
+    /// See [`TiledDevice::create_subpass_render_pipeline`].
+    unsafe fn create_subpass_render_pipeline_dyn(
+        &self,
+        desc: &RenderPipelineDescriptor<
+            dyn DynPipelineLayout,
+            dyn DynShaderModule,
+            dyn DynPipelineCache,
+        >,
+        subpass_target: &wgt::SubpassTarget,
+    ) -> Result<Box<dyn DynRenderPipeline>, PipelineError>;
 }
 
 /// Dynamic-dispatch counterpart to [`TiledCommandEncoder`].
@@ -121,6 +138,51 @@ where
         // `create_transient_dispatch_dyn`.
         let dispatch = unsafe { super::DynResourceExt::unbox(dispatch) };
         unsafe { <D as TiledDevice>::destroy_transient_dispatch(self, dispatch) }
+    }
+
+    unsafe fn create_subpass_render_pipeline_dyn(
+        &self,
+        desc: &RenderPipelineDescriptor<
+            dyn DynPipelineLayout,
+            dyn DynShaderModule,
+            dyn DynPipelineCache,
+        >,
+        subpass_target: &wgt::SubpassTarget,
+    ) -> Result<Box<dyn DynRenderPipeline>, PipelineError> {
+        let desc = RenderPipelineDescriptor::<
+            <<D as Device>::A as Api>::PipelineLayout,
+            <<D as Device>::A as Api>::ShaderModule,
+            <<D as Device>::A as Api>::PipelineCache,
+        > {
+            label: desc.label,
+            layout: desc.layout.expect_downcast_ref(),
+            vertex_processor: match &desc.vertex_processor {
+                crate::VertexProcessor::Standard {
+                    vertex_buffers,
+                    vertex_stage,
+                } => crate::VertexProcessor::Standard {
+                    vertex_buffers,
+                    vertex_stage: vertex_stage.clone().expect_downcast(),
+                },
+                crate::VertexProcessor::Mesh {
+                    task_stage: task,
+                    mesh_stage: mesh,
+                } => crate::VertexProcessor::Mesh {
+                    task_stage: task.as_ref().map(|a| a.clone().expect_downcast()),
+                    mesh_stage: mesh.clone().expect_downcast(),
+                },
+            },
+            primitive: desc.primitive,
+            depth_stencil: desc.depth_stencil.clone(),
+            multisample: desc.multisample,
+            fragment_stage: desc.fragment_stage.clone().map(|f| f.expect_downcast()),
+            color_targets: desc.color_targets,
+            multiview_mask: desc.multiview_mask,
+            cache: desc.cache.map(|c| c.expect_downcast_ref()),
+        };
+
+        unsafe { <D as TiledDevice>::create_subpass_render_pipeline(self, &desc, subpass_target) }
+            .map(|b| -> Box<dyn DynRenderPipeline> { Box::new(b) })
     }
 }
 

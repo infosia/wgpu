@@ -6,7 +6,7 @@
 //! to be reachable end-to-end). This stub exists so that the workspace
 //! compiles end-to-end after Phase 1 introduced the extension traits.
 
-use crate::DeviceError;
+use crate::{DeviceError, PipelineError};
 
 #[derive(Debug)]
 pub struct TransientAttachment;
@@ -42,6 +42,22 @@ impl crate::TiledDevice for super::Context {
     }
 
     unsafe fn destroy_transient_dispatch(&self, _dispatch: TransientDispatch) {}
+
+    unsafe fn create_subpass_render_pipeline(
+        &self,
+        desc: &crate::RenderPipelineDescriptor<
+            '_,
+            <super::Api as crate::Api>::PipelineLayout,
+            <super::Api as crate::Api>::ShaderModule,
+            <super::Api as crate::Api>::PipelineCache,
+        >,
+        _subpass_target: &wgt::SubpassTarget,
+    ) -> Result<<super::Api as crate::Api>::RenderPipeline, PipelineError> {
+        // TODO(Phase 9b): wire subpass-aware pipelines into the noop backend.
+        // For now defer to the upstream single-subpass pipeline path so smoke
+        // tests still see a value.
+        unsafe { <Self as crate::Device>::create_render_pipeline(self, desc) }
+    }
 }
 
 impl crate::TiledCommandEncoder for super::CommandBuffer {

@@ -2736,6 +2736,38 @@ impl super::Adapter {
                 .map_err(super::map_host_device_oom_err)?
         };
 
+        // tiled-fork: begin input-attachment-shared-layout
+        // Shared `INPUT_ATTACHMENT` descriptor-set layout. We reserve
+        // `max_input_attachments` bindings (capped to 8 to avoid pathological
+        // allocations on adapters that report enormous descriptor limits) all
+        // marked `FRAGMENT`-only. The layout lives for the device lifetime.
+        let device_limits = self.phd_capabilities.properties.limits;
+        let max_bound_descriptor_sets = device_limits.max_bound_descriptor_sets;
+        let max_input_attachments = device_limits
+            .max_per_stage_descriptor_input_attachments
+            .min(device_limits.max_descriptor_set_input_attachments)
+            .min(8);
+        let input_attachment_layout_bindings: Vec<vk::DescriptorSetLayoutBinding> = (0
+            ..max_input_attachments)
+            .map(|binding| {
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(binding)
+                    .descriptor_type(vk::DescriptorType::INPUT_ATTACHMENT)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+            })
+            .collect();
+        let input_attachment_descriptor_set_layout = unsafe {
+            raw_device
+                .create_descriptor_set_layout(
+                    &vk::DescriptorSetLayoutCreateInfo::default()
+                        .bindings(&input_attachment_layout_bindings),
+                    None,
+                )
+                .map_err(super::map_host_device_oom_err)?
+        };
+        // tiled-fork: end input-attachment-shared-layout
+
         let shared = Arc::new(super::DeviceShared {
             raw: raw_device,
             family_index,
@@ -2767,6 +2799,11 @@ impl super::Adapter {
             texture_identity_factory: super::ResourceIdentityFactory::new(),
             texture_view_identity_factory: super::ResourceIdentityFactory::new(),
             empty_descriptor_set_layout,
+            // tiled-fork: begin input-attachment-shared-init
+            input_attachment_descriptor_set_layout,
+            max_bound_descriptor_sets,
+            max_input_attachments,
+            // tiled-fork: end input-attachment-shared-init
         });
 
         let relay_semaphores = super::RelaySemaphores::new(&shared)?;

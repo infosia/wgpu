@@ -7,7 +7,7 @@
 //! `TRANSIENT_ATTACHMENTS` features are not advertised on DX12, so callers
 //! should never reach these methods.
 
-use crate::DeviceError;
+use crate::{DeviceError, PipelineError};
 
 #[derive(Debug)]
 pub struct TransientAttachment;
@@ -43,6 +43,21 @@ impl crate::TiledDevice for super::Device {
     }
 
     unsafe fn destroy_transient_dispatch(&self, _dispatch: TransientDispatch) {}
+
+    unsafe fn create_subpass_render_pipeline(
+        &self,
+        _desc: &crate::RenderPipelineDescriptor<
+            '_,
+            <super::Api as crate::Api>::PipelineLayout,
+            <super::Api as crate::Api>::ShaderModule,
+            <super::Api as crate::Api>::PipelineCache,
+        >,
+        _subpass_target: &wgt::SubpassTarget,
+    ) -> Result<<super::Api as crate::Api>::RenderPipeline, PipelineError> {
+        // DX12 has no equivalent of subpass / input attachments; this stays
+        // unreachable since `MULTI_SUBPASS` is never advertised on DX12.
+        Err(PipelineError::Device(DeviceError::Unexpected))
+    }
 }
 
 impl crate::TiledCommandEncoder for super::CommandEncoder {

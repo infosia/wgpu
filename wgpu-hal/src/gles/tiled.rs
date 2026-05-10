@@ -7,7 +7,7 @@
 //! dedicated later phase. This stub exists so that the workspace compiles
 //! end-to-end after Phase 1 introduced the extension traits.
 
-use crate::DeviceError;
+use crate::{DeviceError, PipelineError};
 
 #[derive(Debug)]
 pub struct TransientAttachment;
@@ -43,6 +43,22 @@ impl crate::TiledDevice for super::Device {
     }
 
     unsafe fn destroy_transient_dispatch(&self, _dispatch: TransientDispatch) {}
+
+    unsafe fn create_subpass_render_pipeline(
+        &self,
+        desc: &crate::RenderPipelineDescriptor<
+            '_,
+            <super::Api as crate::Api>::PipelineLayout,
+            <super::Api as crate::Api>::ShaderModule,
+            <super::Api as crate::Api>::PipelineCache,
+        >,
+        _subpass_target: &wgt::SubpassTarget,
+    ) -> Result<<super::Api as crate::Api>::RenderPipeline, PipelineError> {
+        // TODO(Phase 9b): GLES will lower subpasses to multi-pass with
+        // framebuffer-fetch where available. Until then we forward to the
+        // single-subpass pipeline so the surface is reachable.
+        unsafe { <Self as crate::Device>::create_render_pipeline(self, desc) }
+    }
 }
 
 impl crate::TiledCommandEncoder for super::CommandEncoder {

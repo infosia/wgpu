@@ -265,6 +265,7 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
 - [ ] Phase 9 — Backend real impls (Vulkan, Metal, GLES)
   - [x] Phase 9a1 — Vulkan TransientAttachment (real VkImage + LAZILY_ALLOCATED)
   - [x] Phase 9a2 — Vulkan multi-subpass VkRenderPass + state machine
+  - [x] Phase 9a3 — Vulkan input-attachment descriptor sets + create_subpass_render_pipeline
 - [x] Phase 10 — Docs (`docs/tiled-fork-conventions.md` + this status block)
 
 ## Snapshot at session end (2026-05-10)

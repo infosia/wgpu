@@ -526,6 +526,23 @@ struct DeviceShared {
 
     empty_descriptor_set_layout: vk::DescriptorSetLayout,
 
+    // tiled-fork: begin input-attachment-shared
+    /// Shared descriptor-set layout used for subpass input attachments. This
+    /// layout reserves [`Self::max_input_attachments`] slots typed as
+    /// `INPUT_ATTACHMENT`, all stage-visible to the fragment stage. It is
+    /// appended to every pipeline layout's set-list (when there's a spare
+    /// slot) so the HAL can bind a per-subpass descriptor set without
+    /// disturbing the user's bind groups.
+    input_attachment_descriptor_set_layout: vk::DescriptorSetLayout,
+    /// Cached `maxBoundDescriptorSets` limit, used to decide whether the
+    /// shared input-attachment descriptor set will fit in a pipeline layout.
+    max_bound_descriptor_sets: u32,
+    /// Cached `maxPerStageDescriptorInputAttachments` (clamped to a sane upper
+    /// bound). Determines how many bindings the shared layout reserves and
+    /// the maximum binding index a subpass-input pipeline can address.
+    max_input_attachments: u32,
+    // tiled-fork: end input-attachment-shared
+
     // The `drop_guard` field must be the last field of this struct so it is dropped last.
     // Do not add new fields after it.
     drop_guard: Option<crate::DropGuard>,
@@ -540,6 +557,12 @@ impl Drop for DeviceShared {
             self.raw
                 .destroy_descriptor_set_layout(self.empty_descriptor_set_layout, None)
         };
+        // tiled-fork: begin input-attachment-shared-drop
+        unsafe {
+            self.raw
+                .destroy_descriptor_set_layout(self.input_attachment_descriptor_set_layout, None)
+        };
+        // tiled-fork: end input-attachment-shared-drop
         if self.drop_guard.is_none() {
             unsafe { self.raw.destroy_device(None) };
         }
@@ -849,6 +872,14 @@ impl crate::DynBindGroupLayout for BindGroupLayout {}
 pub struct PipelineLayout {
     raw: vk::PipelineLayout,
     binding_map: naga::back::spv::BindingMap,
+    // tiled-fork: begin input-attachment-set-index
+    /// Descriptor-set index reserved for the shared input-attachment layout.
+    ///
+    /// Equal to the user's bind-group count when a slot is available, or
+    /// `u32::MAX` when the layout is full. The Vulkan backend only attempts
+    /// the input-attachment binding when this is `< u32::MAX`.
+    input_attachment_descriptor_set_index: u32,
+    // tiled-fork: end input-attachment-set-index
 }
 
 impl crate::DynPipelineLayout for PipelineLayout {}
@@ -1028,6 +1059,30 @@ pub struct CommandEncoder {
     /// `None` otherwise (including for legacy single-subpass render passes).
     subpass_state: Option<SubpassState>,
     // tiled-fork: end subpass-state
+
+    // tiled-fork: begin input-attachment-state
+    /// Per-subpass input-attachment descriptor sets, populated lazily during
+    /// `begin_subpass_render_pass`. `None` slots correspond to subpasses that
+    /// declare no input attachments. The vector length equals the active
+    /// pass's subpass count.
+    pub(super) subpass_input_attachment_descriptor_sets: Vec<Option<vk::DescriptorSet>>,
+    /// Per-subpass input-attachment binding declarations, mirroring the
+    /// descriptor in `begin_subpass_render_pass`.
+    pub(super) active_subpass_input_attachments: Vec<Vec<wgt::SubpassInputAttachment>>,
+    /// Per-subpass color-attachment slot → render-pass attachment index.
+    pub(super) active_subpass_color_attachment_indices: Vec<Vec<u32>>,
+    /// Per-color-slot raw `VkImageView` of the active render pass; sparse
+    /// (matches the `color_attachments` slot list in the descriptor).
+    pub(super) active_color_attachment_views: Vec<Option<vk::ImageView>>,
+    /// Raw `VkImageView` of the depth/stencil attachment, when present.
+    pub(super) active_depth_stencil_view: Option<vk::ImageView>,
+    /// Last input-attachment descriptor set bound by `set_render_pipeline`.
+    /// Reset on each subpass advance to force a re-bind on the new subpass.
+    pub(super) active_input_attachment_descriptor_set: Option<vk::DescriptorSet>,
+    /// Pool of `VkDescriptorPool`s allocated by `begin_subpass_render_pass`,
+    /// drained on encoder reset / drop.
+    pub(super) input_attachment_descriptor_pools: Vec<vk::DescriptorPool>,
+    // tiled-fork: end input-attachment-state
 }
 
 // tiled-fork: begin subpass-state-struct
@@ -1079,6 +1134,12 @@ impl Drop for CommandEncoder {
             unsafe { self.device.raw.destroy_image_view(view.raw, None) };
         }
 
+        // tiled-fork: begin drop-input-attachment-pools
+        for pool in self.input_attachment_descriptor_pools.drain(..) {
+            unsafe { self.device.raw.destroy_descriptor_pool(pool, None) };
+        }
+        // tiled-fork: end drop-input-attachment-pools
+
         self.counters.command_encoders.sub(1);
     }
 }
@@ -1118,10 +1179,37 @@ pub enum ShaderModule {
 
 impl crate::DynShaderModule for ShaderModule {}
 
+// tiled-fork: begin input-attachment-binding
+/// Recorded subpass-input binding for a render pipeline.
+///
+/// One entry per `subpassInput` global the fragment shader consumes. The
+/// `binding` index is the same as the slot in the shared
+/// [`DeviceShared::input_attachment_descriptor_set_layout`].
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PipelineInputAttachmentBinding {
+    pub(super) binding: u32,
+}
+// tiled-fork: end input-attachment-binding
+
 #[derive(Debug)]
 pub struct RenderPipeline {
     raw: vk::Pipeline,
     is_multiview: bool,
+    // tiled-fork: begin pipeline-subpass-fields
+    /// Recorded so [`set_render_pipeline`] can call `vkCmdBindDescriptorSets`
+    /// without re-resolving the layout from the bind groups.
+    pub(super) layout: vk::PipelineLayout,
+    /// Mirrors [`PipelineLayout::input_attachment_descriptor_set_index`].
+    pub(super) input_attachment_descriptor_set_index: u32,
+    /// Subpass-input bindings consumed by the fragment shader. Empty when the
+    /// pipeline does not target a subpass.
+    pub(super) input_attachments: Vec<PipelineInputAttachmentBinding>,
+    /// Subpass index this pipeline targets within its compatible render pass.
+    /// `0` for non-subpass pipelines (i.e. legacy single-subpass pipelines
+    /// created via [`Device::create_render_pipeline`]).
+    #[allow(dead_code)]
+    pub(super) subpass_index: u32,
+    // tiled-fork: end pipeline-subpass-fields
 }
 
 impl crate::DynRenderPipeline for RenderPipeline {}

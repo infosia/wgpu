@@ -23,7 +23,8 @@ use core::num::NonZeroU32;
 use crate::dynamic::{DynQuerySet, DynTextureView};
 use crate::{
     Api, ColorAttachment, CommandEncoder, DepthStencilAttachment, Device, DeviceError,
-    DynTransientAttachment, DynTransientDispatch, Label, PassTimestampWrites,
+    DynTransientAttachment, DynTransientDispatch, Label, PassTimestampWrites, PipelineError,
+    RenderPipelineDescriptor,
 };
 
 // ----- Extension traits ---------------------------------------------------
@@ -96,6 +97,35 @@ where
         &self,
         dispatch: <<Self as Device>::A as TiledApi>::TransientDispatch,
     );
+
+    /// Create a render pipeline targeting a specific subpass within a
+    /// multi-subpass render pass.
+    ///
+    /// The `subpass_target` argument carries the full subpass structure
+    /// (color/depth formats, per-subpass attachment descriptors, dependencies)
+    /// that backends like Vulkan need to construct a *compatible* render pass
+    /// at pipeline-creation time. It is passed as a separate argument rather
+    /// than added as a field on [`RenderPipelineDescriptor`] to keep the
+    /// upstream-shared descriptor type unchanged for easier merging.
+    ///
+    /// Backends that do not need a compatible render pass at pipeline creation
+    /// (Metal, GLES) may simply forward to `Device::create_render_pipeline`
+    /// after consulting `subpass_target` for input-attachment format
+    /// derivation as needed.
+    ///
+    /// # Safety
+    /// See [`Device::create_render_pipeline`].
+    #[allow(clippy::type_complexity)]
+    unsafe fn create_subpass_render_pipeline(
+        &self,
+        desc: &RenderPipelineDescriptor<
+            '_,
+            <<Self as Device>::A as Api>::PipelineLayout,
+            <<Self as Device>::A as Api>::ShaderModule,
+            <<Self as Device>::A as Api>::PipelineCache,
+        >,
+        subpass_target: &wgt::SubpassTarget,
+    ) -> Result<<<Self as Device>::A as Api>::RenderPipeline, PipelineError>;
 }
 
 /// Command-encoder-side extension trait for tiled rendering.
