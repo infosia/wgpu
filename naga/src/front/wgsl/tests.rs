@@ -1222,3 +1222,139 @@ error: `@input_attachment_index` is no longer supported
     }
 }
 // tiled-fork: end tests (subpass_input frontend)
+
+// tiled-fork: begin tests (color_attribute frontend)
+mod color_attribute {
+    use super::parse_str;
+    use crate::front::wgsl::assert_parse_err;
+
+    #[test]
+    fn color_attribute_on_fragment_arg_parses_and_lowers() {
+        // `@color(0)` on a fragment-stage entry-point argument is accepted and
+        // lowers to `Binding::ColorAttachmentRead { attachment: 0 }`.
+        let module = parse_str(
+            "
+@fragment
+fn fs(@color(0) prev: vec4<f32>) -> @location(0) vec4<f32> {
+    return prev;
+}
+",
+        )
+        .unwrap();
+
+        let entry = module
+            .entry_points
+            .iter()
+            .find(|ep| ep.name == "fs")
+            .expect("fragment entry point");
+        let arg = entry
+            .function
+            .arguments
+            .first()
+            .expect("entry-point argument");
+        match arg.binding {
+            Some(crate::Binding::ColorAttachmentRead { attachment, .. }) => {
+                assert_eq!(attachment, 0);
+            }
+            ref other => panic!("expected ColorAttachmentRead, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn color_attribute_on_vertex_arg_is_rejected() {
+        // `@color(N)` is only allowed on fragment-stage entry points; on a
+        // vertex entry-point arg it is reported as an unknown attribute.
+        assert_parse_err(
+            "
+@vertex
+fn vs(@color(0) prev: vec4<f32>) -> @builtin(position) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+}
+",
+            "\
+error: unknown attribute: `color`
+  ┌─ wgsl:3:8
+  │
+3 │ fn vs(@color(0) prev: vec4<f32>) -> @builtin(position) vec4<f32> {
+  │        ^^^^^ unknown attribute
+
+",
+        );
+    }
+
+    #[test]
+    fn color_attribute_on_struct_member_is_rejected() {
+        // Struct members never accept `@color`, even when the struct is later
+        // used as a fragment-stage input.
+        assert_parse_err(
+            "
+struct FsIn {
+    @color(0) prev: vec4<f32>,
+}
+",
+            "\
+error: @color is only valid on fragment-entry parameters, not struct members
+  ┌─ wgsl:3:6
+  │
+3 │     @color(0) prev: vec4<f32>,
+  │      ^^^^^ invalid @color placement
+
+",
+        );
+    }
+
+    #[test]
+    fn color_attribute_on_fragment_return_is_rejected() {
+        // Function results never accept `@color`; the binding parser is
+        // invoked with `allow_color = false` for the return-binding path.
+        assert_parse_err(
+            "
+@fragment
+fn fs() -> @color(0) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+}
+",
+            "\
+error: unknown attribute: `color`
+  ┌─ wgsl:3:13
+  │
+3 │ fn fs() -> @color(0) vec4<f32> {
+  │             ^^^^^ unknown attribute
+
+",
+        );
+    }
+
+    #[cfg(wgsl_out)]
+    #[test]
+    fn color_attribute_round_trips_through_wgsl_backend() {
+        // The WGSL backend re-emits `@color(N)` on the lowered fragment arg,
+        // and the re-parsed shader contains the original attribute.
+        let source = "
+@fragment
+fn fs(@color(2) prev: vec4<f32>) -> @location(0) vec4<f32> {
+    return prev;
+}
+";
+        let module = parse_str(source).unwrap();
+        let info = crate::valid::Validator::new(
+            crate::valid::ValidationFlags::all(),
+            crate::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("module is valid");
+
+        let mut out = alloc::string::String::new();
+        let mut writer =
+            crate::back::wgsl::Writer::new(&mut out, crate::back::wgsl::WriterFlags::empty());
+        writer.write(&module, &info).expect("wgsl write succeeds");
+        assert!(
+            out.contains("@color(2)"),
+            "expected `@color(2)` in WGSL output, got:\n{out}"
+        );
+
+        // Re-parse the emitted WGSL to confirm it round-trips cleanly.
+        parse_str(&out).expect("re-parse round-tripped WGSL");
+    }
+}
+// tiled-fork: end tests (color_attribute frontend)

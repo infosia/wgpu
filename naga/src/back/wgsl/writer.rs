@@ -30,6 +30,9 @@ enum Attribute {
     Invariant,
     Interpolate(Option<crate::Interpolation>, Option<crate::Sampling>),
     Location(u32),
+    // tiled-fork: begin variant (color_attribute back)
+    Color(u32),
+    // tiled-fork: end variant (color_attribute back)
     BlendSrc(u32),
     Stage(ShaderStage),
     WorkGroupSize([u32; 3]),
@@ -558,6 +561,9 @@ impl<W: Write> Writer<W> {
         for attribute in attributes {
             match *attribute {
                 Attribute::Location(id) => write!(self.out, "@location({id}) ")?,
+                // tiled-fork: begin arm (color_attribute back: emission)
+                Attribute::Color(id) => write!(self.out, "@color({id}) ")?,
+                // tiled-fork: end arm (color_attribute back: emission)
                 Attribute::BlendSrc(blend_src) => write!(self.out, "@blend_src({blend_src}) ")?,
                 Attribute::BuiltIn(builtin_attrib) => {
                     let builtin = builtin_attrib.to_wgsl_if_implemented()?;
@@ -2172,9 +2178,8 @@ fn map_binding_to_attribute(binding: &crate::Binding) -> Vec<Attribute> {
             attrs
         }
         // tiled-fork: begin arm (Binding::ColorAttachmentRead)
-        #[allow(clippy::todo)]
-        crate::Binding::ColorAttachmentRead { .. } => {
-            todo!("Phase 6b: framebuffer-fetch (@color) emission for the WGSL backend")
+        crate::Binding::ColorAttachmentRead { attachment, .. } => {
+            vec![Attribute::Color(attachment)]
         }
         // tiled-fork: end arm (Binding::ColorAttachmentRead)
     }

@@ -4867,6 +4867,13 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
     ) -> Result<'source, Option<ir::Binding>> {
         Ok(match *binding {
             Some(ast::Binding::BuiltIn(b)) => Some(ir::Binding::BuiltIn(b)),
+            // tiled-fork: begin arm (color_attribute lower)
+            Some(ast::Binding::ColorAttachmentRead { attachment_expr }) => {
+                Some(ir::Binding::color_attachment_read(
+                    self.const_u32(attachment_expr, &mut ctx.as_const())?.0,
+                ))
+            }
+            // tiled-fork: end arm (color_attribute lower)
             Some(ast::Binding::Location {
                 location,
                 interpolation,

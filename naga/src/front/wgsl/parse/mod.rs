@@ -160,6 +160,9 @@ impl<T> ParsedAttribute<T> {
 
 #[derive(Default)]
 struct BindingParser<'a> {
+    // tiled-fork: begin field (binding_parser_color)
+    color: ParsedAttribute<Handle<ast::Expression<'a>>>,
+    // tiled-fork: end field (binding_parser_color)
     location: ParsedAttribute<Handle<ast::Expression<'a>>>,
     built_in: ParsedAttribute<crate::BuiltIn>,
     interpolation: ParsedAttribute<crate::Interpolation>,
@@ -176,9 +179,23 @@ impl<'a> BindingParser<'a> {
         lexer: &mut Lexer<'a>,
         name: &'a str,
         name_span: Span,
+        // tiled-fork: begin param (binding_parser_color)
+        allow_color: bool,
+        // tiled-fork: end param (binding_parser_color)
         ctx: &mut ExpressionContext<'a, '_, '_>,
     ) -> Result<'a, ()> {
         match name {
+            // tiled-fork: begin arm (binding_parser_color)
+            "color" => {
+                if !allow_color {
+                    return Err(Box::new(Error::UnknownAttribute(name_span)));
+                }
+                lexer.expect(Token::Paren('('))?;
+                self.color.set(parser.expression(lexer, ctx)?, name_span)?;
+                lexer.next_if(Token::Separator(','));
+                lexer.expect(Token::Paren(')'))?;
+            }
+            // tiled-fork: end arm (binding_parser_color)
             "location" => {
                 lexer.expect(Token::Paren('('))?;
                 self.location
@@ -238,7 +255,9 @@ impl<'a> BindingParser<'a> {
     }
 
     fn finish(self, span: Span) -> Result<'a, Option<ast::Binding<'a>>> {
+        // tiled-fork: begin block (binding_parser_color finish)
         match (
+            self.color.value,
             self.location.value,
             self.built_in.value,
             self.interpolation.value,
@@ -247,8 +266,20 @@ impl<'a> BindingParser<'a> {
             self.blend_src.value,
             self.per_primitive.value,
         ) {
-            (None, None, None, None, false, None, None) => Ok(None),
-            (Some(location), None, interpolation, sampling, false, blend_src, per_primitive) => {
+            (None, None, None, None, None, false, None, None) => Ok(None),
+            (Some(attachment_expr), None, None, None, None, false, None, None) => {
+                Ok(Some(ast::Binding::ColorAttachmentRead { attachment_expr }))
+            }
+            (
+                None,
+                Some(location),
+                None,
+                interpolation,
+                sampling,
+                false,
+                blend_src,
+                per_primitive,
+            ) => {
                 // Before handing over the completed `Module`, we call
                 // `apply_default_interpolation` to ensure that the interpolation and
                 // sampling have been explicitly specified on all vertex shader output and fragment
@@ -261,16 +292,24 @@ impl<'a> BindingParser<'a> {
                     per_primitive: per_primitive.is_some(),
                 }))
             }
-            (None, Some(crate::BuiltIn::Position { .. }), None, None, invariant, None, None) => {
-                Ok(Some(ast::Binding::BuiltIn(crate::BuiltIn::Position {
-                    invariant,
-                })))
-            }
-            (None, Some(built_in), None, None, false, None, None) => {
+            (
+                None,
+                None,
+                Some(crate::BuiltIn::Position { .. }),
+                None,
+                None,
+                invariant,
+                None,
+                None,
+            ) => Ok(Some(ast::Binding::BuiltIn(crate::BuiltIn::Position {
+                invariant,
+            }))),
+            (None, None, Some(built_in), None, None, false, None, None) => {
                 Ok(Some(ast::Binding::BuiltIn(built_in)))
             }
-            (_, _, _, _, _, _, _) => Err(Box::new(Error::InconsistentBinding(span))),
+            (_, _, _, _, _, _, _, _) => Err(Box::new(Error::InconsistentBinding(span))),
         }
+        // tiled-fork: end block (binding_parser_color finish)
     }
 }
 
@@ -934,7 +973,18 @@ impl Parser {
                         lexer.expect(Token::Paren(')'))?;
                         align.set(expr, name_span)?;
                     }
-                    (word, word_span) => bind_parser.parse(self, lexer, word, word_span, ctx)?,
+                    // tiled-fork: begin arm (color_attribute struct member rejection)
+                    ("color", name_span) => {
+                        return Err(Box::new(Error::ColorAttributeNotAllowedOnStructMember(
+                            name_span,
+                        )));
+                    }
+                    // tiled-fork: end arm (color_attribute struct member rejection)
+                    (word, word_span) => {
+                        // tiled-fork: begin call (color_attribute struct member: allow_color=false)
+                        bind_parser.parse(self, lexer, word, word_span, false, ctx)?
+                        // tiled-fork: end call (color_attribute struct member: allow_color=false)
+                    }
                 }
             }
 
@@ -1681,6 +1731,9 @@ impl Parser {
     fn varying_binding<'a>(
         &mut self,
         lexer: &mut Lexer<'a>,
+        // tiled-fork: begin param (color_attribute varying_binding)
+        allow_color: bool,
+        // tiled-fork: end param (color_attribute varying_binding)
         ctx: &mut ExpressionContext<'a, '_, '_>,
     ) -> Result<'a, Option<ast::Binding<'a>>> {
         let mut bind_parser = BindingParser::default();
@@ -1688,7 +1741,9 @@ impl Parser {
 
         while lexer.next_if(Token::Attribute) {
             let (word, span) = lexer.next_ident_with_span()?;
-            bind_parser.parse(self, lexer, word, span, ctx)?;
+            // tiled-fork: begin call (color_attribute varying_binding plumbing)
+            bind_parser.parse(self, lexer, word, span, allow_color, ctx)?;
+            // tiled-fork: end call (color_attribute varying_binding plumbing)
         }
 
         let span = self.pop_rule_span(lexer);
@@ -1700,6 +1755,9 @@ impl Parser {
         lexer: &mut Lexer<'a>,
         diagnostic_filter_leaf: Option<Handle<DiagnosticFilterNode>>,
         must_use: Option<Span>,
+        // tiled-fork: begin param (color_attribute function_decl)
+        allow_color_argument_binding: bool,
+        // tiled-fork: end param (color_attribute function_decl)
         out: &mut ast::TranslationUnit<'a>,
         dependencies: &mut FastIndexSet<ast::Dependency<'a>>,
     ) -> Result<'a, ast::Function<'a>> {
@@ -1733,7 +1791,9 @@ impl Parser {
                     ExpectedToken::Token(Token::Separator(',')),
                 )));
             }
-            let binding = self.varying_binding(lexer, &mut ctx)?;
+            // tiled-fork: begin call (color_attribute function_decl arg)
+            let binding = self.varying_binding(lexer, allow_color_argument_binding, &mut ctx)?;
+            // tiled-fork: end call (color_attribute function_decl arg)
 
             let param_name = lexer.next_ident()?;
 
@@ -1751,7 +1811,9 @@ impl Parser {
         }
         // read return type
         let result = if lexer.next_if(Token::Arrow) {
-            let binding = self.varying_binding(lexer, &mut ctx)?;
+            // tiled-fork: begin call (color_attribute function_decl return: allow_color=false)
+            let binding = self.varying_binding(lexer, false, &mut ctx)?;
+            // tiled-fork: end call (color_attribute function_decl return: allow_color=false)
             let ty = self.type_specifier(lexer, &mut ctx)?;
             let must_use = must_use.is_some();
             Some(ast::FunctionResult {
@@ -2143,6 +2205,9 @@ impl Parser {
                     lexer,
                     diagnostic_filter_leaf,
                     must_use.value,
+                    // tiled-fork: begin arg (color_attribute: only fragment entry-points allow @color)
+                    stage.value == Some(ShaderStage::Fragment),
+                    // tiled-fork: end arg (color_attribute: only fragment entry-points allow @color)
                     out,
                     &mut dependencies,
                 )?;

@@ -215,6 +215,9 @@ pub(crate) enum Error<'a> {
     UnknownRayFlag(Span),
     RepeatedAttribute(Span),
     UnknownAttribute(Span),
+    // tiled-fork: begin variant (color_attribute error)
+    ColorAttributeNotAllowedOnStructMember(Span),
+    // tiled-fork: end variant (color_attribute error)
     UnknownBuiltin(Span),
     UnknownAccess(Span),
     UnknownIdent(Span, &'a str),
@@ -727,6 +730,14 @@ impl<'a> Error<'a> {
                 labels: vec![(bad_span, "unknown attribute".into())],
                 notes: vec![],
             },
+            // tiled-fork: begin arm (color_attribute error)
+            Error::ColorAttributeNotAllowedOnStructMember(bad_span) => ParseError {
+                message: "@color is only valid on fragment-entry parameters, not struct members"
+                    .to_string(),
+                labels: vec![(bad_span, "invalid @color placement".into())],
+                notes: vec![],
+            },
+            // tiled-fork: end arm (color_attribute error)
             Error::UnknownBuiltin(bad_span) => ParseError {
                 message: format!("unknown builtin: `{}`", &source[bad_span]),
                 labels: vec![(bad_span, "unknown builtin".into())],

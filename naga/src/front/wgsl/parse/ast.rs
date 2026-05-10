@@ -240,6 +240,17 @@ pub struct Function<'a> {
 #[derive(Debug)]
 pub enum Binding<'a> {
     BuiltIn(crate::BuiltIn),
+    // tiled-fork: begin variant (color_attribute ast)
+    /// `@color(attachment_expr)` — framebuffer-fetch read for the indexed
+    /// color attachment.
+    ///
+    /// Only valid on fragment-stage entry-point arguments. The expression is
+    /// evaluated to a `u32` during lowering.
+    #[non_exhaustive]
+    ColorAttachmentRead {
+        attachment_expr: Handle<Expression<'a>>,
+    },
+    // tiled-fork: end variant (color_attribute ast)
     Location {
         location: Handle<Expression<'a>>,
         interpolation: Option<crate::Interpolation>,
