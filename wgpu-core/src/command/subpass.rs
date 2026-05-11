@@ -476,6 +476,13 @@ impl Global {
                 let _ = cmd_buf.encoder.open_pass(label_owned.as_deref())?;
 
                 let snatch_guard = device.snatchable_lock.read();
+                // tiled-fork: emit pre-pass texture-layout barriers so the
+                // resource tracker matches the layouts the HAL render pass
+                // expects on entry. Without this the Vulkan validation layer
+                // reports `InvalidImageLayout` (expected
+                // COLOR_ATTACHMENT_OPTIMAL, got UNDEFINED) and the
+                // post-pass swapchain transition to PRESENT_SRC never fires.
+                emit_pre_pass_barriers(cmd_buf, &resolved, &snatch_guard);
                 dispatch_hal_begin(
                     cmd_buf.encoder.raw.as_mut(),
                     &resolved,
@@ -1423,6 +1430,88 @@ where
             load,
             store,
         }))
+    }
+}
+
+/// Emit `transition_textures` barriers ahead of `vkCmdBeginRenderPass` so
+/// the wgpu-core resource tracker reflects the layouts the HAL render pass
+/// expects on entry. Walks the descriptor's persistent color, color-resolve,
+/// and depth/stencil attachments, sets their tracker state to the matching
+/// `TextureUses`, and emits any pending transitions as one batched HAL call.
+///
+/// Errors during raw-view lookup (e.g. a destroyed texture) are silently
+/// skipped because the subsequent `dispatch_hal_begin` will re-report the
+/// missing view through `SubpassRenderPassError::DescriptorInvalid`, which
+/// surfaces a better diagnostic.
+fn emit_pre_pass_barriers(
+    cmd_buf: &mut CommandBufferMutable,
+    resolved: &ResolvedDescriptor,
+    snatch_guard: &crate::snatch::SnatchGuard<'_>,
+) {
+    let mut barriers: Vec<hal::TextureBarrier<'_, dyn hal::DynTexture>> = Vec::new();
+
+    // Color attachments + their resolve targets.
+    for color in &resolved.color_attachments {
+        let Some(at) = color else { continue };
+        push_transitions(
+            &mut cmd_buf.trackers,
+            &at.view.parent,
+            at.view.selector.clone(),
+            wgt::TextureUses::COLOR_TARGET,
+            snatch_guard,
+            &mut barriers,
+        );
+        if let Some(ref resolve_view) = at.resolve_target {
+            push_transitions(
+                &mut cmd_buf.trackers,
+                &resolve_view.parent,
+                resolve_view.selector.clone(),
+                wgt::TextureUses::COLOR_TARGET,
+                snatch_guard,
+                &mut barriers,
+            );
+        }
+    }
+
+    // Depth/stencil attachment. Phase 11j default: treat as
+    // `DEPTH_STENCIL_WRITE` because the deferred-rendering example and the
+    // typical multi-subpass shape write depth in the geometry pass. A
+    // read-only-depth refinement (matching upstream
+    // `RenderPassInfo::start`) is a Phase 11j follow-up.
+    if let Some(ref ds) = resolved.depth_stencil_attachment {
+        push_transitions(
+            &mut cmd_buf.trackers,
+            &ds.view.parent,
+            ds.view.selector.clone(),
+            wgt::TextureUses::DEPTH_STENCIL_WRITE,
+            snatch_guard,
+            &mut barriers,
+        );
+    }
+
+    if !barriers.is_empty() {
+        unsafe {
+            cmd_buf.encoder.raw.as_mut().transition_textures(&barriers);
+        }
+    }
+}
+
+fn push_transitions<'a>(
+    trackers: &mut crate::track::Tracker,
+    texture: &'a Arc<crate::resource::Texture>,
+    selector: wgt::TextureSelector,
+    usage: wgt::TextureUses,
+    snatch_guard: &'a crate::snatch::SnatchGuard<'_>,
+    out: &mut Vec<hal::TextureBarrier<'a, dyn hal::DynTexture>>,
+) {
+    let pending: Vec<_> = trackers
+        .textures
+        .set_single(texture, selector, usage)
+        .collect();
+    if let Some(raw) = texture.raw(snatch_guard) {
+        for p in pending {
+            out.push(p.into_hal(raw));
+        }
     }
 }
 
