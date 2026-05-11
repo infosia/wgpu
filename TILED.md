@@ -286,10 +286,10 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
 - [x] Phase 6c — naga SPIR-V backend: SubpassData type + OpImageRead emission, SPV_EXT_shader_tile_image
 - [x] Phase 6d — naga MSL backend: [[color(N)]] fragment-arg emission for subpass + framebuffer fetch
 - [x] Phase 6e — naga GLSL backend: subpassInput/inout dual-mode emission
-- [~] Phase 7 — Examples
+- [x] Phase 7 — Examples
   - [x] Phase 7a — `subpass_render_graph` headless smoke test (2-subpass persistent attachments; no shaders/draws yet)
   - [x] Phase 7b — `deferred_rendering` (3-subpass G-buffer/lighting/composite). Runs end-to-end on Vulkan after Phase 11i (60 FPS verified locally).
-  - [ ] Phase 7c — `subpass_msaa` (2-subpass MSAA line demo) — same descriptor pattern as 7b. Should run after Phase 11i; not yet ported.
+  - [x] Phase 7c — `subpass_msaa` (2-subpass MSAA line demo). Runs end-to-end on Vulkan at 60 FPS with zero validation messages in debug mode. Left/Right arrow keys toggle between 1x and adapter-max MSAA; MSAA mode adds a follow-up regular pass to resolve the MSAA intermediate into the swapchain. Phase 7 set complete.
 - [x] Phase 8 — Tests + benches (naga snapshot fixtures: subpass-* + framebuffer-fetch-*)
 - [x] Phase 9 — Backend real impls (Vulkan, Metal, GLES)
   - [x] Phase 9a1 — Vulkan TransientAttachment (real VkImage + LAZILY_ALLOCATED)

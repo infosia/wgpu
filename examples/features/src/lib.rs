@@ -34,6 +34,7 @@ pub mod stencil_triangles;
 pub mod storage_texture;
 // tiled-fork: begin examples
 pub mod deferred_rendering;
+pub mod subpass_msaa;
 pub mod subpass_render_graph;
 // tiled-fork: end examples
 pub mod texture_arrays;
