@@ -411,13 +411,26 @@ impl super::DeviceShared {
                             ),
                         };
 
+                        // tiled-fork: the destination subpass also writes
+                        // its own color / depth-stencil attachments, so the
+                        // implicit layout transition between subpasses has
+                        // to cover those writes too -- not just the
+                        // INPUT_ATTACHMENT_READ from the consuming side.
+                        // Without `COLOR_ATTACHMENT_WRITE` (and the
+                        // depth/stencil bit when applicable) the Vulkan
+                        // synchronization validator reports a
+                        // WRITE_AFTER_WRITE hazard at `vkCmdNextSubpass`.
                         vk::SubpassDependency::default()
                             .src_subpass(dependency.src_subpass.0)
                             .dst_subpass(dependency.dst_subpass.0)
                             .src_stage_mask(src_stage_mask)
                             .src_access_mask(src_access_mask)
                             .dst_stage_mask(dependency_dst_stage_mask)
-                            .dst_access_mask(vk::AccessFlags::INPUT_ATTACHMENT_READ)
+                            .dst_access_mask(
+                                vk::AccessFlags::INPUT_ATTACHMENT_READ
+                                    | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                            )
                             .dependency_flags(if dependency.by_region {
                                 vk::DependencyFlags::BY_REGION
                             } else {

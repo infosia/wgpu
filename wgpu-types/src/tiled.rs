@@ -159,9 +159,14 @@ pub struct SubpassIndex(pub u32);
 pub enum SubpassInputSource {
     /// Color attachment source from a previous subpass.
     Color {
-        /// Source subpass.
+        /// Source subpass. Required to be strictly less than the
+        /// consuming subpass's index.
         subpass: SubpassIndex,
-        /// Source color attachment slot index.
+        /// **Source-subpass-local** color output slot (zero-based within
+        /// `SubpassDescriptor::color_attachment_indices` of the named
+        /// source subpass). The backend translates this through the
+        /// source subpass's `color_attachment_indices` to the pass-level
+        /// attachment slot.
         attachment_index: u32,
     },
     /// Depth/stencil attachment source from a previous subpass.

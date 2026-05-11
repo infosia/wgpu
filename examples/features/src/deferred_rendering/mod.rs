@@ -655,13 +655,18 @@ impl crate::framework::Example for Example {
             depth_or_array_layers: 1,
         };
 
+        // Intermediate attachments (albedo / normal / lit) are consumed
+        // only by downstream subpasses via input-attachment reads and have
+        // no use after the pass ends -- `StoreOp::Discard` keeps the data
+        // in tile memory and avoids a WRITE_AFTER_WRITE synchronization
+        // hazard against the next subpass's input read.
         let gbuffer_albedo_attachment = wgpu::RenderPassColorAttachment {
             view: &self.albedo_view,
             depth_slice: None,
             resolve_target: None,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                store: wgpu::StoreOp::Store,
+                store: wgpu::StoreOp::Discard,
             },
         };
         let gbuffer_normal_attachment = wgpu::RenderPassColorAttachment {
@@ -670,7 +675,7 @@ impl crate::framework::Example for Example {
             resolve_target: None,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                store: wgpu::StoreOp::Store,
+                store: wgpu::StoreOp::Discard,
             },
         };
         let lit_attachment = wgpu::RenderPassColorAttachment {
@@ -679,7 +684,7 @@ impl crate::framework::Example for Example {
             resolve_target: None,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                store: wgpu::StoreOp::Store,
+                store: wgpu::StoreOp::Discard,
             },
         };
         let output_attachment = wgpu::RenderPassColorAttachment {
@@ -746,6 +751,8 @@ impl crate::framework::Example for Example {
                 depth_stencil_attachment: None,
                 input_attachments: &[wgpu::SubpassInputAttachment {
                     binding: 0,
+                    // Subpass 1's local color slot 0 is the `lit` HDR
+                    // target (pass-level attachment 2).
                     source: wgpu::SubpassInputSource::Color {
                         subpass: wgpu::SubpassIndex(1),
                         attachment_index: 0,

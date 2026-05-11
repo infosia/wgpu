@@ -550,16 +550,30 @@ unsafe fn begin_subpass_render_pass_impl(
             }
         }
 
+        // `SubpassInputSource::Color::attachment_index` is the source
+        // subpass's *local* color-output slot (zero-based within that
+        // subpass's `color_attachment_indices`). Translate to the
+        // pass-level color slot first, then to the vk attachment index.
+        // Must match the descriptor-set resolution path in
+        // `subpass_input_descriptor_image_info`.
         let input_attachment_indices = subpass
             .input_attachments
             .iter()
             .map(|input_attachment| match input_attachment.source {
                 wgt::SubpassInputSource::Color {
-                    attachment_index, ..
-                } => color_attachment_indices
-                    .get(attachment_index as usize)
+                    subpass: source_subpass,
+                    attachment_index,
+                } => encoder
+                    .active_subpass_color_attachment_indices
+                    .get(source_subpass.0 as usize)
+                    .and_then(|locals| locals.get(attachment_index as usize))
                     .copied()
-                    .flatten()
+                    .and_then(|pass_level_slot| {
+                        color_attachment_indices
+                            .get(pass_level_slot as usize)
+                            .copied()
+                            .flatten()
+                    })
                     .unwrap_or(vk::ATTACHMENT_UNUSED),
                 wgt::SubpassInputSource::Depth { .. } => {
                     depth_stencil_attachment_index.unwrap_or(vk::ATTACHMENT_UNUSED)
