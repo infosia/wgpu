@@ -323,13 +323,14 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
     - [x] Framebuffer-cache lifecycle. Two-part fix: (1) attachment views are now registered in `trackers.views` (matching upstream `RenderPassInfo::start`), keeping the view's `Arc` alive until queue submission completes; (2) the `VkFramebuffer` cache moved from per-`CommandEncoder` to `DeviceShared` with a reverse-lookup from view identity to dependent framebuffer keys, and `Device::destroy_texture_view` now sweeps the dependent framebuffers before destroying the underlying `VkImageView`. Verified: deferred_rendering runs at 60 FPS in debug mode with **zero validation messages**.
     - [x] Read-only-depth refinement (Phase 11j3). `emit_pre_pass_barriers` now mirrors upstream's `RenderPassInfo::start` pattern: when both depth and stencil aspects are read-only AND the device supports `DownlevelFlags::READ_ONLY_DEPTH_STENCIL`, the transition target is `DEPTH_STENCIL_READ | RESOURCE` so the same attachment can be sampled in the pass; otherwise the typical `DEPTH_STENCIL_WRITE`.
 
-## Snapshot at session end (2026-05-11)
+## Snapshot at session end (2026-05-12)
 
-The fork has landed Phases 0-6e, 8, 9 (a1/a2/a3, b, c), 10, 11 (a, b, c,
-d1/d2/d3/d4, f) across 28 commits on `feature/tiled`. Cumulative diff
-against the branch base is ~12,000 LOC across ~130 files (~95% of it
-in fork-only new files). `git grep "tiled-fork:"` enumerates every
-divergence point against upstream-shared files.
+The fork has landed Phases 0-6e, 7 (a/b/c), 8, 9 (a1/a2/a3, b, c), 10,
+11 (a, b, c, d1/d2/d3/d4, f, g, h, i, i2, j, j2, j3) across 40 commits
+on `feature/tiled`. Cumulative diff against the branch base is
+~14,700 LOC across ~147 files (~95% of it in fork-only new files).
+`git grep "tiled-fork:"` enumerates every divergence point against
+upstream-shared files.
 
 ### What works end-to-end on Vulkan / Metal / GLES
 
@@ -348,14 +349,15 @@ let transient = device.create_transient_attachment(&desc)?;
 //      GLES:  `glRenderbuffer` (MSAA-capable).
 //   Drop cleans up via `device.raw_tiled().destroy_transient_attachment_dyn`.
 
-let pipeline = device.create_subpass_render_pipeline(&SubpassRenderPipelineDescriptor {
-    base: rp_desc,
-    subpass_target: target,
-})?;
+let pipeline = device.create_subpass_render_pipeline(
+    &SubpassRenderPipelineDescriptor::new(rp_desc, target),
+);
 //   -> Vulkan: builds a compatible VkRenderPass from `SubpassTarget` and
 //      records input-attachment descriptor-set bindings.
 //      Metal / GLES: forwards to `create_render_pipeline` (no compat pass
 //      needed; format derivation will land later).
+//   `::new` constructor (Phase 11h) lets external callers build the
+//   `#[non_exhaustive]` descriptor without struct-update syntax.
 
 let mut pass = encoder.begin_subpass_render_pass(&SubpassRenderPassDescriptor { ... });
 //   -> Vulkan: vkCmdBeginRenderPass on the multi-subpass VkRenderPass +
@@ -385,8 +387,8 @@ pass.end();
 
 Cross-cutting verifications:
 - `cargo check --workspace`               : clean
-- `cargo clippy --workspace -D warnings`  : clean (every backend combo)
-- `cargo test -p wgpu-types`              : 85 unit + 14 doc tests
+- `cargo clippy --workspace --all-targets -- -D warnings` : clean
+- `cargo test -p wgpu-types`              : 84 unit + 14 doc tests
 - `cargo test -p wgpu-hal --features vulkan,gles tiled` : 18 tests
 - `cargo test -p naga --lib`              : 135 tests
 - `cargo test -p naga --test naga`        : 200 snapshot tests (incl.
@@ -394,35 +396,47 @@ Cross-cutting verifications:
 - `cargo test -p wgpu-core --lib`         : 42 tests
 - `cargo test -p wgpu --lib`              : 17 tests
 
+Visual / runtime verifications on Vulkan (NVIDIA RTX 5060 Ti, Windows):
+- `subpass_render_graph`   : headless 2-subpass smoke; submits + polls clean.
+- `deferred_rendering`     : 3-subpass G-buffer / Lighting / Composite; 60 FPS.
+- `subpass_msaa`           : 2-subpass MSAA line demo; 60 FPS at 1x and 16x.
+
+All three run with **zero Vulkan validation messages** in debug mode.
+
+### What's resolved this session
+
+- ~~**Phase 7 — visual examples.**~~ All three landed: `subpass_render_graph`
+  (7a, headless 2-subpass smoke), `deferred_rendering` (7b, 3-subpass
+  G-buffer / Lighting / Composite), `subpass_msaa` (7c, 2-subpass MSAA
+  line demo with 1x/16x toggle). Reference-fork's `RenderGraphBuilder`
+  + extended `Limits` are not ported; examples construct
+  `SubpassRenderPassDescriptor` / `SubpassDescriptor` arrays literally
+  and use Phase-11h `SubpassRenderPipelineDescriptor::new` to build
+  subpass-aware pipelines. Visual demos run at 60 FPS on Vulkan with
+  zero validation messages.
+
+- ~~Resource-tracker registration in `SubpassRenderPass`~~ — Phase 11g.
+
+- ~~`BindingType::SubpassInput` wiring~~ — Phase 11i: variant added to
+  `wgt::BindingType` plus bind-group-layout / pipeline-layout /
+  bind-group / wgpu-hal descriptor-set plumbing. Phase 11i2 layered on
+  scalar-kind validation so `subpass_input<i32>` bound against an
+  `f32` attachment fails at pipeline-layout-derivation time.
+
+- ~~Vulkan validation cleanup~~ — Phase 11j family: pre-pass barriers
+  (11j), framebuffer-cache lifecycle (11j2, device-scoped cache with
+  reverse-lookup), read-only-depth refinement (11j3). Together cleared
+  all four debug-mode validation errors reported by the example runs.
+
+- ~~`SubpassRenderPipelineDescriptor` construction~~ — Phase 11h added a
+  public `::new` constructor so external callers (the Phase 7b/7c
+  examples) can build the descriptor without dropping
+  `#[non_exhaustive]`.
+
 ### What's deferred / still rough
 
 These are documented limitations that wouldn't block visual examples
 but should be addressed in subsequent passes:
-
-- **Phase 7 — visual examples.** Phase 7a landed a headless
-  `subpass_render_graph` smoke test (2-subpass persistent attachments,
-  no shaders/draws — exercises `begin_subpass_render_pass` +
-  `next_subpass` + drop end-to-end). Phases 7b (`deferred_rendering`)
-  and 7c (`subpass_msaa`) are deferred: both reference-fork examples
-  rely on `RenderGraphBuilder` (declarative subpass graph) and the
-  reference's extended `Limits` (`max_subpasses`,
-  `max_input_attachments`, `max_subpass_color_attachments`), neither
-  of which is ported in this fork per the "no breaking changes" rule.
-  Porting them requires rewriting the example bodies to build
-  `SubpassRenderPassDescriptor` / `SubpassDescriptor` arrays
-  literally and using `TiledCapabilities` for capacity queries — a
-  ~1,500-LOC follow-up that mirrors the reference scene visually but
-  uses a different declaration surface.
-
-- ~~Resource-tracker registration in `SubpassRenderPass`~~ — **fixed
-  in Phase 11g.** `set_pipeline`, `set_bind_group`, `set_vertex_buffer`,
-  and `set_index_buffer` now insert their resource Arcs into
-  `cmd_buf.trackers` so they survive until queue submission. Buffer
-  bindings additionally record `BufferUses::VERTEX|INDEX` via
-  `BufferTracker::set_single`. (The per-draw barrier-plan side of
-  upstream's tracking — `UsageScope::merge_single` — is still not
-  wired; that's a separate sub-pass on the per-draw validation
-  hardening listed below.)
 
 - **wgpu-side draw validation gaps in `SubpassRenderPass`.**
   `set_pipeline` skips `pass_context.check_compatible` and pipeline
@@ -432,7 +446,9 @@ but should be addressed in subsequent passes:
   `draw` / `draw_indexed` skip vertex-buffer-limit checks.
   `set_viewport` / `set_scissor_rect` skip range / zero-size checks.
   All of these mirror upstream's checks; replicating them is layered
-  validation work, not architectural.
+  validation work, not architectural. Phase 11g closed the
+  resource-tracker side; Phase 11j family closed the barrier side;
+  per-draw parameter validation is the remaining slice.
 
 - **`set_bind_group(index, None, &[])`** silently elides the HAL call
   rather than unbinding. State drifts from the upstream binder model;
@@ -472,7 +488,10 @@ but should be addressed in subsequent passes:
   subpass's attachments when Tier A (`EXT_shader_framebuffer_fetch`)
   is unavailable. The adapter gates `MULTI_SUBPASS` /
   `TRANSIENT_ATTACHMENTS` on `has_framebuffer_fetch` to avoid the
-  miscompile.
+  miscompile. The new `BindingType::SubpassInput` arm in
+  `wgpu-hal/src/gles/device.rs` uses `unimplemented!()` for the same
+  reason — GLES's Tier-A framebuffer-fetch lowering emits `inout`
+  declarations rather than a discrete subpass-input binding.
 
 - **DX12 backend.** Permanent stub: returns
   `Err(DeviceError::Unexpected)` from every tiled-trait method.
