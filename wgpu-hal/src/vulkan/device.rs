@@ -1436,6 +1436,12 @@ impl crate::Device for super::Device {
         })
     }
     unsafe fn destroy_texture_view(&self, view: super::TextureView) {
+        // tiled-fork: invalidate any cached framebuffers that reference
+        // this view before destroying the underlying VkImageView, so we
+        // don't leave the device's framebuffer cache holding a dangling
+        // handle (`VUID-vkDestroyImageView-imageView-01026`).
+        self.shared
+            .destroy_framebuffers_referencing(view.view_identity);
         unsafe { self.shared.raw.destroy_image_view(view.raw, None) };
 
         self.counters.texture_views.sub(1);
@@ -1530,7 +1536,7 @@ impl crate::Device for super::Device {
             discarded: Vec::new(),
             rpass_debug_marker_active: false,
             end_of_pass_timer_query: None,
-            framebuffers: Default::default(),
+            // tiled-fork: framebuffer cache now device-scoped; no init here.
             temp_texture_views: Default::default(),
             counters: Arc::clone(&self.counters),
             current_pipeline_is_multiview: false,
@@ -3040,6 +3046,114 @@ impl crate::Device for super::Device {
 }
 
 impl super::DeviceShared {
+    // tiled-fork: begin framebuffer-cache-methods
+    /// Get-or-create a `VkFramebuffer` from the device-scoped cache.
+    ///
+    /// Inserts a reverse-lookup entry for every attachment view identity so
+    /// that `destroy_framebuffers_referencing` can invalidate this entry
+    /// when one of its views is destroyed.
+    pub(super) fn make_framebuffer(
+        &self,
+        key: super::FramebufferKey,
+    ) -> Result<vk::Framebuffer, crate::DeviceError> {
+        use hashbrown::hash_map::Entry;
+
+        let mut framebuffers = self.framebuffers.lock();
+        match framebuffers.entry(key) {
+            Entry::Occupied(e) => Ok(*e.get()),
+            Entry::Vacant(e) => {
+                let super::FramebufferKey {
+                    raw_pass,
+                    ref attachment_views,
+                    ref attachment_identities,
+                    extent,
+                } = *e.key();
+
+                let vk_info = vk::FramebufferCreateInfo::default()
+                    .render_pass(raw_pass)
+                    .width(extent.width)
+                    .height(extent.height)
+                    .layers(extent.depth_or_array_layers)
+                    .attachments(attachment_views);
+
+                let raw = unsafe {
+                    self.raw
+                        .create_framebuffer(&vk_info, None)
+                        .map_err(super::map_host_device_oom_err)?
+                };
+
+                // Record reverse-lookup entries BEFORE inserting the cache
+                // entry so the invariant "every cache entry has matching
+                // reverse-lookup rows" holds even under panics in here
+                // (the locks above are still held; no concurrent
+                // observer sees a half-built entry).
+                {
+                    let mut by_view = self.view_to_framebuffers.lock();
+                    let key_clone = e.key().clone();
+                    for identity in attachment_identities {
+                        by_view
+                            .entry(*identity)
+                            .or_insert_with(Vec::new)
+                            .push(key_clone.clone());
+                    }
+                }
+                Ok(*e.insert(raw))
+            }
+        }
+    }
+
+    /// Invalidate any cached framebuffer that references `view_identity`.
+    ///
+    /// Must be called from `destroy_texture_view` before
+    /// `vkDestroyImageView`. The wgpu-core lifecycle guarantees that no
+    /// in-flight command buffer is still using the view at this point
+    /// (see `trackers.views.insert_single` in
+    /// `wgpu-core/src/command/subpass.rs`).
+    ///
+    /// Two-phase locking is race-safe because by the time we get here the
+    /// `view_identity` is logically dead -- no caller can legitimately
+    /// build a fresh framebuffer keyed on it between the two phases. The
+    /// initial `remove` is therefore final, and the subsequent acquire of
+    /// both locks together cleans up the remaining cross-view references.
+    /// Both lock acquisitions (here and in `make_framebuffer`) always
+    /// take `framebuffers` then `view_to_framebuffers`, so there is no
+    /// deadlock risk.
+    pub(super) fn destroy_framebuffers_referencing(
+        &self,
+        view_identity: super::ResourceIdentity<vk::ImageView>,
+    ) {
+        let dependent_keys = {
+            let mut by_view = self.view_to_framebuffers.lock();
+            by_view.remove(&view_identity).unwrap_or_default()
+        };
+        if dependent_keys.is_empty() {
+            return;
+        }
+        let mut framebuffers = self.framebuffers.lock();
+        let mut by_view = self.view_to_framebuffers.lock();
+        for key in dependent_keys {
+            let Some(fb) = framebuffers.remove(&key) else {
+                continue;
+            };
+            unsafe { self.raw.destroy_framebuffer(fb, None) };
+            // Remove this framebuffer's key from every other view's
+            // reverse-lookup so a later destroy of one of the *other*
+            // views doesn't try to destroy the same VkFramebuffer twice.
+            for identity in &key.attachment_identities {
+                if *identity == view_identity {
+                    continue;
+                }
+                if let Some(list) = by_view.get_mut(identity) {
+                    list.retain(|k| k != &key);
+                    if list.is_empty() {
+                        by_view.remove(identity);
+                    }
+                }
+            }
+        }
+    }
+    // tiled-fork: end framebuffer-cache-methods
+
     pub(super) fn new_binary_semaphore(
         &self,
         name: &str,

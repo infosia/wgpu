@@ -86,32 +86,16 @@ impl super::CommandEncoder {
         }
     }
 
-    // tiled-fork: bump visibility so `tiled.rs` can build framebuffers.
+    // tiled-fork: framebuffer cache moved from per-encoder
+    // `self.framebuffers` to per-device `DeviceShared::framebuffers`. The
+    // cache now invalidates on view destroy (see
+    // `Device::destroy_texture_view`). `make_framebuffer` becomes a thin
+    // forwarder onto the device cache.
     pub(super) fn make_framebuffer(
         &mut self,
         key: super::FramebufferKey,
     ) -> Result<vk::Framebuffer, crate::DeviceError> {
-        Ok(match self.framebuffers.entry(key) {
-            Entry::Occupied(e) => *e.get(),
-            Entry::Vacant(e) => {
-                let super::FramebufferKey {
-                    raw_pass,
-                    ref attachment_views,
-                    attachment_identities: _,
-                    extent,
-                } = *e.key();
-
-                let vk_info = vk::FramebufferCreateInfo::default()
-                    .render_pass(raw_pass)
-                    .width(extent.width)
-                    .height(extent.height)
-                    .layers(extent.depth_or_array_layers)
-                    .attachments(attachment_views);
-
-                let raw = unsafe { self.device.raw.create_framebuffer(&vk_info, None).unwrap() };
-                *e.insert(raw)
-            }
-        })
+        self.device.make_framebuffer(key)
     }
 
     // tiled-fork: bump visibility so `tiled.rs` can build per-slice
@@ -238,10 +222,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.free
             .extend(cmd_bufs.into_iter().map(|cmd_buf| cmd_buf.raw));
         self.free.append(&mut self.discarded);
-        // Delete framebuffers from the framebuffer cache
-        for (_, framebuffer) in self.framebuffers.drain() {
-            unsafe { self.device.raw.destroy_framebuffer(framebuffer, None) };
-        }
+        // tiled-fork: framebuffer cache moved to `DeviceShared`. Encoder
+        // reset no longer drains it; cache entries are invalidated when
+        // their views are destroyed (see `Device::destroy_texture_view`).
         let _ = unsafe {
             self.device
                 .raw

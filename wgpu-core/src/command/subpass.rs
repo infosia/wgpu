@@ -1450,9 +1450,18 @@ fn emit_pre_pass_barriers(
 ) {
     let mut barriers: Vec<hal::TextureBarrier<'_, dyn hal::DynTexture>> = Vec::new();
 
-    // Color attachments + their resolve targets.
+    // Color attachments + their resolve targets. Each attachment view's
+    // Arc is registered in `trackers.views` so it stays alive until queue
+    // submission completes -- mirrors upstream `RenderPassInfo::start`
+    // (see `wgpu-core/src/command/render.rs:1499-1505`). Without this the
+    // view (and any cached `VkFramebuffer` referencing it) gets destroyed
+    // while a pending command buffer still references it, surfacing as
+    // `VUID-vkDestroyImageView-imageView-01026` /
+    // `VUID-vkDestroyFramebuffer-framebuffer-00892` in the Vulkan
+    // validation layer.
     for color in &resolved.color_attachments {
         let Some(at) = color else { continue };
+        cmd_buf.trackers.views.insert_single(at.view.clone());
         push_transitions(
             &mut cmd_buf.trackers,
             &at.view.parent,
@@ -1462,6 +1471,7 @@ fn emit_pre_pass_barriers(
             &mut barriers,
         );
         if let Some(ref resolve_view) = at.resolve_target {
+            cmd_buf.trackers.views.insert_single(resolve_view.clone());
             push_transitions(
                 &mut cmd_buf.trackers,
                 &resolve_view.parent,
@@ -1479,6 +1489,7 @@ fn emit_pre_pass_barriers(
     // read-only-depth refinement (matching upstream
     // `RenderPassInfo::start`) is a Phase 11j follow-up.
     if let Some(ref ds) = resolved.depth_stencil_attachment {
+        cmd_buf.trackers.views.insert_single(ds.view.clone());
         push_transitions(
             &mut cmd_buf.trackers,
             &ds.view.parent,

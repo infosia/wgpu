@@ -513,6 +513,21 @@ struct DeviceShared {
     workarounds: Workarounds,
     features: wgt::Features,
     render_passes: Mutex<FastHashMap<RenderPassKey, vk::RenderPass>>,
+    // tiled-fork: begin framebuffer-cache (device-scoped)
+    /// Cached `VkFramebuffer`s keyed by their attachment-view identities.
+    ///
+    /// Lives on the device (not the encoder) so that destroying a
+    /// `TextureView` mid-encoder-life can sweep dependent framebuffers
+    /// before the underlying `vkDestroyImageView` call -- otherwise the
+    /// framebuffer holds a dangling view handle and the validation layer
+    /// reports `VUID-vkDestroyImageView-imageView-01026`.
+    framebuffers: Mutex<FastHashMap<FramebufferKey, vk::Framebuffer>>,
+    /// Reverse index from view identity to the framebuffer keys that
+    /// reference it. Used by `destroy_texture_view` to invalidate
+    /// dependent framebuffer cache entries.
+    view_to_framebuffers:
+        Mutex<FastHashMap<ResourceIdentity<vk::ImageView>, Vec<FramebufferKey>>>,
+    // tiled-fork: end framebuffer-cache (device-scoped)
     sampler_cache: Mutex<sampler::SamplerCache>,
     memory_allocations_counter: InternalCounter,
 
@@ -553,6 +568,15 @@ impl Drop for DeviceShared {
         for &raw in self.render_passes.lock().values() {
             unsafe { self.raw.destroy_render_pass(raw, None) };
         }
+        // tiled-fork: begin framebuffer-cache-drop
+        // Framebuffer entries are otherwise live until destroy_texture_view
+        // sweeps them; clean up anything still present at device teardown.
+        // The `view_to_framebuffers` reverse-lookup is dropped implicitly
+        // with the rest of `self`, so no explicit clear is needed.
+        for (_, fb) in self.framebuffers.lock().drain() {
+            unsafe { self.raw.destroy_framebuffer(fb, None) };
+        }
+        // tiled-fork: end framebuffer-cache-drop
         unsafe {
             self.raw
                 .destroy_descriptor_set_layout(self.empty_descriptor_set_layout, None)
@@ -1046,7 +1070,8 @@ pub struct CommandEncoder {
     /// the given pool & location.
     end_of_pass_timer_query: Option<(vk::QueryPool, u32)>,
 
-    framebuffers: FastHashMap<FramebufferKey, vk::Framebuffer>,
+    // tiled-fork: framebuffer cache moved to `DeviceShared::framebuffers`
+    // so destroy_texture_view can invalidate it. Field removed here.
     temp_texture_views: FastHashMap<TempTextureViewKey, IdentifiedTextureView>,
 
     counters: Arc<wgt::HalCounters>,
@@ -1126,9 +1151,9 @@ impl Drop for CommandEncoder {
             self.device.raw.destroy_command_pool(self.raw, None);
         }
 
-        for (_, fb) in self.framebuffers.drain() {
-            unsafe { self.device.raw.destroy_framebuffer(fb, None) };
-        }
+        // tiled-fork: framebuffer cache now lives on `DeviceShared`; per-
+        // encoder drain is no longer needed. The device sweeps dead
+        // framebuffers when a `TextureView` is destroyed and on shutdown.
 
         for (_, view) in self.temp_texture_views.drain() {
             unsafe { self.device.raw.destroy_image_view(view.raw, None) };
