@@ -130,6 +130,12 @@ const EXAMPLES: &[ExampleDesc] = &[
     },
     // tiled-fork: begin examples
     ExampleDesc {
+        name: "deferred_rendering",
+        function: wgpu_examples::deferred_rendering::main,
+        webgl: false,  // No multi-subpass on GLES until Tier B FBO-rebind lands
+        webgpu: false, // No multi-subpass on WebGPU
+    },
+    ExampleDesc {
         name: "subpass_render_graph",
         function: wgpu_examples::subpass_render_graph::main,
         webgl: false,  // No multi-subpass on GLES until Tier B FBO-rebind lands

@@ -251,6 +251,8 @@ If a planned edit is harder to merge than expected, the fallback chain is:
    - `wgpu::SubpassDepthStencilAttachment`
    - `wgt::SubpassInputAttachment`
    - `wgt::SubpassDependency`
+   - `wgt::SubpassTarget`        *(Phase 7b)*
+   - `wgt::SubpassTargetDesc`    *(Phase 7b)*
 
    `SubpassRenderPipelineDescriptor` keeps `#[non_exhaustive]` because its
    only required public field is the upstream `RenderPipelineDescriptor` it
@@ -286,8 +288,8 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
 - [x] Phase 6e — naga GLSL backend: subpassInput/inout dual-mode emission
 - [~] Phase 7 — Examples
   - [x] Phase 7a — `subpass_render_graph` headless smoke test (2-subpass persistent attachments; no shaders/draws yet)
-  - [ ] Phase 7b — `deferred_rendering` (3-subpass G-buffer/lighting/composite) — requires rewriting away from reference's `RenderGraphBuilder` declarative surface (not ported) and `Limits::max_subpasses` (not added per "no breaking changes" rule)
-  - [ ] Phase 7c — `subpass_msaa` (2-subpass MSAA line demo) — same surface mismatch as 7b
+  - [~] Phase 7b — `deferred_rendering` (3-subpass G-buffer/lighting/composite). Scaffold compiles; runs through framework init + gbuffer pipeline creation; **fails at lighting pipeline creation** because `BindingType::SubpassInput` is not yet wired in `wgpu-core` (see Phase 11i below). Shaders + descriptor structure are in their target shape.
+  - [ ] Phase 7c — `subpass_msaa` (2-subpass MSAA line demo) — same surface mismatch as 7b; will also hit the Phase 11i gap.
 - [x] Phase 8 — Tests + benches (naga snapshot fixtures: subpass-* + framebuffer-fetch-*)
 - [x] Phase 9 — Backend real impls (Vulkan, Metal, GLES)
   - [x] Phase 9a1 — Vulkan TransientAttachment (real VkImage + LAZILY_ALLOCATED)
@@ -312,6 +314,7 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
   - [x] Phase 11f — Public `SubpassRenderPipelineDescriptor` + `Device::create_subpass_render_pipeline`
   - [x] Phase 11g — Resource-tracker registration in `SubpassRenderPass::set_*` (pipeline / bind-group / vertex / index)
   - [x] Phase 11h — `SubpassRenderPipelineDescriptor::new` constructor so external callers can build the descriptor without dropping `#[non_exhaustive]`
+  - [ ] Phase 11i — `BindingType::SubpassInput` variant in `wgt::BindingType` plus the bind-group-layout / pipeline-layout / HAL plumbing needed to consume it. Currently `wgpu-core/src/validation.rs:737` returns `BindingError::TiledNotImplemented` whenever a shader uses `subpass_input`, which blocks implicit pipeline-layout derivation. Needed for Phase 7b/7c examples (lighting + composite + present subpass pipelines all use `subpass_input`).
 
 ## Snapshot at session end (2026-05-11)
 

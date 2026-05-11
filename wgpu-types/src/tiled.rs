@@ -270,10 +270,14 @@ impl Default for SubpassLayout {
 }
 
 /// Subpass attachment usage metadata for one subpass in a target.
+//
+// tiled-fork: non-exhaustive-relax — construction-side descriptor; users
+// must literal-construct this in `SubpassTarget::subpass_descs` when
+// building pipelines via `SubpassRenderPipelineDescriptor::new`. See
+// TILED.md "Known divergence" #5.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
-#[non_exhaustive]
 pub struct SubpassTargetDesc {
     /// Color attachment indices written by this subpass.
     pub color_attachment_indices: Vec<u32>,
@@ -295,10 +299,13 @@ pub struct SubpassTargetDesc {
 /// `SubpassTarget` carries the full subpass structure so the Vulkan backend
 /// can construct it. Metal uses it for input-attachment format derivation.
 /// GLES ignores it.
+//
+// tiled-fork: non-exhaustive-relax — construction-side descriptor; users
+// must literal-construct this when calling
+// `SubpassRenderPipelineDescriptor::new`. See TILED.md "Known divergence" #5.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
-#[non_exhaustive]
 pub struct SubpassTarget {
     /// Pipeline's active subpass index within `subpass_descs`.
     pub index: u32,
