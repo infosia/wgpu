@@ -41,10 +41,9 @@ use crate::*;
 ///
 /// Unlike the other public subpass descriptors (see TILED.md "Known
 /// divergence" #5), this wrapper retains `#[non_exhaustive]` so future
-/// fork-internal subpass-target fields can be added; external callers
-/// will need a helper or struct-update syntax against a constructor we
-/// haven't yet exposed. The remaining Phase-7 visual examples (7b/7c)
-/// will need such a constructor before they can be ported.
+/// fork-internal subpass-target fields can be added without breaking
+/// external struct-literal construction. Use [`Self::new`] to construct
+/// from outside the `wgpu` crate.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct SubpassRenderPipelineDescriptor<'a> {
@@ -59,6 +58,21 @@ pub struct SubpassRenderPipelineDescriptor<'a> {
 }
 #[cfg(send_sync)]
 static_assertions::assert_impl_all!(SubpassRenderPipelineDescriptor<'_>: Send, Sync);
+
+impl<'a> SubpassRenderPipelineDescriptor<'a> {
+    /// Builds a subpass-aware pipeline descriptor.
+    ///
+    /// Required because the struct is `#[non_exhaustive]`. Future
+    /// fork-internal fields will gain a setter or be defaulted here;
+    /// callers that have constructed via this entry point will keep
+    /// compiling unchanged.
+    pub fn new(base: RenderPipelineDescriptor<'a>, subpass_target: wgt::SubpassTarget) -> Self {
+        Self {
+            base,
+            subpass_target,
+        }
+    }
+}
 // tiled-fork: end subpass-pipeline-descriptor
 
 /// Per-subpass color attachment.

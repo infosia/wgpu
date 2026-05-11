@@ -311,6 +311,7 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
         which has no obvious caller. Left open as a marker, low priority.)
   - [x] Phase 11f — Public `SubpassRenderPipelineDescriptor` + `Device::create_subpass_render_pipeline`
   - [x] Phase 11g — Resource-tracker registration in `SubpassRenderPass::set_*` (pipeline / bind-group / vertex / index)
+  - [x] Phase 11h — `SubpassRenderPipelineDescriptor::new` constructor so external callers can build the descriptor without dropping `#[non_exhaustive]`
 
 ## Snapshot at session end (2026-05-11)
 
