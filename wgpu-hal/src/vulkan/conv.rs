@@ -246,11 +246,22 @@ pub fn map_texture_usage(usage: wgt::TextureUses) -> vk::ImageUsageFlags {
     }
     if usage.contains(wgt::TextureUses::COLOR_TARGET) {
         flags |= vk::ImageUsageFlags::COLOR_ATTACHMENT;
+        // tiled-fork: this fork advertises `MULTI_SUBPASS` on Vulkan, so any
+        // color attachment may be consumed by a downstream subpass as an
+        // input attachment. Vulkan requires the source image to have
+        // INPUT_ATTACHMENT usage in that case. The cost of always setting
+        // the bit is negligible (no extra allocation, no format restriction
+        // on conformant implementations).
+        flags |= vk::ImageUsageFlags::INPUT_ATTACHMENT;
     }
     if usage
         .intersects(wgt::TextureUses::DEPTH_STENCIL_READ | wgt::TextureUses::DEPTH_STENCIL_WRITE)
     {
         flags |= vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
+        // tiled-fork: same rationale as the color-attachment branch above --
+        // depth/stencil attachments can be consumed as input attachments by
+        // a downstream subpass.
+        flags |= vk::ImageUsageFlags::INPUT_ATTACHMENT;
     }
     if usage.intersects(
         wgt::TextureUses::STORAGE_READ_ONLY
