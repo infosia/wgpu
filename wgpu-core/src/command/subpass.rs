@@ -482,7 +482,7 @@ impl Global {
                 // reports `InvalidImageLayout` (expected
                 // COLOR_ATTACHMENT_OPTIMAL, got UNDEFINED) and the
                 // post-pass swapchain transition to PRESENT_SRC never fires.
-                emit_pre_pass_barriers(cmd_buf, &resolved, &snatch_guard);
+                emit_pre_pass_barriers(cmd_buf, &resolved, &snatch_guard, &device);
                 dispatch_hal_begin(
                     cmd_buf.encoder.raw.as_mut(),
                     &resolved,
@@ -1447,6 +1447,7 @@ fn emit_pre_pass_barriers(
     cmd_buf: &mut CommandBufferMutable,
     resolved: &ResolvedDescriptor,
     snatch_guard: &crate::snatch::SnatchGuard<'_>,
+    device: &Device,
 ) {
     let mut barriers: Vec<hal::TextureBarrier<'_, dyn hal::DynTexture>> = Vec::new();
 
@@ -1483,18 +1484,34 @@ fn emit_pre_pass_barriers(
         }
     }
 
-    // Depth/stencil attachment. Phase 11j default: treat as
-    // `DEPTH_STENCIL_WRITE` because the deferred-rendering example and the
-    // typical multi-subpass shape write depth in the geometry pass. A
-    // read-only-depth refinement (matching upstream
-    // `RenderPassInfo::start`) is a Phase 11j follow-up.
+    // Depth/stencil attachment. Mirrors upstream's `RenderPassInfo::start`
+    // pattern (`wgpu-core/src/command/render.rs:1185-1195`): when both
+    // depth and stencil aspects are read-only AND the device supports the
+    // `READ_ONLY_DEPTH_STENCIL` downlevel flag, the transition target is
+    // `DEPTH_STENCIL_READ | RESOURCE` so the attachment can additionally
+    // be sampled in the same render pass; otherwise the typical
+    // `DEPTH_STENCIL_WRITE`.
     if let Some(ref ds) = resolved.depth_stencil_attachment {
         cmd_buf.trackers.views.insert_single(ds.view.clone());
+        let depth_read_only = matches!(ds.depth, ResolvedPassChannel::ReadOnly);
+        let stencil_read_only =
+            matches!(ds.stencil, ResolvedPassChannel::ReadOnly);
+        let usage = if depth_read_only
+            && stencil_read_only
+            && device
+                .downlevel
+                .flags
+                .contains(wgt::DownlevelFlags::READ_ONLY_DEPTH_STENCIL)
+        {
+            wgt::TextureUses::DEPTH_STENCIL_READ | wgt::TextureUses::RESOURCE
+        } else {
+            wgt::TextureUses::DEPTH_STENCIL_WRITE
+        };
         push_transitions(
             &mut cmd_buf.trackers,
             &ds.view.parent,
             ds.view.selector.clone(),
-            wgt::TextureUses::DEPTH_STENCIL_WRITE,
+            usage,
             snatch_guard,
             &mut barriers,
         );

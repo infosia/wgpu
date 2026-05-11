@@ -631,16 +631,13 @@ impl Resource {
                             Err(binding_class)
                         }
                     }
-                    // tiled-fork: subpass-input -- compare aspect and
-                    // multisampled flags against the shader's
-                    // `ImageClass::Subpass`. The scalar `kind` carried by
-                    // `SubpassAspect::Color { kind }` is NOT validated here
-                    // because `wgt::SubpassInputAspect::Color` is a plain
-                    // variant (TODO: thread the kind through for symmetry
-                    // with `BindingType::Texture::sample_type`; a
-                    // `subpass_input<i32>` against an `f32` attachment
-                    // currently passes validation and would miscompile at
-                    // GPU runtime -- tracked as Phase 11i follow-up).
+                    // tiled-fork: subpass-input -- compare aspect,
+                    // multisampled flag, and (for Color aspect) the scalar
+                    // sample-type against the shader's `ImageClass::Subpass`.
+                    // The Color-aspect kind check is via
+                    // `subpass_input_sample_type_matches`, mirroring
+                    // upstream's `BindingType::Texture::sample_type`
+                    // matching for regular sampled textures.
                     BindingType::SubpassInput {
                         aspect: wgt_aspect,
                         multisampled,
@@ -650,10 +647,22 @@ impl Resource {
                             multi,
                         } if multi == multisampled
                             && match (shader_aspect, wgt_aspect) {
+                                // For Color, the shader's scalar `kind`
+                                // must match the layout's `sample_type`.
+                                // Phase 11i2: previously the `kind` was
+                                // dropped, so e.g. a shader using
+                                // `subpass_input<i32>` bound against an
+                                // `f32` attachment would compile and
+                                // miscompile at GPU runtime.
                                 (
-                                    naga::SubpassAspect::Color { .. },
-                                    wgt::SubpassInputAspect::Color,
-                                ) => true,
+                                    naga::SubpassAspect::Color { kind: shader_kind },
+                                    wgt::SubpassInputAspect::Color {
+                                        sample_type: layout_kind,
+                                    },
+                                ) => subpass_input_sample_type_matches(
+                                    shader_kind,
+                                    layout_kind,
+                                ),
                                 (
                                     naga::SubpassAspect::Depth,
                                     wgt::SubpassInputAspect::Depth,
@@ -776,22 +785,41 @@ impl Resource {
                     },
                     naga::ImageClass::External => BindingType::ExternalTexture,
                     // tiled-fork: begin arm (ImageClass::Subpass)
-                    // Translate the naga `SubpassAspect` (which carries the
-                    // scalar kind for the IR's lowering) to the
+                    // Translate the naga `SubpassAspect` to the
                     // backend-agnostic `wgt::SubpassInputAspect` consumed by
-                    // `BindingType::SubpassInput`. The kind information is
-                    // dropped here because pipeline-layout validation only
-                    // needs the aspect to match the source attachment;
-                    // backends derive the per-channel kind from the bound
-                    // texture-view format.
+                    // `BindingType::SubpassInput`. For the Color aspect the
+                    // scalar `kind` is preserved as
+                    // `SubpassInputSampleType` so pipeline-layout validation
+                    // (`check_binding_use`, via
+                    // `subpass_input_sample_type_matches`) rejects mismatches
+                    // such as `subpass_input<i32>` bound against an `f32`
+                    // attachment. Abstract or bool scalar kinds are not
+                    // representable in a real subpass input binding and are
+                    // rejected here with `TiledNotImplemented`.
                     naga::ImageClass::Subpass { aspect, multi } => {
                         // `naga::SubpassAspect` is `#[non_exhaustive]`; if it
                         // gains a new variant the fallback returns
                         // `TiledNotImplemented` so we don't silently
                         // construct a misaligned binding.
                         let aspect = match aspect {
-                            naga::SubpassAspect::Color { .. } => {
-                                wgt::SubpassInputAspect::Color
+                            naga::SubpassAspect::Color { kind } => {
+                                let sample_type = match kind {
+                                    naga::ScalarKind::Float => {
+                                        wgt::SubpassInputSampleType::Float
+                                    }
+                                    naga::ScalarKind::Sint => {
+                                        wgt::SubpassInputSampleType::Sint
+                                    }
+                                    naga::ScalarKind::Uint => {
+                                        wgt::SubpassInputSampleType::Uint
+                                    }
+                                    naga::ScalarKind::AbstractInt
+                                    | naga::ScalarKind::AbstractFloat
+                                    | naga::ScalarKind::Bool => {
+                                        return Err(BindingError::TiledNotImplemented);
+                                    }
+                                };
+                                wgt::SubpassInputAspect::Color { sample_type }
                             }
                             naga::SubpassAspect::Depth => wgt::SubpassInputAspect::Depth,
                             naga::SubpassAspect::Stencil => wgt::SubpassInputAspect::Stencil,
@@ -968,6 +996,26 @@ impl NumericType {
         }
     }
 }
+
+// tiled-fork: begin subpass-input-sample-type-match
+/// Return true if a shader's `subpass_input<T>` scalar `kind` is
+/// compatible with the bind-group layout entry's declared
+/// [`wgt::SubpassInputSampleType`]. Used by Phase-11i2 pipeline-layout
+/// validation; the matching rule mirrors upstream's
+/// `Texture::sample_type` check for regular sampled textures.
+fn subpass_input_sample_type_matches(
+    shader_kind: naga::ScalarKind,
+    layout_kind: wgt::SubpassInputSampleType,
+) -> bool {
+    use wgt::SubpassInputSampleType as Sst;
+    match (shader_kind, layout_kind) {
+        (naga::ScalarKind::Float, Sst::Float)
+        | (naga::ScalarKind::Sint, Sst::Sint)
+        | (naga::ScalarKind::Uint, Sst::Uint) => true,
+        _ => false,
+    }
+}
+// tiled-fork: end subpass-input-sample-type-match
 
 /// Return true if the fragment `format` is covered by the provided `output`.
 pub fn check_texture_format(

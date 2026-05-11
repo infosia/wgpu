@@ -239,12 +239,38 @@ pub struct SubpassDependency {
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 #[non_exhaustive]
 pub enum SubpassInputAspect {
-    /// Read color aspect of a color attachment.
-    Color,
+    /// Read color aspect of a color attachment. `sample_type` mirrors
+    /// upstream `BindingType::Texture::sample_type` -- pipeline-layout
+    /// validation rejects `subpass_input<i32>` bound against an `f32`
+    /// attachment at create-pipeline time, instead of letting the GPU
+    /// produce undefined output.
+    Color {
+        /// Scalar kind of each channel in the source attachment.
+        sample_type: SubpassInputSampleType,
+    },
     /// Read depth aspect of a depth/stencil attachment.
     Depth,
     /// Read stencil aspect of a depth/stencil attachment.
     Stencil,
+}
+
+/// Scalar kind for a `SubpassInputAspect::Color` binding.
+///
+/// Mirrors the relevant subset of [`crate::TextureSampleType`] -- no
+/// `Depth` because depth aspect reads use `SubpassInputAspect::Depth`,
+/// and no `filterable` flag because subpass inputs are read without a
+/// sampler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+#[non_exhaustive]
+pub enum SubpassInputSampleType {
+    /// `subpass_input<f32>` -- floating-point attachment.
+    Float,
+    /// `subpass_input<i32>` -- signed-integer attachment.
+    Sint,
+    /// `subpass_input<u32>` -- unsigned-integer attachment.
+    Uint,
 }
 
 /// Validation and compatibility metadata for one subpass.

@@ -159,9 +159,9 @@ pub use wgt::{
 // tiled-fork: begin re-export (subpass types)
 pub use wgt::{
     ActiveSubpassMask, SubpassDependency, SubpassDependencyType, SubpassIndex,
-    SubpassInputAspect, SubpassInputAttachment, SubpassInputSource, SubpassTarget,
-    SubpassTargetDesc, TransientAttachmentDescriptor, TransientLoadOp, TransientMemoryHint,
-    TransientOps, TransientSize,
+    SubpassInputAspect, SubpassInputAttachment, SubpassInputSampleType, SubpassInputSource,
+    SubpassTarget, SubpassTargetDesc, TransientAttachmentDescriptor, TransientLoadOp,
+    TransientMemoryHint, TransientOps, TransientSize,
 };
 // tiled-fork: end re-export (subpass types)
 
