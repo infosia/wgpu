@@ -73,6 +73,12 @@ impl From<&BindingType> for BindingTypeName {
             BindingType::Sampler { .. } => BindingTypeName::Sampler,
             BindingType::AccelerationStructure { .. } => BindingTypeName::AccelerationStructure,
             BindingType::ExternalTexture => BindingTypeName::ExternalTexture,
+            // tiled-fork: subpass-input maps to the existing Texture name
+            // bucket. There is no dedicated `SubpassInput` `BindingTypeName`
+            // because the only consumers of `BindingTypeName` are
+            // error-display strings; a subpass-input mismatch shows up as
+            // "Texture" which is correct from a user-facing standpoint.
+            BindingType::SubpassInput { .. } => BindingTypeName::Texture,
         }
     }
 }
@@ -516,6 +522,9 @@ impl Resource {
                     BindingType::Texture { view_dimension, .. }
                     | BindingType::StorageTexture { view_dimension, .. } => view_dimension,
                     BindingType::ExternalTexture => wgt::TextureViewDimension::D2,
+                    // tiled-fork: subpass-input bindings are always 2D (one
+                    // attachment slice per binding).
+                    BindingType::SubpassInput { .. } => wgt::TextureViewDimension::D2,
                     _ => {
                         return Err(BindingError::WrongTextureViewDimension {
                             dim,
@@ -622,6 +631,44 @@ impl Resource {
                             Err(binding_class)
                         }
                     }
+                    // tiled-fork: subpass-input -- compare aspect and
+                    // multisampled flags against the shader's
+                    // `ImageClass::Subpass`. The scalar `kind` carried by
+                    // `SubpassAspect::Color { kind }` is NOT validated here
+                    // because `wgt::SubpassInputAspect::Color` is a plain
+                    // variant (TODO: thread the kind through for symmetry
+                    // with `BindingType::Texture::sample_type`; a
+                    // `subpass_input<i32>` against an `f32` attachment
+                    // currently passes validation and would miscompile at
+                    // GPU runtime -- tracked as Phase 11i follow-up).
+                    BindingType::SubpassInput {
+                        aspect: wgt_aspect,
+                        multisampled,
+                    } => match shader_class {
+                        naga::ImageClass::Subpass {
+                            aspect: shader_aspect,
+                            multi,
+                        } if multi == multisampled
+                            && match (shader_aspect, wgt_aspect) {
+                                (
+                                    naga::SubpassAspect::Color { .. },
+                                    wgt::SubpassInputAspect::Color,
+                                ) => true,
+                                (
+                                    naga::SubpassAspect::Depth,
+                                    wgt::SubpassInputAspect::Depth,
+                                ) => true,
+                                (
+                                    naga::SubpassAspect::Stencil,
+                                    wgt::SubpassInputAspect::Stencil,
+                                ) => true,
+                                _ => false,
+                            } =>
+                        {
+                            Ok(())
+                        }
+                        _ => Err(shader_class),
+                    },
                     _ => {
                         return Err(BindingError::WrongType {
                             binding: (&entry.ty).into(),
@@ -729,13 +776,31 @@ impl Resource {
                     },
                     naga::ImageClass::External => BindingType::ExternalTexture,
                     // tiled-fork: begin arm (ImageClass::Subpass)
-                    // Subpass-input bindings are not yet derivable as
-                    // BindingType -- the public wgpu API doesn't expose a
-                    // matching `BindingType::SubpassInput` variant in this
-                    // phase. Return a fork-only error so the host doesn't
-                    // panic.
-                    naga::ImageClass::Subpass { .. } => {
-                        return Err(BindingError::TiledNotImplemented);
+                    // Translate the naga `SubpassAspect` (which carries the
+                    // scalar kind for the IR's lowering) to the
+                    // backend-agnostic `wgt::SubpassInputAspect` consumed by
+                    // `BindingType::SubpassInput`. The kind information is
+                    // dropped here because pipeline-layout validation only
+                    // needs the aspect to match the source attachment;
+                    // backends derive the per-channel kind from the bound
+                    // texture-view format.
+                    naga::ImageClass::Subpass { aspect, multi } => {
+                        // `naga::SubpassAspect` is `#[non_exhaustive]`; if it
+                        // gains a new variant the fallback returns
+                        // `TiledNotImplemented` so we don't silently
+                        // construct a misaligned binding.
+                        let aspect = match aspect {
+                            naga::SubpassAspect::Color { .. } => {
+                                wgt::SubpassInputAspect::Color
+                            }
+                            naga::SubpassAspect::Depth => wgt::SubpassInputAspect::Depth,
+                            naga::SubpassAspect::Stencil => wgt::SubpassInputAspect::Stencil,
+                            _ => return Err(BindingError::TiledNotImplemented),
+                        };
+                        BindingType::SubpassInput {
+                            aspect,
+                            multisampled: multi,
+                        }
                     }
                     // tiled-fork: end arm (ImageClass::Subpass)
                 }

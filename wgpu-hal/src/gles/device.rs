@@ -1234,6 +1234,14 @@ impl crate::Device for super::Device {
                     } => &mut num_storage_buffers,
                     wgt::BindingType::AccelerationStructure { .. } => unimplemented!(),
                     wgt::BindingType::ExternalTexture => unimplemented!(),
+                    // tiled-fork: on GLES, multi-subpass is implemented via
+                    // `EXT_shader_framebuffer_fetch` (Tier A) where the
+                    // shader uses `inout` color attachments and no explicit
+                    // input-attachment binding is emitted. A subpass_input
+                    // binding reaching this site means the WGSL frontend
+                    // produced one without the framebuffer-fetch lowering
+                    // -- not currently expected end-to-end on GLES.
+                    wgt::BindingType::SubpassInput { .. } => unimplemented!(),
                 };
 
                 binding_to_slot[entry.binding as usize] = *counter;
@@ -1351,6 +1359,8 @@ impl crate::Device for super::Device {
                 }
                 wgt::BindingType::AccelerationStructure { .. } => unimplemented!(),
                 wgt::BindingType::ExternalTexture => unimplemented!(),
+                // tiled-fork: see pipeline-layout site above for rationale.
+                wgt::BindingType::SubpassInput { .. } => unimplemented!(),
             };
             contents.push(binding);
         }

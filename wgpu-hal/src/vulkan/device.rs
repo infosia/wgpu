@@ -516,6 +516,12 @@ impl
                 vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
                 descriptor_count.acceleration_structure,
             ),
+            // tiled-fork: subpass-input bindings consume INPUT_ATTACHMENT
+            // descriptors out of the same pool.
+            (
+                vk::DescriptorType::INPUT_ATTACHMENT,
+                descriptor_count.input_attachment,
+            ),
         ];
 
         let filtered_counts = unfiltered_counts
@@ -526,7 +532,7 @@ impl
                 ty,
                 descriptor_count: count,
             })
-            .collect::<ArrayVec<_, 8>>();
+            .collect::<ArrayVec<_, 9>>();
 
         let mut vk_flags =
             if flags.contains(gpu_descriptor::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND) {
@@ -1618,6 +1624,11 @@ impl crate::Device for super::Device {
                     desc_count.acceleration_structure += count;
                 }
                 wgt::BindingType::ExternalTexture => unimplemented!(),
+                // tiled-fork: subpass-input descriptors counted into the
+                // pool sizing.
+                wgt::BindingType::SubpassInput { .. } => {
+                    desc_count.input_attachment += count;
+                }
             }
         }
 
@@ -1900,7 +1911,13 @@ impl crate::Device for super::Device {
                     );
                     next_binding += 1;
                 }
-                wgt::BindingType::Texture { .. } | wgt::BindingType::StorageTexture { .. } => {
+                wgt::BindingType::Texture { .. }
+                | wgt::BindingType::StorageTexture { .. }
+                // tiled-fork: subpass-input bindings carry a TextureView
+                // resource at bind time, identical to Texture/StorageTexture.
+                // The descriptor type differs (`INPUT_ATTACHMENT`), which is
+                // selected by `map_binding_type` at the write site below.
+                | wgt::BindingType::SubpassInput { .. } => {
                     let start = entry.resource_index;
                     let end = start + entry.count;
                     let local_image_infos;

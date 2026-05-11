@@ -2770,6 +2770,17 @@ impl Device {
                         })?;
                     (None, WritableStorage::No)
                 }
+                // tiled-fork: subpass-input bindings are gated on
+                // `MULTI_SUBPASS`; binding-array form is not supported (a
+                // subpass input maps to a single attachment slot).
+                Bt::SubpassInput { .. } => {
+                    self.require_features(wgt::Features::MULTI_SUBPASS)
+                        .map_err(|e| CreateBindGroupLayoutError::Entry {
+                            binding: entry.binding,
+                            error: e.into(),
+                        })?;
+                    (None, WritableStorage::No)
+                }
             };
 
             // Validate the count parameter
@@ -3672,6 +3683,25 @@ impl Device {
                 }
 
                 view.check_usage(wgt::TextureUsages::TEXTURE_BINDING)?;
+                Ok(wgt::TextureUses::RESOURCE)
+            }
+            // tiled-fork: subpass-input bindings consume a TextureView at
+            // bind time. The view must be a single-mip 2D view of an
+            // attachment that was written by an earlier subpass, but the
+            // attachment-source compatibility check happens at pass time
+            // (in `wgpu-core::command::subpass`) -- this site only checks
+            // the binding-resource kind and the sample-count match. The
+            // texture usage requirement is `RENDER_ATTACHMENT` (Vulkan also
+            // adds `INPUT_ATTACHMENT_BIT` internally).
+            wgt::BindingType::SubpassInput { multisampled, .. } => {
+                if multisampled != (view.samples != 1) {
+                    return Err(Error::InvalidTextureMultisample {
+                        binding,
+                        layout_multisampled: multisampled,
+                        view_samples: view.samples,
+                    });
+                }
+                view.check_usage(wgt::TextureUsages::RENDER_ATTACHMENT)?;
                 Ok(wgt::TextureUses::RESOURCE)
             }
             _ => Err(Error::WrongBindingType {

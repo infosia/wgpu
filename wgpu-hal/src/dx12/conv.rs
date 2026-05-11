@@ -146,6 +146,13 @@ pub fn map_binding_type(ty: &wgt::BindingType) -> Direct3D12::D3D12_DESCRIPTOR_R
         // be mapped to a single descriptor range type. They must be handled
         // separately by the caller.
         Bt::ExternalTexture => unreachable!("External textures must be handled separately"),
+        // tiled-fork: DX12 doesn't advertise `MULTI_SUBPASS`, so the public
+        // API path cannot create a bind-group-layout entry with this type.
+        // The match must be exhaustive even so; keep the arm as
+        // unreachable.
+        Bt::SubpassInput { .. } => {
+            unreachable!("SubpassInput bindings not supported on DX12 (MULTI_SUBPASS not advertised)")
+        }
     }
 }
 

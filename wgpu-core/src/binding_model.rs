@@ -507,6 +507,16 @@ impl BindingTypeMaxCountValidator {
                     self.samplers.add(binding.visibility, count);
                     self.uniform_buffers.add(binding.visibility, count);
                 }
+                // tiled-fork: subpass-input bindings count against the
+                // sampled-textures budget. Vulkan dedicates them a separate
+                // `INPUT_ATTACHMENT` descriptor slot, but its limit is
+                // typically very high (8+) and the fork's per-pass cap is
+                // expressed via `TiledCapabilities::max_input_attachments`.
+                // Counting them as sampled textures keeps the upstream
+                // shader-stage limits honest without adding a new tally.
+                wgt::BindingType::SubpassInput { .. } => {
+                    self.sampled_textures.add(binding.visibility, count);
+                }
             }
         }
     }

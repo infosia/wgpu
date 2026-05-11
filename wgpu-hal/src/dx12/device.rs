@@ -836,6 +836,12 @@ impl crate::Device for super::Device {
                 wgt::BindingType::Sampler { .. } => has_sampler_in_group = true,
                 // Three texture planes and one params buffer
                 wgt::BindingType::ExternalTexture => num_views += 4 * count,
+                // tiled-fork: DX12 never advertises `MULTI_SUBPASS`, so this
+                // arm is unreachable via the public API path. Keep the match
+                // exhaustive.
+                wgt::BindingType::SubpassInput { .. } => {
+                    unreachable!("SubpassInput bindings not supported on DX12")
+                }
             }
         }
 
@@ -1693,6 +1699,11 @@ impl crate::Device for super::Device {
                         };
                         inner.stage.push(handle);
                     }
+                }
+                // tiled-fork: DX12 doesn't advertise `MULTI_SUBPASS`, so this
+                // arm is unreachable via the public API path.
+                wgt::BindingType::SubpassInput { .. } => {
+                    unreachable!("SubpassInput bindings not supported on DX12")
                 }
                 wgt::BindingType::ExternalTexture => {
                     // We don't yet support binding arrays of external textures.

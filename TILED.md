@@ -288,8 +288,8 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
 - [x] Phase 6e — naga GLSL backend: subpassInput/inout dual-mode emission
 - [~] Phase 7 — Examples
   - [x] Phase 7a — `subpass_render_graph` headless smoke test (2-subpass persistent attachments; no shaders/draws yet)
-  - [~] Phase 7b — `deferred_rendering` (3-subpass G-buffer/lighting/composite). Scaffold compiles; runs through framework init + gbuffer pipeline creation; **fails at lighting pipeline creation** because `BindingType::SubpassInput` is not yet wired in `wgpu-core` (see Phase 11i below). Shaders + descriptor structure are in their target shape.
-  - [ ] Phase 7c — `subpass_msaa` (2-subpass MSAA line demo) — same surface mismatch as 7b; will also hit the Phase 11i gap.
+  - [x] Phase 7b — `deferred_rendering` (3-subpass G-buffer/lighting/composite). Runs end-to-end on Vulkan after Phase 11i (60 FPS verified locally).
+  - [ ] Phase 7c — `subpass_msaa` (2-subpass MSAA line demo) — same descriptor pattern as 7b. Should run after Phase 11i; not yet ported.
 - [x] Phase 8 — Tests + benches (naga snapshot fixtures: subpass-* + framebuffer-fetch-*)
 - [x] Phase 9 — Backend real impls (Vulkan, Metal, GLES)
   - [x] Phase 9a1 — Vulkan TransientAttachment (real VkImage + LAZILY_ALLOCATED)
@@ -314,7 +314,7 @@ is the **port plan**; it covers what we keep, what we reshape, and why.
   - [x] Phase 11f — Public `SubpassRenderPipelineDescriptor` + `Device::create_subpass_render_pipeline`
   - [x] Phase 11g — Resource-tracker registration in `SubpassRenderPass::set_*` (pipeline / bind-group / vertex / index)
   - [x] Phase 11h — `SubpassRenderPipelineDescriptor::new` constructor so external callers can build the descriptor without dropping `#[non_exhaustive]`
-  - [ ] Phase 11i — `BindingType::SubpassInput` variant in `wgt::BindingType` plus the bind-group-layout / pipeline-layout / HAL plumbing needed to consume it. Currently `wgpu-core/src/validation.rs:737` returns `BindingError::TiledNotImplemented` whenever a shader uses `subpass_input`, which blocks implicit pipeline-layout derivation. Needed for Phase 7b/7c examples (lighting + composite + present subpass pipelines all use `subpass_input`).
+  - [x] Phase 11i — `BindingType::SubpassInput` variant in `wgt::BindingType` plus the bind-group-layout / pipeline-layout / HAL plumbing needed to consume it. Unblocks Phase 7b/7c: deferred_rendering now runs end-to-end on Vulkan (60 FPS verified locally on NVIDIA RTX 5060 Ti).
 
 ## Snapshot at session end (2026-05-11)
 

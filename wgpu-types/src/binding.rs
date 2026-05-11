@@ -178,6 +178,28 @@ pub enum BindingType {
     ///
     /// Requires [`Features::EXTERNAL_TEXTURE`]
     ExternalTexture,
+
+    // tiled-fork: begin variant (SubpassInput)
+    /// A subpass-input texture binding consumed by a multi-subpass render
+    /// pass; reads the result of a prior subpass from tile memory via an
+    /// `input_attachment` descriptor (Vulkan) or `[[color(N)]]` framebuffer
+    /// fetch (Metal / GLES).
+    ///
+    /// Example WGSL syntax:
+    /// ```rust,ignore
+    /// @group(0) @binding(0)
+    /// var t_albedo: subpass_input<f32>;
+    /// ```
+    ///
+    /// Requires [`Features::MULTI_SUBPASS`].
+    SubpassInput {
+        /// Which aspect of the source attachment is read.
+        aspect: crate::SubpassInputAspect,
+        /// Whether the source attachment is multisampled. Bound texture
+        /// view's sample count must match.
+        multisampled: bool,
+    },
+    // tiled-fork: end variant (SubpassInput)
 }
 
 impl BindingType {

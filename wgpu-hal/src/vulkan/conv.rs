@@ -793,6 +793,9 @@ pub fn map_binding_type(ty: wgt::BindingType) -> vk::DescriptorType {
             vk::DescriptorType::ACCELERATION_STRUCTURE_KHR
         }
         wgt::BindingType::ExternalTexture => unimplemented!(),
+        // tiled-fork: subpass-input binding maps to Vulkan's
+        // INPUT_ATTACHMENT descriptor type.
+        wgt::BindingType::SubpassInput { .. } => vk::DescriptorType::INPUT_ATTACHMENT,
     }
 }
 
