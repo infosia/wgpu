@@ -18,10 +18,20 @@ async fn run() {
         .request_adapter(&wgpu::RequestAdapterOptions::default())
         .await
         .expect("No suitable adapter found");
+
+    if !adapter.features().contains(wgpu::Features::MULTI_SUBPASS) {
+        log::warn!(
+            "Adapter ({:?}) does not support MULTI_SUBPASS; skipping headless subpass graph pass. \
+             Try `WGPU_BACKEND=vulkan` (or run on Metal/GLES with framebuffer-fetch).",
+            adapter.get_info().backend,
+        );
+        return;
+    }
+
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("subpass_render_graph device"),
-            required_features: wgpu::Features::empty(),
+            required_features: wgpu::Features::MULTI_SUBPASS,
             required_limits: wgpu::Limits::downlevel_defaults(),
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::MemoryUsage,
@@ -29,11 +39,6 @@ async fn run() {
         })
         .await
         .expect("Failed to create device");
-
-    if !device.features().contains(wgpu::Features::MULTI_SUBPASS) {
-        log::warn!("Adapter does not support MULTI_SUBPASS; skipping headless subpass graph pass");
-        return;
-    }
 
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let extent = wgpu::Extent3d {

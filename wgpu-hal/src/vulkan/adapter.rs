@@ -2235,6 +2235,14 @@ impl super::Instance {
         );
         // tiled-fork: end features (TRANSIENT_ATTACHMENTS)
 
+        // tiled-fork: begin features (MULTI_SUBPASS)
+        // Multi-subpass `VkRenderPass` + input attachments are core Vulkan 1.0
+        // functionality, so advertise unconditionally on Vulkan. The Phase 9a2
+        // VkRenderPass machinery + Phase 9a3 input-attachment descriptor sets
+        // both rely only on core APIs; no extension probe is needed.
+        available_features.insert(wgt::Features::MULTI_SUBPASS);
+        // tiled-fork: end features (MULTI_SUBPASS)
+
         if info.driver == "llvmpipe" {
             // The `F16_IN_F32` instructions do not normally require native `F16` support, but on
             // llvmpipe, they do.
