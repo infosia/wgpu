@@ -63,6 +63,19 @@ fn create_stencil_desc(
     desc
 }
 
+// tiled-fork: when a multi-subpass parent pass declares a depth/stencil
+// attachment but the active subpass doesn't actually use it, Metal still
+// requires *some* depth-stencil state to be bound (otherwise the old
+// pipeline's depth compare/write leaks through and silently rejects
+// fragments). This helper produces a pass-through state: always-pass,
+// no writes.
+fn create_disabled_depth_stencil_desc() -> Retained<MTLDepthStencilDescriptor> {
+    let desc = MTLDepthStencilDescriptor::new();
+    desc.setDepthCompareFunction(conv::map_compare_function(wgt::CompareFunction::Always));
+    desc.setDepthWriteEnabled(false);
+    desc
+}
+
 fn create_depth_stencil_desc(
     state: &wgt::DepthStencilState,
 ) -> Retained<MTLDepthStencilDescriptor> {
@@ -134,7 +147,26 @@ const fn convert_vertex_format_to_naga(format: wgt::VertexFormat) -> naga::back:
     }
 }
 
+/// tiled-fork: rewrite a single fragment-output `@location(N)` binding
+/// through `remap`. Returns `true` if the binding was actually changed,
+/// so the caller knows whether to clone the surrounding `Type` into a
+/// fresh slot. Non-location bindings are left untouched.
+fn remap_fragment_output_binding(binding: &mut Option<naga::Binding>, remap: &[u32]) -> bool {
+    let Some(naga::Binding::Location { location, .. }) = binding else {
+        return false;
+    };
+    if let Some(&mapped) = remap.get(*location as usize) {
+        if *location == mapped {
+            return false;
+        }
+        *location = mapped;
+        return true;
+    }
+    false
+}
+
 impl super::Device {
+    #[allow(clippy::too_many_arguments)]
     fn load_shader(
         &self,
         stage: &crate::ProgrammableStage<super::ShaderModule>,
@@ -142,6 +174,17 @@ impl super::Device {
         layout: &super::PipelineLayout,
         primitive_class: MTLPrimitiveTopologyClass,
         naga_stage: naga::ShaderStage,
+        // tiled-fork: `(group, binding) -> color slot` mapping for any
+        // `subpass_input` globals consumed by this stage. Forwarded into
+        // `naga::back::msl::Options::subpass_color_slots` so the MSL writer
+        // surfaces them as `[[color(N)]]` fragment-entry arguments.
+        subpass_color_slots: &naga::FastHashMap<(u32, u32), u32>,
+        // tiled-fork: remap of fragment-output `@location(N)` to the
+        // parent pass's color attachment slot. Required when this pipeline
+        // targets a subpass whose `color_attachment_indices` is non-identity
+        // (Metal doesn't have a per-pipeline fragment-output remap; we
+        // rewrite the naga module before emitting MSL).
+        fragment_output_remap: Option<&[u32]>,
     ) -> Result<CompiledShader, crate::PipelineError> {
         match stage.module.source {
             ShaderModuleSource::Naga(ref naga_shader) => {
@@ -155,6 +198,33 @@ impl super::Device {
                 .map_err(|e| {
                     crate::PipelineError::PipelineConstants(stage_bit, format!("MSL: {e:?}"))
                 })?;
+                let mut module = module.into_owned();
+                if naga_stage == naga::ShaderStage::Fragment {
+                    if let Some(remap) = fragment_output_remap {
+                        if let Some(ep_index) = module
+                            .entry_points
+                            .iter()
+                            .position(|ep| ep.stage == naga_stage && ep.name == stage.entry_point)
+                        {
+                            let ep = &mut module.entry_points[ep_index];
+                            if let Some(result) = ep.function.result.as_mut() {
+                                remap_fragment_output_binding(&mut result.binding, remap);
+                                let mut ty = module.types[result.ty].clone();
+                                if let naga::TypeInner::Struct { members, .. } = &mut ty.inner {
+                                    let mut members_changed = false;
+                                    for member in members {
+                                        members_changed |=
+                                            remap_fragment_output_binding(&mut member.binding, remap);
+                                    }
+                                    if members_changed {
+                                        let span = module.types.get_span(result.ty);
+                                        result.ty = module.types.insert(ty, span);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 let ep_resources = &layout.per_stage_map[naga_stage];
 
@@ -197,6 +267,8 @@ impl super::Device {
                     },
                     zero_initialize_workgroup_memory: stage.zero_initialize_workgroup_memory,
                     force_loop_bounding: stage.module.bounds_checks.force_loop_bounding,
+                    // tiled-fork: forward subpass-input slot map.
+                    subpass_color_slots: subpass_color_slots.clone(),
                 };
 
                 let pipeline_options = naga::back::msl::PipelineOptions {
@@ -988,6 +1060,11 @@ impl crate::Device for super::Device {
                                 info.counters.textures += 3;
                                 info.counters.buffers += 1;
                             }
+                            // tiled-fork: subpass inputs are lowered to
+                            // `[[color(N)]]` fragment-args by the MSL backend
+                            // (see build_subpass_color_slot_map), so they do
+                            // not consume an MSL resource slot here.
+                            wgt::BindingType::SubpassInput { .. } => {}
                         }
                     }
 
@@ -1280,6 +1357,11 @@ impl crate::Device for super::Device {
                                 counter.textures += 3;
                                 counter.buffers += 1;
                             }
+                            // tiled-fork: subpass inputs are resolved at draw
+                            // time via the parent pass's color attachments
+                            // (framebuffer fetch), so no bind-group resource
+                            // is recorded here.
+                            wgt::BindingType::SubpassInput { .. } => {}
                         }
                     }
                 }
@@ -1365,466 +1447,13 @@ impl crate::Device for super::Device {
             super::PipelineCache,
         >,
     ) -> Result<super::RenderPipeline, crate::PipelineError> {
-        autoreleasepool(|_| {
-            enum MetalGenericRenderPipelineDescriptor {
-                Standard(Retained<MTLRenderPipelineDescriptor>),
-                Mesh(Retained<MTLMeshRenderPipelineDescriptor>),
-            }
-            macro_rules! descriptor_fn {
-                ($descriptor:ident . $method:ident $( ( $($args:expr),* ) )? ) => {
-                    match $descriptor {
-                        MetalGenericRenderPipelineDescriptor::Standard(ref inner) => inner.$method$(($($args),*))?,
-                        MetalGenericRenderPipelineDescriptor::Mesh(ref inner) => inner.$method$(($($args),*))?,
-                    }
-                };
-            }
-            #[allow(non_snake_case)]
-            impl MetalGenericRenderPipelineDescriptor {
-                unsafe fn setFragmentFunction(
-                    &self,
-                    function: Option<&ProtocolObject<dyn MTLFunction>>,
-                ) {
-                    unsafe { descriptor_fn!(self.setFragmentFunction(function)) };
-                }
-                fn fragmentBuffers(&self) -> Retained<MTLPipelineBufferDescriptorArray> {
-                    descriptor_fn!(self.fragmentBuffers())
-                }
-                fn setDepthAttachmentPixelFormat(&self, pixel_format: MTLPixelFormat) {
-                    descriptor_fn!(self.setDepthAttachmentPixelFormat(pixel_format));
-                }
-                fn colorAttachments(
-                    &self,
-                ) -> Retained<MTLRenderPipelineColorAttachmentDescriptorArray> {
-                    descriptor_fn!(self.colorAttachments())
-                }
-                fn setStencilAttachmentPixelFormat(&self, pixel_format: MTLPixelFormat) {
-                    descriptor_fn!(self.setStencilAttachmentPixelFormat(pixel_format));
-                }
-                fn setAlphaToCoverageEnabled(&self, enabled: bool) {
-                    descriptor_fn!(self.setAlphaToCoverageEnabled(enabled));
-                }
-                fn setLabel(&self, label: Option<&NSString>) {
-                    descriptor_fn!(self.setLabel(label));
-                }
-                unsafe fn setMaxVertexAmplificationCount(&self, count: NSUInteger) {
-                    unsafe { descriptor_fn!(self.setMaxVertexAmplificationCount(count)) }
-                }
-            }
-
-            // https://developer.apple.com/documentation/metal/mtlpipelinebufferdescriptor/mutability
-            let supports_mutability =
-                available!(macos = 10.13, ios = 11.0, tvos = 11.0, visionos = 1.0);
-
-            let (primitive_class, raw_primitive_type) =
-                conv::map_primitive_topology(desc.primitive.topology);
-
-            let vs_info;
-            let ts_info;
-            let ms_info;
-
-            // Create the pipeline descriptor and do vertex/mesh pipeline specific setup
-            let descriptor = match desc.vertex_processor {
-                crate::VertexProcessor::Standard {
-                    vertex_buffers,
-                    ref vertex_stage,
-                } => {
-                    // Vertex pipeline specific setup
-
-                    let descriptor = MTLRenderPipelineDescriptor::new();
-                    ts_info = None;
-                    ms_info = None;
-
-                    // Collect vertex buffer mappings
-                    let mut vertex_buffer_mappings =
-                        Vec::<naga::back::msl::VertexBufferMapping>::new();
-                    for (i, vbl) in vertex_buffers.iter().enumerate() {
-                        let mut attributes = Vec::<naga::back::msl::AttributeMapping>::new();
-                        for attribute in vbl.attributes.iter() {
-                            attributes.push(naga::back::msl::AttributeMapping {
-                                shader_location: attribute.shader_location,
-                                offset: attribute.offset as u32,
-                                format: convert_vertex_format_to_naga(attribute.format),
-                            });
-                        }
-
-                        let mapping = naga::back::msl::VertexBufferMapping {
-                            id: self.shared.private_caps.max_vertex_buffers - 1 - i as u32,
-                            stride: if vbl.array_stride > 0 {
-                                vbl.array_stride.try_into().unwrap()
-                            } else {
-                                vbl.attributes
-                                    .iter()
-                                    .map(|attribute| attribute.offset + attribute.format.size())
-                                    .max()
-                                    .unwrap_or(0)
-                                    .try_into()
-                                    .unwrap()
-                            },
-                            step_mode: match (vbl.array_stride == 0, vbl.step_mode) {
-                                (true, _) => naga::back::msl::VertexBufferStepMode::Constant,
-                                (false, wgt::VertexStepMode::Vertex) => {
-                                    naga::back::msl::VertexBufferStepMode::ByVertex
-                                }
-                                (false, wgt::VertexStepMode::Instance) => {
-                                    naga::back::msl::VertexBufferStepMode::ByInstance
-                                }
-                            },
-                            attributes,
-                        };
-                        vertex_buffer_mappings.push(mapping);
-                    }
-
-                    // Setup vertex shader
-                    {
-                        let vs = self.load_shader(
-                            vertex_stage,
-                            &vertex_buffer_mappings,
-                            desc.layout,
-                            primitive_class,
-                            naga::ShaderStage::Vertex,
-                        )?;
-
-                        descriptor.setVertexFunction(Some(&vs.function));
-
-                        if supports_mutability {
-                            Self::set_buffers_mutability(
-                                &descriptor.vertexBuffers(),
-                                vs.immutable_buffer_mask,
-                            );
-                        }
-
-                        vs_info = Some(super::PipelineStageInfo {
-                            immediates: desc.layout.immediates_infos.vs,
-                            sizes_slot: desc.layout.per_stage_map.vs.sizes_buffer,
-                            sized_bindings: vs.sized_bindings,
-                            vertex_buffer_mappings,
-                            library: Some(vs.library),
-                            raw_wg_size: MTLSize {
-                                width: 0,
-                                height: 0,
-                                depth: 0,
-                            },
-                            work_group_memory_sizes: vec![],
-                        });
-                    }
-
-                    // Validate vertex buffer count
-                    if desc.layout.total_counters.vs.buffers + (vertex_buffers.len() as u32)
-                        > self.shared.private_caps.max_vertex_buffers
-                    {
-                        let msg = format!(
-                            "pipeline needs too many buffers in the vertex stage: {} vertex and {} layout",
-                            vertex_buffers.len(),
-                            desc.layout.total_counters.vs.buffers
-                        );
-                        return Err(crate::PipelineError::Linkage(
-                            wgt::ShaderStages::VERTEX,
-                            msg,
-                        ));
-                    }
-
-                    // Set the pipeline vertex buffer info
-                    if !vertex_buffers.is_empty() {
-                        let vertex_descriptor = MTLVertexDescriptor::new();
-                        for (i, vb) in vertex_buffers.iter().enumerate() {
-                            let buffer_index =
-                                self.shared.private_caps.max_vertex_buffers as usize - 1 - i;
-                            let buffer_desc = unsafe {
-                                vertex_descriptor
-                                    .layouts()
-                                    .objectAtIndexedSubscript(buffer_index)
-                            };
-
-                            // Metal expects the stride to be the actual size of the attributes.
-                            // The semantics of array_stride == 0 can be achieved by setting
-                            // the step function to constant and rate to 0.
-                            if vb.array_stride == 0 {
-                                let stride = vb
-                                    .attributes
-                                    .iter()
-                                    .map(|attribute| attribute.offset + attribute.format.size())
-                                    .max()
-                                    .unwrap_or(0);
-                                unsafe {
-                                    buffer_desc.setStride(wgt::math::align_to(stride as _, 4))
-                                };
-                                buffer_desc.setStepFunction(MTLVertexStepFunction::Constant);
-                                unsafe { buffer_desc.setStepRate(0) };
-                            } else {
-                                unsafe { buffer_desc.setStride(vb.array_stride as _) };
-                                buffer_desc.setStepFunction(conv::map_step_mode(vb.step_mode));
-                            }
-
-                            for at in vb.attributes {
-                                let attribute_desc = unsafe {
-                                    vertex_descriptor
-                                        .attributes()
-                                        .objectAtIndexedSubscript(at.shader_location as _)
-                                };
-                                attribute_desc.setFormat(conv::map_vertex_format(at.format));
-                                unsafe { attribute_desc.setBufferIndex(buffer_index) };
-                                unsafe { attribute_desc.setOffset(at.offset as _) };
-                            }
-                        }
-                        descriptor.setVertexDescriptor(Some(&vertex_descriptor));
-                    }
-
-                    MetalGenericRenderPipelineDescriptor::Standard(descriptor)
-                }
-                crate::VertexProcessor::Mesh {
-                    ref task_stage,
-                    ref mesh_stage,
-                } => {
-                    // Mesh pipeline specific setup
-
-                    vs_info = None;
-                    let descriptor = MTLMeshRenderPipelineDescriptor::new();
-
-                    // Setup task stage
-                    if let Some(ref task_stage) = task_stage {
-                        let ts = self.load_shader(
-                            task_stage,
-                            &[],
-                            desc.layout,
-                            primitive_class,
-                            naga::ShaderStage::Task,
-                        )?;
-                        unsafe { descriptor.setObjectFunction(Some(&ts.function)) };
-                        if supports_mutability {
-                            Self::set_buffers_mutability(
-                                &descriptor.meshBuffers(),
-                                ts.immutable_buffer_mask,
-                            );
-                        }
-                        ts_info = Some(super::PipelineStageInfo {
-                            immediates: desc.layout.immediates_infos.ts,
-                            sizes_slot: desc.layout.per_stage_map.ts.sizes_buffer,
-                            sized_bindings: ts.sized_bindings,
-                            vertex_buffer_mappings: vec![],
-                            library: Some(ts.library),
-                            raw_wg_size: ts.wg_size,
-                            work_group_memory_sizes: ts.wg_memory_sizes,
-                        });
-                    } else {
-                        ts_info = None;
-                    }
-
-                    // Setup mesh stage
-                    {
-                        let ms = self.load_shader(
-                            mesh_stage,
-                            &[],
-                            desc.layout,
-                            primitive_class,
-                            naga::ShaderStage::Mesh,
-                        )?;
-                        unsafe { descriptor.setMeshFunction(Some(&ms.function)) };
-                        if supports_mutability {
-                            Self::set_buffers_mutability(
-                                &descriptor.meshBuffers(),
-                                ms.immutable_buffer_mask,
-                            );
-                        }
-                        ms_info = Some(super::PipelineStageInfo {
-                            immediates: desc.layout.immediates_infos.ms,
-                            sizes_slot: desc.layout.per_stage_map.ms.sizes_buffer,
-                            sized_bindings: ms.sized_bindings,
-                            vertex_buffer_mappings: vec![],
-                            library: Some(ms.library),
-                            raw_wg_size: ms.wg_size,
-                            work_group_memory_sizes: ms.wg_memory_sizes,
-                        });
-                    }
-
-                    MetalGenericRenderPipelineDescriptor::Mesh(descriptor)
-                }
-            };
-
-            let raw_triangle_fill_mode = match desc.primitive.polygon_mode {
-                wgt::PolygonMode::Fill => MTLTriangleFillMode::Fill,
-                wgt::PolygonMode::Line => MTLTriangleFillMode::Lines,
-                wgt::PolygonMode::Point => panic!(
-                    "{:?} is not enabled for this backend",
-                    wgt::Features::POLYGON_MODE_POINT
-                ),
-            };
-
-            // Fragment shader
-            let fs_info = match desc.fragment_stage {
-                Some(ref stage) => {
-                    let fs = self.load_shader(
-                        stage,
-                        &[],
-                        desc.layout,
-                        primitive_class,
-                        naga::ShaderStage::Fragment,
-                    )?;
-
-                    unsafe { descriptor.setFragmentFunction(Some(&fs.function)) };
-                    if supports_mutability {
-                        Self::set_buffers_mutability(
-                            &descriptor.fragmentBuffers(),
-                            fs.immutable_buffer_mask,
-                        );
-                    }
-
-                    Some(super::PipelineStageInfo {
-                        immediates: desc.layout.immediates_infos.fs,
-                        sizes_slot: desc.layout.per_stage_map.fs.sizes_buffer,
-                        sized_bindings: fs.sized_bindings,
-                        vertex_buffer_mappings: vec![],
-                        library: Some(fs.library),
-                        raw_wg_size: MTLSize {
-                            width: 0,
-                            height: 0,
-                            depth: 0,
-                        },
-                        work_group_memory_sizes: vec![],
-                    })
-                }
-                None => {
-                    // TODO: This is a workaround for what appears to be a Metal validation bug
-                    // A pixel format is required even though no attachments are provided
-                    if desc.color_targets.is_empty() && desc.depth_stencil.is_none() {
-                        descriptor.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
-                    }
-                    None
-                }
-            };
-
-            // Setup pipeline color attachments
-            for (i, ct) in desc.color_targets.iter().enumerate() {
-                let at_descriptor =
-                    unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(i) };
-                let ct = if let Some(color_target) = ct.as_ref() {
-                    color_target
-                } else {
-                    at_descriptor.setPixelFormat(MTLPixelFormat::Invalid);
-                    continue;
-                };
-
-                let raw_format = self
-                    .shared
-                    .private_texture_format_caps
-                    .map_format(ct.format);
-                at_descriptor.setPixelFormat(raw_format);
-                at_descriptor.setWriteMask(conv::map_color_write(ct.write_mask));
-
-                if let Some(ref blend) = ct.blend {
-                    at_descriptor.setBlendingEnabled(true);
-                    let (color_op, color_src, color_dst) = conv::map_blend_component(&blend.color);
-                    let (alpha_op, alpha_src, alpha_dst) = conv::map_blend_component(&blend.alpha);
-
-                    at_descriptor.setRgbBlendOperation(color_op);
-                    at_descriptor.setSourceRGBBlendFactor(color_src);
-                    at_descriptor.setDestinationRGBBlendFactor(color_dst);
-
-                    at_descriptor.setAlphaBlendOperation(alpha_op);
-                    at_descriptor.setSourceAlphaBlendFactor(alpha_src);
-                    at_descriptor.setDestinationAlphaBlendFactor(alpha_dst);
-                }
-            }
-
-            // Setup depth stencil state
-            let depth_stencil = match desc.depth_stencil {
-                Some(ref ds) => {
-                    let raw_format = self
-                        .shared
-                        .private_texture_format_caps
-                        .map_format(ds.format);
-                    let aspects = crate::FormatAspects::from(ds.format);
-                    if aspects.contains(crate::FormatAspects::DEPTH) {
-                        descriptor.setDepthAttachmentPixelFormat(raw_format);
-                    }
-                    if aspects.contains(crate::FormatAspects::STENCIL) {
-                        descriptor.setStencilAttachmentPixelFormat(raw_format);
-                    }
-
-                    let ds_descriptor = create_depth_stencil_desc(ds);
-                    let raw = self
-                        .shared
-                        .device
-                        .newDepthStencilStateWithDescriptor(&ds_descriptor)
-                        .unwrap();
-                    Some((raw, ds.bias))
-                }
-                None => None,
-            };
-
-            // Setup multisample state
-            if desc.multisample.count != 1 {
-                //TODO: handle sample mask
-                match descriptor {
-                    MetalGenericRenderPipelineDescriptor::Standard(ref inner) => {
-                        #[allow(deprecated)]
-                        inner.setSampleCount(desc.multisample.count as _);
-                    }
-                    MetalGenericRenderPipelineDescriptor::Mesh(ref inner) => {
-                        unsafe { inner.setRasterSampleCount(desc.multisample.count as _) };
-                    }
-                }
-                descriptor.setAlphaToCoverageEnabled(desc.multisample.alpha_to_coverage_enabled);
-                //descriptor.set_alpha_to_one_enabled(desc.multisample.alpha_to_one_enabled);
-            }
-
-            // Set debug label
-            if let Some(name) = desc.label {
-                descriptor.setLabel(Some(&NSString::from_str(name)));
-            }
-            if let Some(mv) = desc.multiview_mask {
-                unsafe {
-                    descriptor.setMaxVertexAmplificationCount(mv.get().count_ones() as usize)
-                };
-            }
-
-            // Create the pipeline from descriptor
-            let raw = match descriptor {
-                MetalGenericRenderPipelineDescriptor::Standard(d) => self
-                    .shared
-                    .device
-                    .newRenderPipelineStateWithDescriptor_error(&d),
-                MetalGenericRenderPipelineDescriptor::Mesh(d) => self
-                    .shared
-                    .device
-                    .newRenderPipelineStateWithMeshDescriptor_options_reflection_error(
-                        &d,
-                        MTLPipelineOption::empty(),
-                        None,
-                    ),
-            }
-            .map_err(|e| {
-                crate::PipelineError::Linkage(
-                    wgt::ShaderStages::VERTEX | wgt::ShaderStages::FRAGMENT,
-                    format!("new_render_pipeline_state: {e:?}"),
-                )
-            })?;
-
-            self.counters.render_pipelines.add(1);
-
-            Ok(super::RenderPipeline {
-                raw,
-                vs_info,
-                fs_info,
-                ts_info,
-                ms_info,
-                raw_primitive_type,
-                raw_triangle_fill_mode,
-                raw_front_winding: conv::map_winding(desc.primitive.front_face),
-                raw_cull_mode: conv::map_cull_mode(desc.primitive.cull_mode),
-                raw_depth_clip_mode: if self.features.contains(wgt::Features::DEPTH_CLIP_CONTROL) {
-                    Some(if desc.primitive.unclipped_depth {
-                        MTLDepthClipMode::Clamp
-                    } else {
-                        MTLDepthClipMode::Clip
-                    })
-                } else {
-                    None
-                },
-                depth_stencil,
-            })
-        })
+        // tiled-fork: forward to the inherent helper. The non-subpass path
+        // has no subpass-input bindings, so we pass an empty slot map and
+        // no subpass target.
+        unsafe {
+            self.create_render_pipeline_inner(desc, &naga::FastHashMap::default(), None)
+        }
     }
-
     unsafe fn destroy_render_pipeline(&self, _pipeline: super::RenderPipeline) {
         self.counters.render_pipelines.sub(1);
     }
@@ -1864,6 +1493,8 @@ impl crate::Device for super::Device {
                     desc.layout,
                     MTLPrimitiveTopologyClass::Unspecified,
                     naga::ShaderStage::Compute,
+                    &naga::FastHashMap::default(),
+                    None,
                 )?
             };
 
@@ -2182,6 +1813,618 @@ impl crate::Device for super::Device {
         // TODO: see https://github.com/gfx-rs/wgpu/issues/7460
 
         Ok(())
+    }
+}
+
+impl super::Device {
+    /// tiled-fork: shared body for both [`crate::Device::create_render_pipeline`]
+    /// and [`crate::TiledDevice::create_subpass_render_pipeline`]. The latter
+    /// passes a non-empty `fragment_subpass_color_slots` map plus the parent
+    /// pass's `SubpassTarget`, so the helper can set the color-attachment
+    /// pixel formats for the slots that the fragment shader reads back via
+    /// `[[color(N)]]` framebuffer fetch.
+    pub(super) unsafe fn create_render_pipeline_inner(
+        &self,
+        desc: &crate::RenderPipelineDescriptor<
+            super::PipelineLayout,
+            super::ShaderModule,
+            super::PipelineCache,
+        >,
+        fragment_subpass_color_slots: &naga::FastHashMap<(u32, u32), u32>,
+        subpass_target: Option<&wgt::SubpassTarget>,
+    ) -> Result<super::RenderPipeline, crate::PipelineError> {
+        autoreleasepool(|_| {
+            enum MetalGenericRenderPipelineDescriptor {
+                Standard(Retained<MTLRenderPipelineDescriptor>),
+                Mesh(Retained<MTLMeshRenderPipelineDescriptor>),
+            }
+            macro_rules! descriptor_fn {
+                ($descriptor:ident . $method:ident $( ( $($args:expr),* ) )? ) => {
+                    match $descriptor {
+                        MetalGenericRenderPipelineDescriptor::Standard(ref inner) => inner.$method$(($($args),*))?,
+                        MetalGenericRenderPipelineDescriptor::Mesh(ref inner) => inner.$method$(($($args),*))?,
+                    }
+                };
+            }
+            #[allow(non_snake_case)]
+            impl MetalGenericRenderPipelineDescriptor {
+                unsafe fn setFragmentFunction(
+                    &self,
+                    function: Option<&ProtocolObject<dyn MTLFunction>>,
+                ) {
+                    unsafe { descriptor_fn!(self.setFragmentFunction(function)) };
+                }
+                fn fragmentBuffers(&self) -> Retained<MTLPipelineBufferDescriptorArray> {
+                    descriptor_fn!(self.fragmentBuffers())
+                }
+                fn setDepthAttachmentPixelFormat(&self, pixel_format: MTLPixelFormat) {
+                    descriptor_fn!(self.setDepthAttachmentPixelFormat(pixel_format));
+                }
+                fn colorAttachments(
+                    &self,
+                ) -> Retained<MTLRenderPipelineColorAttachmentDescriptorArray> {
+                    descriptor_fn!(self.colorAttachments())
+                }
+                fn setStencilAttachmentPixelFormat(&self, pixel_format: MTLPixelFormat) {
+                    descriptor_fn!(self.setStencilAttachmentPixelFormat(pixel_format));
+                }
+                fn setAlphaToCoverageEnabled(&self, enabled: bool) {
+                    descriptor_fn!(self.setAlphaToCoverageEnabled(enabled));
+                }
+                fn setLabel(&self, label: Option<&NSString>) {
+                    descriptor_fn!(self.setLabel(label));
+                }
+                unsafe fn setMaxVertexAmplificationCount(&self, count: NSUInteger) {
+                    unsafe { descriptor_fn!(self.setMaxVertexAmplificationCount(count)) }
+                }
+            }
+
+            // https://developer.apple.com/documentation/metal/mtlpipelinebufferdescriptor/mutability
+            let supports_mutability =
+                available!(macos = 10.13, ios = 11.0, tvos = 11.0, visionos = 1.0);
+
+            let (primitive_class, raw_primitive_type) =
+                conv::map_primitive_topology(desc.primitive.topology);
+
+            let vs_info;
+            let ts_info;
+            let ms_info;
+
+            // tiled-fork: pre-compute the (input, output) attachment remaps
+            // for the active subpass. The output remap is consumed both by
+            // the fragment-stage load_shader call (it rewrites the naga
+            // module's `@location(N)` outputs) and by the color-attachment
+            // setup below (to pick the right `colorAttachments[]` slot for
+            // each pipeline output).
+            let (_input_att_remap, output_att_remap): (Vec<u32>, Vec<u32>) =
+                if let Some(target) = subpass_target {
+                    get_subpass_attachment_remaps(target).map_err(|msg| {
+                        crate::PipelineError::Linkage(wgt::ShaderStages::FRAGMENT, msg)
+                    })?
+                } else {
+                    Default::default()
+                };
+            let fragment_output_remap = if subpass_target.is_some() {
+                Some(output_att_remap.as_slice())
+            } else {
+                None
+            };
+
+            // Create the pipeline descriptor and do vertex/mesh pipeline specific setup
+            let descriptor = match desc.vertex_processor {
+                crate::VertexProcessor::Standard {
+                    vertex_buffers,
+                    ref vertex_stage,
+                } => {
+                    // Vertex pipeline specific setup
+
+                    let descriptor = MTLRenderPipelineDescriptor::new();
+                    ts_info = None;
+                    ms_info = None;
+
+                    // Collect vertex buffer mappings
+                    let mut vertex_buffer_mappings =
+                        Vec::<naga::back::msl::VertexBufferMapping>::new();
+                    for (i, vbl) in vertex_buffers.iter().enumerate() {
+                        let mut attributes = Vec::<naga::back::msl::AttributeMapping>::new();
+                        for attribute in vbl.attributes.iter() {
+                            attributes.push(naga::back::msl::AttributeMapping {
+                                shader_location: attribute.shader_location,
+                                offset: attribute.offset as u32,
+                                format: convert_vertex_format_to_naga(attribute.format),
+                            });
+                        }
+
+                        let mapping = naga::back::msl::VertexBufferMapping {
+                            id: self.shared.private_caps.max_vertex_buffers - 1 - i as u32,
+                            stride: if vbl.array_stride > 0 {
+                                vbl.array_stride.try_into().unwrap()
+                            } else {
+                                vbl.attributes
+                                    .iter()
+                                    .map(|attribute| attribute.offset + attribute.format.size())
+                                    .max()
+                                    .unwrap_or(0)
+                                    .try_into()
+                                    .unwrap()
+                            },
+                            step_mode: match (vbl.array_stride == 0, vbl.step_mode) {
+                                (true, _) => naga::back::msl::VertexBufferStepMode::Constant,
+                                (false, wgt::VertexStepMode::Vertex) => {
+                                    naga::back::msl::VertexBufferStepMode::ByVertex
+                                }
+                                (false, wgt::VertexStepMode::Instance) => {
+                                    naga::back::msl::VertexBufferStepMode::ByInstance
+                                }
+                            },
+                            attributes,
+                        };
+                        vertex_buffer_mappings.push(mapping);
+                    }
+
+                    // Setup vertex shader
+                    {
+                        let vs = self.load_shader(
+                            vertex_stage,
+                            &vertex_buffer_mappings,
+                            desc.layout,
+                            primitive_class,
+                            naga::ShaderStage::Vertex,
+                            &naga::FastHashMap::default(),
+                            None,
+                        )?;
+
+                        descriptor.setVertexFunction(Some(&vs.function));
+
+                        if supports_mutability {
+                            Self::set_buffers_mutability(
+                                &descriptor.vertexBuffers(),
+                                vs.immutable_buffer_mask,
+                            );
+                        }
+
+                        vs_info = Some(super::PipelineStageInfo {
+                            immediates: desc.layout.immediates_infos.vs,
+                            sizes_slot: desc.layout.per_stage_map.vs.sizes_buffer,
+                            sized_bindings: vs.sized_bindings,
+                            vertex_buffer_mappings,
+                            library: Some(vs.library),
+                            raw_wg_size: MTLSize {
+                                width: 0,
+                                height: 0,
+                                depth: 0,
+                            },
+                            work_group_memory_sizes: vec![],
+                        });
+                    }
+
+                    // Validate vertex buffer count
+                    if desc.layout.total_counters.vs.buffers + (vertex_buffers.len() as u32)
+                        > self.shared.private_caps.max_vertex_buffers
+                    {
+                        let msg = format!(
+                            "pipeline needs too many buffers in the vertex stage: {} vertex and {} layout",
+                            vertex_buffers.len(),
+                            desc.layout.total_counters.vs.buffers
+                        );
+                        return Err(crate::PipelineError::Linkage(
+                            wgt::ShaderStages::VERTEX,
+                            msg,
+                        ));
+                    }
+
+                    // Set the pipeline vertex buffer info
+                    if !vertex_buffers.is_empty() {
+                        let vertex_descriptor = MTLVertexDescriptor::new();
+                        for (i, vb) in vertex_buffers.iter().enumerate() {
+                            let buffer_index =
+                                self.shared.private_caps.max_vertex_buffers as usize - 1 - i;
+                            let buffer_desc = unsafe {
+                                vertex_descriptor
+                                    .layouts()
+                                    .objectAtIndexedSubscript(buffer_index)
+                            };
+
+                            // Metal expects the stride to be the actual size of the attributes.
+                            // The semantics of array_stride == 0 can be achieved by setting
+                            // the step function to constant and rate to 0.
+                            if vb.array_stride == 0 {
+                                let stride = vb
+                                    .attributes
+                                    .iter()
+                                    .map(|attribute| attribute.offset + attribute.format.size())
+                                    .max()
+                                    .unwrap_or(0);
+                                unsafe {
+                                    buffer_desc.setStride(wgt::math::align_to(stride as _, 4))
+                                };
+                                buffer_desc.setStepFunction(MTLVertexStepFunction::Constant);
+                                unsafe { buffer_desc.setStepRate(0) };
+                            } else {
+                                unsafe { buffer_desc.setStride(vb.array_stride as _) };
+                                buffer_desc.setStepFunction(conv::map_step_mode(vb.step_mode));
+                            }
+
+                            for at in vb.attributes {
+                                let attribute_desc = unsafe {
+                                    vertex_descriptor
+                                        .attributes()
+                                        .objectAtIndexedSubscript(at.shader_location as _)
+                                };
+                                attribute_desc.setFormat(conv::map_vertex_format(at.format));
+                                unsafe { attribute_desc.setBufferIndex(buffer_index) };
+                                unsafe { attribute_desc.setOffset(at.offset as _) };
+                            }
+                        }
+                        descriptor.setVertexDescriptor(Some(&vertex_descriptor));
+                    }
+
+                    MetalGenericRenderPipelineDescriptor::Standard(descriptor)
+                }
+                crate::VertexProcessor::Mesh {
+                    ref task_stage,
+                    ref mesh_stage,
+                } => {
+                    // Mesh pipeline specific setup
+
+                    vs_info = None;
+                    let descriptor = MTLMeshRenderPipelineDescriptor::new();
+
+                    // Setup task stage
+                    if let Some(ref task_stage) = task_stage {
+                        let ts = self.load_shader(
+                            task_stage,
+                            &[],
+                            desc.layout,
+                            primitive_class,
+                            naga::ShaderStage::Task,
+                            &naga::FastHashMap::default(),
+                            None,
+                        )?;
+                        unsafe { descriptor.setObjectFunction(Some(&ts.function)) };
+                        if supports_mutability {
+                            Self::set_buffers_mutability(
+                                &descriptor.meshBuffers(),
+                                ts.immutable_buffer_mask,
+                            );
+                        }
+                        ts_info = Some(super::PipelineStageInfo {
+                            immediates: desc.layout.immediates_infos.ts,
+                            sizes_slot: desc.layout.per_stage_map.ts.sizes_buffer,
+                            sized_bindings: ts.sized_bindings,
+                            vertex_buffer_mappings: vec![],
+                            library: Some(ts.library),
+                            raw_wg_size: ts.wg_size,
+                            work_group_memory_sizes: ts.wg_memory_sizes,
+                        });
+                    } else {
+                        ts_info = None;
+                    }
+
+                    // Setup mesh stage
+                    {
+                        let ms = self.load_shader(
+                            mesh_stage,
+                            &[],
+                            desc.layout,
+                            primitive_class,
+                            naga::ShaderStage::Mesh,
+                            &naga::FastHashMap::default(),
+                            None,
+                        )?;
+                        unsafe { descriptor.setMeshFunction(Some(&ms.function)) };
+                        if supports_mutability {
+                            Self::set_buffers_mutability(
+                                &descriptor.meshBuffers(),
+                                ms.immutable_buffer_mask,
+                            );
+                        }
+                        ms_info = Some(super::PipelineStageInfo {
+                            immediates: desc.layout.immediates_infos.ms,
+                            sizes_slot: desc.layout.per_stage_map.ms.sizes_buffer,
+                            sized_bindings: ms.sized_bindings,
+                            vertex_buffer_mappings: vec![],
+                            library: Some(ms.library),
+                            raw_wg_size: ms.wg_size,
+                            work_group_memory_sizes: ms.wg_memory_sizes,
+                        });
+                    }
+
+                    MetalGenericRenderPipelineDescriptor::Mesh(descriptor)
+                }
+            };
+
+            let raw_triangle_fill_mode = match desc.primitive.polygon_mode {
+                wgt::PolygonMode::Fill => MTLTriangleFillMode::Fill,
+                wgt::PolygonMode::Line => MTLTriangleFillMode::Lines,
+                wgt::PolygonMode::Point => panic!(
+                    "{:?} is not enabled for this backend",
+                    wgt::Features::POLYGON_MODE_POINT
+                ),
+            };
+
+            // Fragment shader
+            let fs_info = match desc.fragment_stage {
+                Some(ref stage) => {
+                    let fs = self.load_shader(
+                        stage,
+                        &[],
+                        desc.layout,
+                        primitive_class,
+                        naga::ShaderStage::Fragment,
+                        fragment_subpass_color_slots,
+                        fragment_output_remap,
+                    )?;
+
+                    unsafe { descriptor.setFragmentFunction(Some(&fs.function)) };
+                    if supports_mutability {
+                        Self::set_buffers_mutability(
+                            &descriptor.fragmentBuffers(),
+                            fs.immutable_buffer_mask,
+                        );
+                    }
+
+                    Some(super::PipelineStageInfo {
+                        immediates: desc.layout.immediates_infos.fs,
+                        sizes_slot: desc.layout.per_stage_map.fs.sizes_buffer,
+                        sized_bindings: fs.sized_bindings,
+                        vertex_buffer_mappings: vec![],
+                        library: Some(fs.library),
+                        raw_wg_size: MTLSize {
+                            width: 0,
+                            height: 0,
+                            depth: 0,
+                        },
+                        work_group_memory_sizes: vec![],
+                    })
+                }
+                None => {
+                    // TODO: This is a workaround for what appears to be a Metal validation bug
+                    // A pixel format is required even though no attachments are provided
+                    if desc.color_targets.is_empty() && desc.depth_stencil.is_none() {
+                        descriptor.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
+                    }
+                    None
+                }
+            };
+
+            // Setup pipeline color attachments.
+            //
+            // tiled-fork: if this pipeline targets a subpass, every parent-
+            // pass color slot needs a pixel format set on the Metal pipeline
+            // descriptor (Metal validates that any `[[color(N)]]` read or
+            // write has a matching `colorAttachments[N].pixelFormat`). The
+            // pipeline's own `color_targets` only describe the *outputs* of
+            // the current subpass, so we first pre-populate every parent
+            // slot from `subpass_target.color_attachment_formats` and then
+            // overlay the pipeline's outputs (remapped via the subpass's
+            // `color_attachment_indices`) with their write mask / blend.
+            let pass_color_formats: Vec<Option<wgt::TextureFormat>> =
+                if let Some(target) = subpass_target {
+                    validate_subpass_output_remap(
+                        &output_att_remap,
+                        desc.color_targets.len(),
+                        target.color_attachment_formats.len(),
+                    )
+                    .map_err(|msg| {
+                        crate::PipelineError::Linkage(wgt::ShaderStages::FRAGMENT, msg)
+                    })?;
+                    target.color_attachment_formats.clone()
+                } else {
+                    desc.color_targets
+                        .iter()
+                        .map(|target| target.as_ref().map(|t| t.format))
+                        .collect()
+                };
+
+            // First: set the pixel format of every parent-pass slot so the
+            // Metal driver knows what each `[[color(N)]]` argument's type
+            // resolves to. Empty slots are marked Invalid.
+            for (slot, format) in pass_color_formats.iter().enumerate() {
+                let at_descriptor =
+                    unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(slot) };
+                match format {
+                    Some(format) => {
+                        let raw_format = self
+                            .shared
+                            .private_texture_format_caps
+                            .map_format(*format);
+                        at_descriptor.setPixelFormat(raw_format);
+                    }
+                    None => at_descriptor.setPixelFormat(MTLPixelFormat::Invalid),
+                }
+                // Default: no writes / no blend. The pipeline's own outputs
+                // override this in the next loop.
+                at_descriptor.setWriteMask(conv::map_color_write(wgt::ColorWrites::empty()));
+                at_descriptor.setBlendingEnabled(false);
+            }
+
+            // Then: overlay the pipeline's actual outputs (write mask /
+            // blend / pixel format) on their remapped slots.
+            for (local_slot, ct) in desc.color_targets.iter().enumerate() {
+                let Some(ct) = ct.as_ref() else {
+                    if subpass_target.is_none() {
+                        let at_descriptor = unsafe {
+                            descriptor.colorAttachments().objectAtIndexedSubscript(local_slot)
+                        };
+                        at_descriptor.setPixelFormat(MTLPixelFormat::Invalid);
+                    }
+                    continue;
+                };
+                let slot = if subpass_target.is_some() {
+                    output_att_remap[local_slot] as usize
+                } else {
+                    local_slot
+                };
+                if let Some(expected_format) = pass_color_formats.get(slot).copied().flatten() {
+                    if subpass_target.is_some() && expected_format != ct.format {
+                        return Err(crate::PipelineError::Linkage(
+                            wgt::ShaderStages::FRAGMENT,
+                            alloc::format!(
+                                "subpass color attachment slot {slot} expects format {:?}, but pipeline target uses {:?}",
+                                expected_format, ct.format
+                            ),
+                        ));
+                    }
+                }
+                let at_descriptor =
+                    unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(slot) };
+                let raw_format = self
+                    .shared
+                    .private_texture_format_caps
+                    .map_format(ct.format);
+                at_descriptor.setPixelFormat(raw_format);
+                at_descriptor.setWriteMask(conv::map_color_write(ct.write_mask));
+
+                if let Some(ref blend) = ct.blend {
+                    at_descriptor.setBlendingEnabled(true);
+                    let (color_op, color_src, color_dst) = conv::map_blend_component(&blend.color);
+                    let (alpha_op, alpha_src, alpha_dst) = conv::map_blend_component(&blend.alpha);
+
+                    at_descriptor.setRgbBlendOperation(color_op);
+                    at_descriptor.setSourceRGBBlendFactor(color_src);
+                    at_descriptor.setDestinationRGBBlendFactor(color_dst);
+
+                    at_descriptor.setAlphaBlendOperation(alpha_op);
+                    at_descriptor.setSourceAlphaBlendFactor(alpha_src);
+                    at_descriptor.setDestinationAlphaBlendFactor(alpha_dst);
+                }
+            }
+
+            // Setup depth stencil state.
+            //
+            // tiled-fork: when this pipeline targets a subpass, the parent
+            // pass owns the depth/stencil attachment — its format must be
+            // declared on the Metal pipeline descriptor even when the
+            // active subpass itself doesn't use it (Metal validates
+            // pipeline/render-pass compatibility against the depth
+            // pixel-format). The active subpass's `uses_depth_stencil`
+            // flag still drives whether we build a depth-stencil state.
+            let active_subpass_desc = subpass_target
+                .and_then(|t| t.subpass_descs.get(t.index as usize));
+            let depth_stencil_active = active_subpass_desc
+                .map(|s| s.uses_depth_stencil)
+                .unwrap_or(true);
+            let compatible_depth_stencil_format = subpass_target
+                .and_then(|t| t.depth_stencil_format)
+                .or_else(|| desc.depth_stencil.as_ref().map(|state| state.format));
+            if let Some(format) = compatible_depth_stencil_format {
+                let raw_format = self
+                    .shared
+                    .private_texture_format_caps
+                    .map_format(format);
+                let aspects = crate::FormatAspects::from(format);
+                if aspects.contains(crate::FormatAspects::DEPTH) {
+                    descriptor.setDepthAttachmentPixelFormat(raw_format);
+                }
+                if aspects.contains(crate::FormatAspects::STENCIL) {
+                    descriptor.setStencilAttachmentPixelFormat(raw_format);
+                }
+            }
+            let depth_stencil = match desc.depth_stencil {
+                Some(ref ds) => {
+                    if !depth_stencil_active {
+                        None
+                    } else {
+                        let ds_descriptor = create_depth_stencil_desc(ds);
+                        let raw = self
+                            .shared
+                            .device
+                            .newDepthStencilStateWithDescriptor(&ds_descriptor)
+                            .unwrap();
+                        Some((raw, ds.bias))
+                    }
+                }
+                None => {
+                    if should_use_disabled_depth_stencil_state_for_subpass(
+                        None,
+                        subpass_target,
+                    ) {
+                        let ds_descriptor = create_disabled_depth_stencil_desc();
+                        let raw = self
+                            .shared
+                            .device
+                            .newDepthStencilStateWithDescriptor(&ds_descriptor)
+                            .unwrap();
+                        Some((raw, wgt::DepthBiasState::default()))
+                    } else {
+                        None
+                    }
+                }
+            };
+
+            // Setup multisample state
+            if desc.multisample.count != 1 {
+                //TODO: handle sample mask
+                match descriptor {
+                    MetalGenericRenderPipelineDescriptor::Standard(ref inner) => {
+                        #[allow(deprecated)]
+                        inner.setSampleCount(desc.multisample.count as _);
+                    }
+                    MetalGenericRenderPipelineDescriptor::Mesh(ref inner) => {
+                        unsafe { inner.setRasterSampleCount(desc.multisample.count as _) };
+                    }
+                }
+                descriptor.setAlphaToCoverageEnabled(desc.multisample.alpha_to_coverage_enabled);
+                //descriptor.set_alpha_to_one_enabled(desc.multisample.alpha_to_one_enabled);
+            }
+
+            // Set debug label
+            if let Some(name) = desc.label {
+                descriptor.setLabel(Some(&NSString::from_str(name)));
+            }
+            if let Some(mv) = desc.multiview_mask {
+                unsafe {
+                    descriptor.setMaxVertexAmplificationCount(mv.get().count_ones() as usize)
+                };
+            }
+
+            // Create the pipeline from descriptor
+            let raw = match descriptor {
+                MetalGenericRenderPipelineDescriptor::Standard(d) => self
+                    .shared
+                    .device
+                    .newRenderPipelineStateWithDescriptor_error(&d),
+                MetalGenericRenderPipelineDescriptor::Mesh(d) => self
+                    .shared
+                    .device
+                    .newRenderPipelineStateWithMeshDescriptor_options_reflection_error(
+                        &d,
+                        MTLPipelineOption::empty(),
+                        None,
+                    ),
+            }
+            .map_err(|e| {
+                crate::PipelineError::Linkage(
+                    wgt::ShaderStages::VERTEX | wgt::ShaderStages::FRAGMENT,
+                    format!("new_render_pipeline_state: {e:?}"),
+                )
+            })?;
+
+            self.counters.render_pipelines.add(1);
+
+            Ok(super::RenderPipeline {
+                raw,
+                vs_info,
+                fs_info,
+                ts_info,
+                ms_info,
+                raw_primitive_type,
+                raw_triangle_fill_mode,
+                raw_front_winding: conv::map_winding(desc.primitive.front_face),
+                raw_cull_mode: conv::map_cull_mode(desc.primitive.cull_mode),
+                raw_depth_clip_mode: if self.features.contains(wgt::Features::DEPTH_CLIP_CONTROL) {
+                    Some(if desc.primitive.unclipped_depth {
+                        MTLDepthClipMode::Clamp
+                    } else {
+                        MTLDepthClipMode::Clip
+                    })
+                } else {
+                    None
+                },
+                depth_stencil,
+            })
+        })
     }
 }
 

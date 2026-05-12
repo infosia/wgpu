@@ -349,6 +349,10 @@ struct PrivateCapabilities {
     max_vertex_buffers: ResourceIndex,
     max_textures_per_stage: ResourceIndex,
     max_samplers_per_stage: ResourceIndex,
+    // tiled-fork: begin private-caps-tiled
+    max_color_render_targets: u8,
+    max_total_threadgroup_memory: u32,
+    // tiled-fork: end private-caps-tiled
 }
 
 #[derive(Debug)]

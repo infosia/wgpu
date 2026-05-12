@@ -289,33 +289,26 @@ impl crate::TiledDevice for super::Device {
         .map_err(|msg| PipelineError::Linkage(wgt::ShaderStages::FRAGMENT, msg))?;
 
         // Build the (group, binding) -> color attachment slot map for any
-        // `subpass_input` globals in the fragment shader. The MSL backend's
-        // `Options::subpass_color_slots` consumer will land alongside the
-        // global-form `[[color(N)]]` lowering in a follow-up; until then the
-        // walked map is validated for correctness and a non-empty result
-        // surfaces as a clear linkage error rather than miscompilation.
+        // `subpass_input` globals in the fragment shader. The MSL writer
+        // surfaces these as `[[color(N)]]` fragment-entry arguments through
+        // `naga::back::msl::Options::subpass_color_slots`.
         let fragment_subpass_color_slots = if let Some(stage) = desc.fragment_stage.as_ref() {
             super::device::build_subpass_color_slot_map(stage, Some(subpass_target))?
         } else {
             naga::FastHashMap::default()
         };
-        if !fragment_subpass_color_slots.is_empty() {
-            return Err(PipelineError::Linkage(
-                wgt::ShaderStages::FRAGMENT,
-                "metal: subpass_input globals are not yet lowered to [[color(N)]] arguments \
-                 by the MSL backend; rewrite the fragment shader to take @color(N) parameters \
-                 in its entry-point signature instead. (Tracked as a follow-up alongside \
-                 naga::back::msl::Options::subpass_color_slots plumbing.)"
-                    .into(),
-            ));
-        }
 
-        // Forward to the single-subpass pipeline path. Color formats /
-        // depth-stencil-disable handling against the parent pass live behind
-        // the same follow-up; for now wgpu-core drives `desc.color_targets`
-        // and `desc.depth_stencil` to match the active subpass slot order
-        // implicitly.
-        unsafe { <Self as crate::Device>::create_render_pipeline(self, desc) }
+        // Forward to the shared pipeline-creation helper, threading the
+        // slot map and the parent `SubpassTarget` so the helper can set
+        // the color-attachment pixel formats for any framebuffer-fetch
+        // slot the fragment shader reads back via `[[color(N)]]`.
+        unsafe {
+            self.create_render_pipeline_inner(
+                desc,
+                &fragment_subpass_color_slots,
+                Some(subpass_target),
+            )
+        }
     }
 }
 
@@ -364,52 +357,31 @@ impl crate::TiledCommandEncoder for super::CommandEncoder {
         let current_index = first_active_subpass_index(subpass_count, active_subpass_mask);
 
         // Translate the subpass descriptor into an upstream single-pass
-        // descriptor and reuse `begin_render_pass`. For the persistent-only
-        // path, the active subpass alone determines what attachments are
-        // bound; subpass advance is a no-op on Metal because the hardware
-        // implicitly serializes fragment work within a single
-        // `MTLRenderCommandEncoder`. The matching wgpu-core changes that
-        // populate `subpass.color_attachment_indices` from the parent pass's
-        // `color_attachments` will land alongside the transient bridge; for
-        // now we use the implicit identity mapping (slot N of the subpass's
-        // own color list maps to color attachment N in the upstream pass).
+        // descriptor and reuse `begin_render_pass`.
         //
-        let active_subpass = current_index.and_then(|idx| desc.subpasses.get(idx as usize));
+        // tiled-fork: Metal has *one* `MTLRenderCommandEncoder` per render
+        // pass with a single fixed attachment table — every slot the
+        // pipeline's `[[color(N)]]` arguments touch (across *all* subpasses
+        // in the pass) needs a corresponding entry here. So we forward the
+        // pass-level `desc.color_attachments` directly rather than picking
+        // out the active subpass's local list. The implicit serialization
+        // between subpasses comes from the hardware tile pipeline; advance
+        // is a no-op on Metal.
+        let _ = current_index; // active-subpass selection is encoded in pipelines, not here
         let mut color_attachments_storage: arrayvec::ArrayVec<
             Option<crate::ColorAttachment<'_, <super::Api as crate::Api>::TextureView>>,
             { crate::MAX_COLOR_ATTACHMENTS },
         > = arrayvec::ArrayVec::new();
         let depth_stencil_attachment = desc.depth_stencil_attachment.as_ref().map(rebuild_ds);
 
-        if let Some(subpass) = active_subpass {
-            for slot in subpass.color_attachments.iter() {
-                let attachment = match slot {
-                    Some(crate::SubpassColorAttachment::Persistent(p)) => Some(rebuild_color(p)),
-                    // Transient is short-circuited above; this match is
-                    // defensive in case a new variant is added later.
-                    _ => None,
-                };
-                if color_attachments_storage.try_push(attachment).is_err() {
-                    log::error!(
-                        "metal: begin_subpass_render_pass: subpass declared more color attachments \
-                         than MAX_COLOR_ATTACHMENTS; truncating"
-                    );
-                    break;
-                }
-            }
-        } else {
-            // No active subpass: still record an empty pass so
-            // `end_render_pass` sees a coherent state. Mirror the active
-            // branch's overflow log so callers learn about over-long
-            // attachment lists in either path.
-            for _ in 0..desc.color_attachments.len() {
-                if color_attachments_storage.try_push(None).is_err() {
-                    log::error!(
-                        "metal: begin_subpass_render_pass: descriptor declared more color \
-                         attachments than MAX_COLOR_ATTACHMENTS; truncating"
-                    );
-                    break;
-                }
+        for slot in desc.color_attachments.iter() {
+            let attachment = slot.as_ref().map(rebuild_color);
+            if color_attachments_storage.try_push(attachment).is_err() {
+                log::error!(
+                    "metal: begin_subpass_render_pass: descriptor declared more color \
+                     attachments than MAX_COLOR_ATTACHMENTS; truncating"
+                );
+                break;
             }
         }
 

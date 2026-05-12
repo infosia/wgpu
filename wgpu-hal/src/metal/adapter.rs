@@ -1376,6 +1376,10 @@ impl super::CapabilitiesQuery {
             max_vertex_buffers: self.max_vertex_buffers,
             max_textures_per_stage: self.max_textures_per_stage,
             max_samplers_per_stage: self.max_samplers_per_stage,
+            // tiled-fork: begin private-caps-tiled-fwd
+            max_color_render_targets: self.max_color_render_targets,
+            max_total_threadgroup_memory: self.max_total_threadgroup_memory,
+            // tiled-fork: end private-caps-tiled-fwd
         }
     }
 

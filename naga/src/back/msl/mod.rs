@@ -281,7 +281,10 @@ enum LocationMode {
     Uniform,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+// tiled-fork: dropped `Hash` derive — `subpass_color_slots` (a
+// `FastHashMap`) is not `Hash`. No caller of MSL `Options` relies on
+// hashing it.
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 #[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
 #[cfg_attr(feature = "deserialize", serde(default))]
@@ -303,6 +306,16 @@ pub struct Options {
     /// If set, loops will have code injected into them, forcing the compiler
     /// to think the number of iterations is bounded.
     pub force_loop_bounding: bool,
+    // tiled-fork: begin subpass_color_slots
+    /// Mapping from `(group, binding)` of a `subpass_input` global to the
+    /// active render pass's color attachment slot. The MSL writer uses this
+    /// to surface the global as a `[[color(N)]]` fragment-entry argument
+    /// (the Metal equivalent of a Vulkan input attachment).
+    ///
+    /// Empty by default; populated by the wgpu-hal/metal pipeline path when
+    /// compiling a subpass-aware fragment shader.
+    pub subpass_color_slots: crate::FastHashMap<(u32, u32), u32>,
+    // tiled-fork: end subpass_color_slots
 }
 
 impl Default for Options {
@@ -316,6 +329,8 @@ impl Default for Options {
             bounds_check_policies: index::BoundsCheckPolicies::default(),
             zero_initialize_workgroup_memory: true,
             force_loop_bounding: true,
+            // tiled-fork: see field doc.
+            subpass_color_slots: crate::FastHashMap::default(),
         }
     }
 }
@@ -622,6 +637,18 @@ impl Options {
         ep: &crate::EntryPoint,
         res_binding: &crate::ResourceBinding,
     ) -> Result<ResolvedBinding, EntryPointError> {
+        // tiled-fork: a `subpass_input` global at this (group, binding) is
+        // surfaced as `[[color(N)]]` on the fragment entry point — bypass
+        // the regular per-entry-point resource map.
+        if let Some(&location) = self
+            .subpass_color_slots
+            .get(&(res_binding.group, res_binding.binding))
+        {
+            return Ok(ResolvedBinding::Color {
+                location,
+                blend_src: None,
+            });
+        }
         let target = self.get_resource_binding_target(ep, res_binding);
         match target {
             Some(target) => Ok(ResolvedBinding::Resource(target.clone())),

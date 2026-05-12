@@ -447,24 +447,11 @@ impl TypedGlobalVariable<'_> {
         let var = &self.module.global_variables[self.handle];
         let name = &self.names[&NameKey::GlobalVariable(self.handle)];
 
-        // tiled-fork: begin global subpass-input rejection
-        // Subpass-input globals (`var s: subpass_input<T>;`) should be lifted
-        // to a fragment-stage `[[color(N)]]` argument by an Options mapping
-        // that Phase 6d does not yet wire (see Phase 6d Phase Review C2).
-        // Until that's plumbed, refuse to emit them rather than producing
-        // invalid MSL like `metal::float4 s [[texture(0)]]`.
-        if let crate::TypeInner::Image { class, .. } = self.module.types[var.ty].inner {
-            if class.is_subpass_input() {
-                return Err(Error::FeatureNotImplemented(
-                    "subpass-input globals on MSL: Phase 6d does not yet lift these \
-                     to [[color(N)]] fragment arguments. Use the entry-point \
-                     `@color(N)` framebuffer-fetch path instead, or wait for the \
-                     follow-up plumbing."
-                        .into(),
-                ));
-            }
-        }
-        // tiled-fork: end global subpass-input rejection
+        // tiled-fork: subpass-input globals are emitted as the underlying
+        // scalar/vector type (see the `class.is_subpass_input()` branch in
+        // `TypeContext::try_fmt`) and the binding resolver maps their
+        // (group, binding) to `ResolvedBinding::Color`, so the entry-point
+        // arg ends up as `floatN name [[color(N)]]`.
 
         let storage_access = match var.space {
             crate::AddressSpace::Storage { access } => access,
@@ -1521,19 +1508,22 @@ impl<W: Write> Writer<W> {
     // tiled-fork: begin helper (put_subpass_load)
     /// Emit a subpass-input read.
     ///
-    /// In MSL there is no dedicated subpass-input texture type: the global is
-    /// surfaced as a fragment-stage argument with `[[color(N)]]`. The "load"
-    /// is therefore a direct read of the argument's name, with no
+    /// In MSL there is no dedicated subpass-input texture type: the global
+    /// is surfaced as a fragment-stage argument with `[[color(N)]]`. The
+    /// "load" is therefore a direct read of the argument's name, with no
     /// `texture::read` call.
     ///
-    /// MSAA subpass inputs (`subpass_input_multisampled`) require sample-rate
-    /// shading and per-sample reads; MSL exposes that via `[[sample_id]]`
-    /// fragment input, which Phase 6d does not yet wire through. Reject for
-    /// now rather than silently drop the user's `sample_index` expression.
+    /// MSAA semantics: when a fragment shader declares `[[sample_id]]`
+    /// Metal automatically runs per-sample shading, and `[[color(N)]]`
+    /// returns the value at the currently-shaded sample. The WGSL
+    /// `subpassLoad(t, sample_idx)` form is therefore satisfied implicitly
+    /// — the entry-point's `@builtin(sample_index)` triggers sample-rate
+    /// execution and the framebuffer-fetch arg already returns the right
+    /// sample. So `sample_index` is intentionally not consulted here.
     fn put_subpass_load(
         &mut self,
         image: Handle<crate::Expression>,
-        sample_index: Option<Handle<crate::Expression>>,
+        _sample_index: Option<Handle<crate::Expression>>,
         context: &ExpressionContext,
     ) -> BackendResult {
         let class = match *context.resolve_type(image) {
@@ -1548,22 +1538,6 @@ impl<W: Write> Writer<W> {
             return Err(Error::GenericValidation(
                 "non-subpass image used with SubpassLoad".into(),
             ));
-        }
-        match (class.is_multisampled(), sample_index) {
-            (false, None) => {}
-            (false, Some(_)) => {
-                return Err(Error::GenericValidation(
-                    "non-MSAA subpass input must not carry a sample_index operand"
-                        .into(),
-                ));
-            }
-            (true, _) => {
-                return Err(Error::FeatureNotImplemented(
-                    "MSAA subpass-input loads on MSL (sample-rate shading via \
-                     [[sample_id]] not yet wired)"
-                        .into(),
-                ));
-            }
         }
         self.put_expression(image, context, false)?;
         Ok(())
@@ -7112,6 +7086,21 @@ template <typename A>
                                     break;
                                 }
                             };
+                            // tiled-fork: subpass-input globals don't live
+                            // in `per_entry_point_map`; their (group, binding)
+                            // maps to a `[[color(N)]]` slot via
+                            // `Options::subpass_color_slots` instead.
+                            if let crate::TypeInner::Image { class, .. } =
+                                module.types[var.ty].inner
+                            {
+                                if class.is_subpass_input()
+                                    && options
+                                        .subpass_color_slots
+                                        .contains_key(&(br.group, br.binding))
+                                {
+                                    continue;
+                                }
+                            }
                             let target = options.get_resource_binding_target(ep, br);
                             let good = match target {
                                 Some(target) => {

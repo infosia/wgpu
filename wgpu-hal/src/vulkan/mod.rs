@@ -804,6 +804,14 @@ pub struct Texture {
     format: wgt::TextureFormat,
     copy_size: crate::CopyExtent,
     identity: ResourceIdentity<vk::Image>,
+    // tiled-fork: the actual `vk::ImageUsageFlags` the image was created
+    // with. Needed so `create_texture_view` can mask the view's
+    // `VkImageViewUsageCreateInfo.usage` against the image's real usage
+    // (per VUID-VkImageViewCreateInfo-pNext-02662). The tiled-fork adds
+    // `INPUT_ATTACHMENT` to color targets unconditionally, but swapchain
+    // images are created without that bit, so the view-usage must be
+    // clamped here.
+    usage: vk::ImageUsageFlags,
 
     // The `drop_guard` field must be the last field of this struct so it is dropped last.
     // Do not add new fields after it.

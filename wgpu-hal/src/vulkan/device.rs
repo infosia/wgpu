@@ -673,6 +673,9 @@ impl super::Device {
             format: desc.format,
             copy_size: desc.copy_extent(),
             identity,
+            // tiled-fork: record the vk usage flags so view creation can
+            // mask `VkImageViewUsageCreateInfo.usage` against them.
+            usage: conv::map_texture_usage(desc.usage),
         }
     }
 
@@ -1407,8 +1410,13 @@ impl crate::Device for super::Device {
 
         let mut image_view_info;
         if self.shared.private_caps.image_view_usage && !desc.usage.is_empty() {
-            image_view_info =
-                vk::ImageViewUsageCreateInfo::default().usage(conv::map_texture_usage(desc.usage));
+            // tiled-fork: clamp the view's declared usage to the image's
+            // real `vk::ImageUsageFlags`. `map_texture_usage` adds
+            // `INPUT_ATTACHMENT` for any `COLOR_TARGET`, but swapchain
+            // images are created without that bit; without this mask we
+            // would violate VUID-VkImageViewCreateInfo-pNext-02662.
+            let view_usage = conv::map_texture_usage(desc.usage) & texture.usage;
+            image_view_info = vk::ImageViewUsageCreateInfo::default().usage(view_usage);
             vk_info = vk_info.push_next(&mut image_view_info);
         }
 

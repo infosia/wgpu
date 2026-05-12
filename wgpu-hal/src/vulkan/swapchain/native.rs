@@ -186,6 +186,8 @@ impl Surface for NativeSurface {
             raw_view_formats.push(original_format);
         }
 
+        let image_usage =
+            conv::map_texture_usage(config.usage) & !vk::ImageUsageFlags::INPUT_ATTACHMENT;
         let mut info = vk::SwapchainCreateInfoKHR::default()
             .flags(raw_flags)
             .surface(self.raw)
@@ -197,7 +199,15 @@ impl Surface for NativeSurface {
                 height: config.extent.height,
             })
             .image_array_layers(config.extent.depth_or_array_layers)
-            .image_usage(conv::map_texture_usage(config.usage))
+            // tiled-fork: `map_texture_usage` adds `INPUT_ATTACHMENT` to any
+            // `COLOR_TARGET` (so a downstream subpass can read the attachment
+            // back as an input), but swapchain images are the terminal
+            // present target — they are never consumed as a subpass input.
+            // Many surfaces (e.g. macOS Metal-via-Vulkan, Android) do not
+            // advertise `INPUT_ATTACHMENT` in their supportedUsageFlags, so
+            // unconditionally requesting it here violates
+            // VUID-VkSwapchainCreateInfoKHR-presentMode-01427. Strip the bit.
+            .image_usage(image_usage)
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
             .composite_alpha(conv::map_composite_alpha_mode(config.composite_alpha_mode))
@@ -269,6 +279,9 @@ impl Surface for NativeSurface {
             images,
             fence,
             config: config.clone(),
+            // tiled-fork: stored so `acquire_next_image` can populate
+            // `Texture::usage` with the real vk usage flags.
+            image_usage,
             acquire_semaphores,
             next_acquire_index: 0,
             present_semaphores,
@@ -289,6 +302,10 @@ pub(crate) struct NativeSwapchain {
     /// Fence used to wait on the acquired image.
     fence: vk::Fence,
     config: crate::SurfaceConfiguration,
+    // tiled-fork: actual `vk::ImageUsageFlags` the swapchain images were
+    // created with. Propagated into `Texture::usage` on acquire so view
+    // creation can mask the view-usage against it.
+    image_usage: vk::ImageUsageFlags,
 
     /// Semaphores used between image acquisition and the first submission
     /// that uses that image. This is indexed using [`next_acquire_index`].
@@ -506,6 +523,8 @@ impl Swapchain for NativeSwapchain {
                     depth: 1,
                 },
                 identity,
+                // tiled-fork: see `Texture::usage`.
+                usage: self.image_usage,
             },
             metadata: Box::new(NativeSurfaceTextureMetadata {
                 acquire_semaphores: acquire_semaphore_arc,
