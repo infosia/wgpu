@@ -1,4 +1,108 @@
-# wgpu
+# wgpu — Tiled Rendering Fork
+
+> **A mobile-optimized fork of [wgpu](https://github.com/gfx-rs/wgpu) that adds tile-based deferred rendering (TBDR) support while keeping the upstream API intact.**
+
+<img align="right" width="20%" src="logo.png">
+
+## What this fork adds
+
+This is the `feature/tiled` branch: a port of the TBDR extension from the
+[`wgpu-tiled`](https://github.com/infosia/wgpu-tiled) reference implementation onto
+upstream `wgpu` v29.0.1, **deliberately reshaped to minimize divergence from
+upstream**. It exposes the GPU features that mobile TBDR architectures (Apple GPU,
+Qualcomm Adreno, ARM Mali) need to keep intermediate rendering data in fast on-chip
+tile memory instead of round-tripping through DRAM:
+
+- **Transient attachments** — tile-memory-only textures with no DRAM backing
+  (Vulkan `LAZILY_ALLOCATED`, Metal `MTLStorageMode::Memoryless`, GLES renderbuffer fallback).
+- **Multi-subpass render passes** — multiple rendering phases inside a single
+  hardware pass, so G-buffer / depth / normal data stays in tile memory across subpasses.
+- **Input attachments** — read a previous subpass's output at the current fragment
+  position directly from tile memory, with no texture sampling overhead.
+- **Typed `subpass_input` WGSL types** — `subpass_input<T>` and
+  `subpass_input_multisampled<T>` plus the `subpassLoad` builtin, compiled by naga
+  to SPIR-V `SubpassData` / MSL `[[color(N)]]` / GLSL framebuffer fetch.
+
+Standard wgpu follows the WebGPU spec, which only supports flat single-pass
+rendering — forcing mobile GPUs to spill intermediate data to DRAM between passes
+and read it back. This fork eliminates that bottleneck.
+
+### Design principle: no breaking changes to upstream
+
+Unlike a from-scratch divergence, this fork **wraps rather than extends**. New
+capability is delivered through additive, sidecar APIs so an upstream rebase stays
+trivial:
+
+- `adapter.tiled_capabilities()` — query subpass / input-attachment limits
+  (separate from `Limits`, not an extension of it).
+- `device.create_transient_attachment(&desc)` — allocate a tile-memory attachment.
+- `device.create_subpass_render_pipeline(&SubpassRenderPipelineDescriptor::new(..))`
+  — a wrapper around `RenderPipelineDescriptor`, not a new field on it.
+- `encoder.begin_subpass_render_pass(&SubpassRenderPassDescriptor { .. })` and
+  `pass.next_subpass()` — a sibling entry point, not an expansion of
+  `begin_render_pass`.
+- HAL backends opt in via `TiledApi` / `TiledDevice` / `TiledCommandEncoder`
+  sub-traits rather than changes to the upstream `Api` / `Device` /
+  `CommandEncoder` traits.
+
+`git grep "tiled-fork:"` enumerates every divergence point in upstream-shared files;
+the bulk of the diff lives in fork-only new files.
+
+### Backend status
+
+| Backend | Transient attachments | Multi-subpass | Status |
+|---------|----------------------|---------------|--------|
+| **Vulkan** | `VkImage` + `LAZILY_ALLOCATED` | Native `VkRenderPass` subpasses + dependencies | End-to-end; `deferred_rendering` runs at 60 FPS with zero validation messages |
+| **Metal** | `MTLStorageMode::Memoryless` | Single-encoder subpass state machine | End-to-end runtime (`deferred_rendering` / `subpass_msaa`) |
+| **GLES** | Renderbuffer fallback | `EXT_shader_framebuffer_fetch` / multi-pass (Tier A/B) | Real impl |
+| **DX12** | Stub (regular texture) | Stub (separate passes) | Stub |
+
+### WGSL example: typed `subpass_input`
+
+```wgsl
+// Lighting subpass — reads the G-Buffer from tile memory via input attachments
+@group(0) @binding(0) var t_albedo: subpass_input<f32>;
+@group(0) @binding(1) var t_normal: subpass_input<f32>;
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let albedo = subpassLoad(t_albedo).rgb;
+    let normal = subpassLoad(t_normal).rgb;
+    // ... lighting calculation ...
+}
+```
+
+`subpass_input*` declarations identify the attachment through `@binding` only, and
+`subpassLoad` reads from the current fragment position. naga compiles this to
+SPIR-V `OpTypeImage` with `Dim=SubpassData` + `InputAttachmentIndex`, MSL
+`[[color(N)]]` fragment parameters, or a GLSL framebuffer-fetch / `texelFetch`
+fallback.
+
+### Examples
+
+- `examples/features/src/deferred_rendering/` — 3-subpass G-buffer → lighting →
+  composite pipeline. Runs end-to-end on Vulkan and Metal.
+- `examples/features/src/subpass_msaa/` — 2-subpass MSAA line demo with a
+  follow-up resolve pass; Left/Right arrow keys toggle 1× ↔ adapter-max MSAA.
+- `examples/features/src/subpass_render_graph/` — headless 2-subpass smoke test
+  built directly from the subpass descriptors.
+
+> **Note:** the `wgpu-tiled` reference repo ships a higher-level declarative
+> `RenderGraphBuilder`. This fork intentionally does **not** port it — the
+> render-graph example constructs subpasses directly from the lower-level
+> descriptors to keep the upstream-divergence surface small.
+
+### This is a fork
+
+This branch deliberately breaks WebGPU spec compliance to expose native TBDR
+capabilities. There are no plans to upstream these changes; the goal is a clean,
+rebaseable diff against upstream `wgpu`. The design plan and phase status live in
+[`TILED.md`](TILED.md).
+
+---
+
+# wgpu (upstream)
+
 <img align="right" width="20%" src="logo.png">
 
 [![Build Status](https://img.shields.io/github/actions/workflow/status/gfx-rs/wgpu/ci.yml?branch=trunk&logo=github&label=CI)](https://github.com/gfx-rs/wgpu/actions)
