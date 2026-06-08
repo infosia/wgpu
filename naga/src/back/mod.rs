@@ -30,6 +30,9 @@ pub mod pipeline_constants;
 #[cfg(msl_out)]
 pub mod clamp_frag_depth;
 
+#[cfg(msl_out)]
+pub mod sample_mask;
+
 #[cfg(any(hlsl_out, glsl_out))]
 mod continue_forward;
 
