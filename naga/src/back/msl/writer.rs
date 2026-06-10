@@ -371,24 +371,45 @@ impl Display for TypeContext<'_> {
                     // reaches here.
                     crate::ImageClass::Subpass { .. } => return Err(FmtError),
                     // tiled-fork: end arm (ImageClass::Subpass unreachable)
-                    crate::ImageClass::Storage { format, .. } => {
-                        let access = if self
-                            .access
-                            .contains(crate::StorageAccess::LOAD | crate::StorageAccess::STORE)
-                        {
-                            "read_write"
-                        } else if self.access.contains(crate::StorageAccess::STORE) {
-                            "write"
-                        } else if self.access.contains(crate::StorageAccess::LOAD) {
-                            "read"
+                    // yawgpu-fork: unused storage textures fall back to the type's
+                    // declared access (F-077); upstream panics via unreachable!() when
+                    // self.access is empty (no usage by the entry point).
+                    crate::ImageClass::Storage {
+                        format,
+                        access: type_access,
+                    } => {
+                        // Prefer the per-entry-point usage-based access flags
+                        // (self.access), but fall back to the type's declared access
+                        // when the texture is declared but never used by the entry
+                        // point (self.access is empty). This is valid WGSL: an unused
+                        // binding does not affect module validity.
+                        let resolve_access =
+                            |flags: crate::StorageAccess| -> Option<&'static str> {
+                                if flags.contains(
+                                    crate::StorageAccess::LOAD | crate::StorageAccess::STORE,
+                                ) {
+                                    Some("read_write")
+                                } else if flags.contains(crate::StorageAccess::STORE) {
+                                    Some("write")
+                                } else if flags.contains(crate::StorageAccess::LOAD) {
+                                    Some("read")
+                                } else {
+                                    None
+                                }
+                            };
+                        let access = if let Some(a) = resolve_access(self.access) {
+                            a
+                        } else if let Some(a) = resolve_access(type_access) {
+                            a
                         } else {
                             log::warn!(
-                                "Storage access for {:?} (name '{}'): {:?}",
+                                "Storage access for {:?} (name '{}'): usage={:?} type={:?}",
                                 self.handle,
                                 ty.name.as_deref().unwrap_or_default(),
-                                self.access
+                                self.access,
+                                type_access,
                             );
-                            unreachable!("module is not valid");
+                            return Err(FmtError);
                         };
                         ("texture", "", format.into(), access)
                     }
@@ -1528,11 +1549,7 @@ impl<W: Write> Writer<W> {
     ) -> BackendResult {
         let class = match *context.resolve_type(image) {
             crate::TypeInner::Image { class, .. } => class,
-            _ => {
-                return Err(Error::GenericValidation(
-                    "subpass load image type".into(),
-                ))
-            }
+            _ => return Err(Error::GenericValidation("subpass load image type".into())),
         };
         if !class.is_subpass_input() {
             return Err(Error::GenericValidation(
@@ -3041,8 +3058,7 @@ impl<W: Write> Writer<W> {
                 sample_index,
             } => {
                 self.put_subpass_load(image, sample_index, context)?;
-            }
-            // tiled-fork: end arm (SubpassLoad)
+            } // tiled-fork: end arm (SubpassLoad)
         }
         Ok(())
     }
@@ -7191,7 +7207,7 @@ template <typename A>
                                     crate::Binding::Location { .. }
                                     | crate::Binding::ColorAttachmentRead { .. },
                                 ) => {
-                                // tiled-fork: end arm (Binding::ColorAttachmentRead namer)
+                                    // tiled-fork: end arm (Binding::ColorAttachmentRead namer)
                                     if do_vertex_pulling {
                                         self.namer.call(&self.names[&name_key])
                                     } else {
@@ -7579,8 +7595,7 @@ template <typename A>
                                         return Err(Error::UnsupportedArrayOf(
                                             "subpass inputs".to_string(),
                                         ));
-                                    }
-                                    // tiled-fork: end arm (ImageClass::Subpass binding-array)
+                                    } // tiled-fork: end arm (ImageClass::Subpass binding-array)
                                 },
                                 _ => {
                                     return Err(Error::UnsupportedArrayOfType(base));
