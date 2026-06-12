@@ -6838,14 +6838,51 @@ template <typename A>
         if pipeline_options.vertex_pulling_transform {
             for vbm in &pipeline_options.vertex_buffer_mappings {
                 let buffer_id = vbm.id;
-                let buffer_stride = vbm.stride;
+                let mut required_stride = 0;
 
-                assert!(
-                    buffer_stride > 0,
-                    "Vertex pulling requires a non-zero buffer stride."
-                );
+                // Iterate the attributes and generate needed unpacking functions.
+                for attribute in &vbm.attributes {
+                    if !unpacking_functions.contains_key(&attribute.format) {
+                        let (name, byte_count, dimension, scalar) =
+                            match self.write_unpacking_function(attribute.format) {
+                                Ok((name, byte_count, dimension, scalar)) => {
+                                    (name, byte_count, dimension, scalar)
+                                }
+                                _ => {
+                                    continue;
+                                }
+                            };
+                        unpacking_functions.insert(
+                            attribute.format,
+                            UnpackingFunction {
+                                name,
+                                byte_count,
+                                dimension,
+                                scalar,
+                            },
+                        );
+                    }
+                    let func = unpacking_functions
+                        .get(&attribute.format)
+                        .expect("Should have generated this unpacking function earlier.");
+                    let attribute_end = attribute.offset.checked_add(func.byte_count).ok_or(
+                        Error::VertexPullingAttributeTooLarge {
+                            location: attribute.shader_location,
+                        },
+                    )?;
+                    required_stride = required_stride.max(attribute_end);
+                }
 
-                match vbm.step_mode {
+                let (buffer_stride, step_mode) = if vbm.stride == 0 {
+                    if required_stride == 0 {
+                        continue;
+                    }
+                    (required_stride, back::msl::VertexBufferStepMode::Constant)
+                } else {
+                    (vbm.stride, vbm.step_mode)
+                };
+
+                match step_mode {
                     back::msl::VertexBufferStepMode::Constant => {}
                     back::msl::VertexBufferStepMode::ByVertex => {
                         needs_vertex_id = true;
@@ -6862,37 +6899,12 @@ template <typename A>
                 vbm_resolved.push(VertexBufferMappingResolved {
                     id: buffer_id,
                     stride: buffer_stride,
-                    step_mode: vbm.step_mode,
+                    step_mode,
                     ty_name: buffer_ty,
                     param_name: buffer_param,
                     elem_name: buffer_elem,
                     attributes: &vbm.attributes,
                 });
-
-                // Iterate the attributes and generate needed unpacking functions.
-                for attribute in &vbm.attributes {
-                    if unpacking_functions.contains_key(&attribute.format) {
-                        continue;
-                    }
-                    let (name, byte_count, dimension, scalar) =
-                        match self.write_unpacking_function(attribute.format) {
-                            Ok((name, byte_count, dimension, scalar)) => {
-                                (name, byte_count, dimension, scalar)
-                            }
-                            _ => {
-                                continue;
-                            }
-                        };
-                    unpacking_functions.insert(
-                        attribute.format,
-                        UnpackingFunction {
-                            name,
-                            byte_count,
-                            dimension,
-                            scalar,
-                        },
-                    );
-                }
             }
         }
 
@@ -8363,5 +8375,111 @@ impl crate::AtomicFunction {
                 "64-bit atomic operation other than min/max".to_string(),
             ))?,
         })
+    }
+}
+
+#[cfg(all(test, feature = "wgsl-in"))]
+mod tests {
+    use super::Error;
+    use crate::{
+        back::msl::{
+            AttributeMapping, Options, PipelineOptions, VertexBufferMapping, VertexBufferStepMode,
+            VertexFormat,
+        },
+        valid::{Capabilities, ValidationFlags, Validator},
+        ShaderStage,
+    };
+    use alloc::{
+        string::{String, ToString},
+        vec,
+    };
+
+    fn vertex_pulling_msl(wgsl: &str, mapping: VertexBufferMapping) -> Result<String, Error> {
+        let module = crate::front::wgsl::parse_str(wgsl).expect("wgsl should parse");
+        let info = Validator::new(ValidationFlags::all(), Capabilities::all())
+            .validate(&module)
+            .expect("module should validate");
+        let options = Options {
+            fake_missing_bindings: true,
+            ..Default::default()
+        };
+        let pipeline_options = PipelineOptions {
+            entry_point: Some((ShaderStage::Vertex, "main".to_string())),
+            vertex_pulling_transform: true,
+            vertex_buffer_mappings: vec![mapping],
+            ..Default::default()
+        };
+
+        crate::back::msl::write_string(&module, &info, &options, &pipeline_options)
+            .map(|(source, _)| source)
+    }
+
+    fn zero_stride_mapping(format: VertexFormat, offset: u32) -> VertexBufferMapping {
+        VertexBufferMapping {
+            id: 0,
+            stride: 0,
+            step_mode: VertexBufferStepMode::ByVertex,
+            attributes: vec![AttributeMapping {
+                shader_location: 0,
+                offset,
+                format,
+            }],
+        }
+    }
+
+    #[test]
+    fn zero_stride_vertex_pulling_offset_alignment_shape() {
+        let source = vertex_pulling_msl(
+            "struct Inputs {
+                @location(0) input0: vec2<f32>,
+            };
+            @vertex fn main(input: Inputs) -> @builtin(position) vec4<f32> {
+                let _i0 = input.input0;
+                return vec4<f32>(0.0);
+            }",
+            zero_stride_mapping(VertexFormat::Float32x2, 4),
+        )
+        .expect("msl generation should succeed");
+
+        assert!(source.contains("struct vb_0_type { metal::uchar data[12]; };"));
+        assert!(source.contains("if (0 < (_buffer_sizes.buffer_size0 / 12))"));
+    }
+
+    #[test]
+    fn zero_stride_vertex_pulling_type_match_shape() {
+        let source = vertex_pulling_msl(
+            "struct Inputs {
+                @location(0) input0: u32,
+            };
+            @vertex fn main(input: Inputs) -> @builtin(position) vec4<f32> {
+                let _i0 = input.input0;
+                return vec4<f32>(0.0);
+            }",
+            zero_stride_mapping(VertexFormat::Uint8, 0),
+        )
+        .expect("msl generation should succeed");
+
+        assert!(source.contains("uint unpackUint8"));
+        assert!(source.contains("struct vb_0_type { metal::uchar data[1]; };"));
+        assert!(source.contains("if (0 < (_buffer_sizes.buffer_size0 / 1))"));
+    }
+
+    #[test]
+    fn zero_stride_vertex_pulling_contained_in_stride_shape() {
+        let source = vertex_pulling_msl(
+            "struct Inputs {
+                @location(0) input0: vec4<f32>,
+            };
+            @vertex fn main(input: Inputs) -> @builtin(position) vec4<f32> {
+                let _i0 = input.input0;
+                return vec4<f32>(0.0);
+            }",
+            zero_stride_mapping(VertexFormat::Unorm8x4Bgra, 256),
+        )
+        .expect("msl generation should succeed");
+
+        assert!(source.contains("unpackUnorm8x4Bgra"));
+        assert!(source.contains("struct vb_0_type { metal::uchar data[260]; };"));
+        assert!(source.contains("if (0 < (_buffer_sizes.buffer_size0 / 260))"));
     }
 }

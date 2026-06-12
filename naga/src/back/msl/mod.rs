@@ -235,6 +235,8 @@ pub enum Error {
     Override,
     #[error("bitcasting to {0:?} is not supported")]
     UnsupportedBitCast(crate::TypeInner),
+    #[error("vertex pulling attribute at location {location} exceeds u32 byte range")]
+    VertexPullingAttributeTooLarge { location: u32 },
     #[error(transparent)]
     ResolveArraySizeError(#[from] crate::proc::ResolveArraySizeError),
     #[error("entry point with stage {0:?} and name '{1}' not found")]
