@@ -33,6 +33,7 @@ void storage(
     metal::texture2d<float, metal::access::read_write> st
 ) {
     st.write(metal::float4(2.0, 3.0, 4.0, 5.0), metal::uint2(metal::int2(0, 1)));
+    metal::threadgroup_barrier(metal::mem_flags::mem_texture);
     return;
 }
 

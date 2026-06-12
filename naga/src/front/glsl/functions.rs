@@ -1426,8 +1426,7 @@ impl Context<'_> {
                     #[allow(clippy::todo)]
                     crate::Binding::ColorAttachmentRead { .. } => {
                         todo!("Phase 6b: subpass-input parsing for the GLSL frontend")
-                    }
-                    // tiled-fork: end arm (Binding::ColorAttachmentRead)
+                    } // tiled-fork: end arm (Binding::ColorAttachmentRead)
                 };
 
                 let interpolation =
@@ -1468,8 +1467,7 @@ impl Context<'_> {
                     #[allow(clippy::todo)]
                     crate::Binding::ColorAttachmentRead { .. } => {
                         todo!("Phase 6b: subpass-input parsing for the GLSL frontend")
-                    }
-                    // tiled-fork: end arm (Binding::ColorAttachmentRead)
+                    } // tiled-fork: end arm (Binding::ColorAttachmentRead)
                 };
 
                 for (i, member) in members.clone().into_iter().enumerate() {

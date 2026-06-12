@@ -851,9 +851,7 @@ impl BlockContext<'_> {
 
         // Synthesize a constant (0, 0) vec2<i32> coordinate; SubpassData
         // ignores it but the SPIR-V `OpImageRead` still requires one.
-        let zero = self
-            .writer
-            .get_constant_scalar(crate::Literal::I32(0));
+        let zero = self.writer.get_constant_scalar(crate::Literal::I32(0));
         let coordinates = self.writer.get_constant_composite(
             LookupType::Local(LocalType::Numeric(NumericType::Vector {
                 size: crate::VectorSize::Bi,

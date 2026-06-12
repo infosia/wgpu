@@ -210,8 +210,7 @@ impl<W: Write> super::Writer<'_, W> {
             #[allow(clippy::todo)]
             crate::ImageClass::Subpass { .. } => {
                 todo!("Phase 6b: subpass-input image emission for the HLSL backend")
-            }
-            // tiled-fork: end arm (ImageClass::Subpass)
+            } // tiled-fork: end arm (ImageClass::Subpass)
         }
         Ok(())
     }
@@ -582,8 +581,7 @@ impl<W: Write> super::Writer<'_, W> {
             #[allow(clippy::todo)]
             crate::ImageClass::Subpass { .. } => {
                 todo!("Phase 6b: subpass-input image emission for the HLSL backend")
-            }
-            // tiled-fork: end arm (ImageClass::Subpass)
+            } // tiled-fork: end arm (ImageClass::Subpass)
         };
         let arrayed_str = if query.arrayed { "Array" } else { "" };
         let query_str = match query.query {
@@ -678,8 +676,7 @@ impl<W: Write> super::Writer<'_, W> {
                     #[allow(clippy::todo)]
                     crate::ImageClass::Subpass { .. } => {
                         todo!("Phase 6b: subpass-input image emission for the HLSL backend")
-                    }
-                    // tiled-fork: end arm (ImageClass::Subpass)
+                    } // tiled-fork: end arm (ImageClass::Subpass)
                 };
 
                 // GetDimensions Overloaded Methods

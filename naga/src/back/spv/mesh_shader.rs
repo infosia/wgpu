@@ -357,8 +357,7 @@ impl super::Writer {
                     return Err(Error::Validation(
                         "@color(N) framebuffer fetch is not valid on mesh shader outputs",
                     ));
-                }
-                // tiled-fork: end arm (Binding::ColorAttachmentRead)
+                } // tiled-fork: end arm (Binding::ColorAttachmentRead)
             }
         }
         // Write primitive binding output blocks (1 array per output struct member)
@@ -416,8 +415,7 @@ impl super::Writer {
                     return Err(Error::Validation(
                         "@color(N) framebuffer fetch is not valid on mesh shader outputs",
                     ));
-                }
-                // tiled-fork: end arm (Binding::ColorAttachmentRead)
+                } // tiled-fork: end arm (Binding::ColorAttachmentRead)
             }
         }
 
@@ -625,8 +623,7 @@ impl super::Writer {
                          skipping member"
                     );
                     continue;
-                }
-                // tiled-fork: end arm (Binding::ColorAttachmentRead)
+                } // tiled-fork: end arm (Binding::ColorAttachmentRead)
             }
             body.push(Instruction::store(ptr_to_copy_to, val_to_copy, None));
             // Flip the vertex position y coordinate in some cases

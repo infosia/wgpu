@@ -2180,7 +2180,6 @@ fn map_binding_to_attribute(binding: &crate::Binding) -> Vec<Attribute> {
         // tiled-fork: begin arm (Binding::ColorAttachmentRead)
         crate::Binding::ColorAttachmentRead { attachment, .. } => {
             vec![Attribute::Color(attachment)]
-        }
-        // tiled-fork: end arm (Binding::ColorAttachmentRead)
+        } // tiled-fork: end arm (Binding::ColorAttachmentRead)
     }
 }

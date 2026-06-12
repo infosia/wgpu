@@ -556,8 +556,7 @@ impl fmt::Display for VaryingName<'_> {
             // tiled-fork: begin arm (Binding::ColorAttachmentRead)
             crate::Binding::ColorAttachmentRead { attachment, .. } => {
                 write!(f, "_color_attachment_read{attachment}")
-            }
-            // tiled-fork: end arm (Binding::ColorAttachmentRead)
+            } // tiled-fork: end arm (Binding::ColorAttachmentRead)
         }
     }
 }

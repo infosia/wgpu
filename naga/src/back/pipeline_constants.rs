@@ -709,8 +709,7 @@ fn adjust_expr(new_pos: &HandleVec<Expression, Handle<Expression>>, expr: &mut E
             if let Some(s) = sample_index.as_mut() {
                 adjust(s);
             }
-        }
-        // tiled-fork: end arm (SubpassLoad)
+        } // tiled-fork: end arm (SubpassLoad)
     }
 }
 

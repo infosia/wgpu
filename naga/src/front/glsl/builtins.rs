@@ -2143,8 +2143,7 @@ impl Frontend {
                 #[allow(clippy::todo)]
                 ImageClass::Subpass { .. } => {
                     todo!("Phase 6b: subpass-input parsing for the GLSL frontend")
-                }
-                // tiled-fork: end arm (ImageClass::Subpass)
+                } // tiled-fork: end arm (ImageClass::Subpass)
             };
 
             let coordinate = match (image_size, coord_size) {
@@ -2271,8 +2270,7 @@ pub fn sampled_to_depth(
             #[allow(clippy::todo)]
             ImageClass::Subpass { .. } => {
                 todo!("Phase 6b: subpass-input parsing for the GLSL frontend")
-            }
-            // tiled-fork: end arm (ImageClass::Subpass)
+            } // tiled-fork: end arm (ImageClass::Subpass)
         },
         _ => errors.push(Error {
             kind: ErrorKind::SemanticError("Not a texture".into()),

@@ -26,8 +26,8 @@ use crate::{
     proc::Emitter,
     valid::{Capabilities, ModuleInfo, ValidationError, ValidationFlags, Validator},
     AddressSpace, Arena, Binding, Block, BuiltIn, Expression, Function, GlobalVariable, Handle,
-    MathFunction, MemoryDecorations, Module, Scalar, ShaderStage, Span, Statement, SwitchCase, Type,
-    TypeInner, VectorSize, WithSpan,
+    MathFunction, MemoryDecorations, Module, Scalar, ShaderStage, Span, Statement, SwitchCase,
+    Type, TypeInner, VectorSize, WithSpan,
 };
 
 /// Error type for [`clamp_frag_depth`].
@@ -131,9 +131,9 @@ fn frag_depth_output(module: &Module, function: &Function) -> Option<FragDepthOu
         return Some(FragDepthOutput::Scalar);
     }
     if let TypeInner::Struct { ref members, .. } = module.types[result.ty].inner {
-        let depth_index = members
-            .iter()
-            .position(|member| matches!(member.binding, Some(Binding::BuiltIn(BuiltIn::FragDepth))))?;
+        let depth_index = members.iter().position(|member| {
+            matches!(member.binding, Some(Binding::BuiltIn(BuiltIn::FragDepth)))
+        })?;
         return Some(FragDepthOutput::Struct {
             ty: result.ty,
             member_count: members.len() as u32,
@@ -157,15 +157,26 @@ impl Rewrite<'_> {
     /// them in a [`Statement::Emit`] range placed before the rewritten `Return`.
     fn clamped_output(&mut self, value: Handle<Expression>) -> Handle<Expression> {
         let span = Span::default();
-        let range = self
-            .expressions
-            .append(Expression::Load { pointer: self.range_expr }, span);
-        let min = self
-            .expressions
-            .append(Expression::AccessIndex { base: range, index: 0 }, span);
-        let max = self
-            .expressions
-            .append(Expression::AccessIndex { base: range, index: 1 }, span);
+        let range = self.expressions.append(
+            Expression::Load {
+                pointer: self.range_expr,
+            },
+            span,
+        );
+        let min = self.expressions.append(
+            Expression::AccessIndex {
+                base: range,
+                index: 0,
+            },
+            span,
+        );
+        let max = self.expressions.append(
+            Expression::AccessIndex {
+                base: range,
+                index: 1,
+            },
+            span,
+        );
         match self.output {
             FragDepthOutput::Scalar => self.clamp(value, min, max, span),
             FragDepthOutput::Struct {
@@ -186,10 +197,10 @@ impl Rewrite<'_> {
                     if index == depth_index {
                         components.push(clamped);
                     } else {
-                        components.push(self.expressions.append(
-                            Expression::AccessIndex { base: value, index },
-                            span,
-                        ));
+                        components.push(
+                            self.expressions
+                                .append(Expression::AccessIndex { base: value, index }, span),
+                        );
                     }
                 }
                 self.expressions
@@ -232,7 +243,12 @@ fn rewrite_block(block: Block, rewrite: &mut Rewrite<'_>) -> Block {
                 emitter.start(rewrite.expressions);
                 let clamped = rewrite.clamped_output(value);
                 out.extend(emitter.finish(rewrite.expressions));
-                out.push(Statement::Return { value: Some(clamped) }, span);
+                out.push(
+                    Statement::Return {
+                        value: Some(clamped),
+                    },
+                    span,
+                );
             }
             Statement::Block(inner) => {
                 out.push(Statement::Block(rewrite_block(inner, rewrite)), span)
@@ -302,10 +318,15 @@ mod tests {
     }
 
     fn has_clamp(function: &Function) -> bool {
-        function
-            .expressions
-            .iter()
-            .any(|(_, expr)| matches!(expr, Expression::Math { fun: MathFunction::Clamp, .. }))
+        function.expressions.iter().any(|(_, expr)| {
+            matches!(
+                expr,
+                Expression::Math {
+                    fun: MathFunction::Clamp,
+                    ..
+                }
+            )
+        })
     }
 
     #[test]
@@ -337,7 +358,7 @@ mod tests {
         let info = validate(&module);
         let (out, _) = clamp_frag_depth(&module, &info, (ShaderStage::Fragment, "fs"))
             .expect("transform should succeed");
-        assert!(has_clamp(frag_function(&out.into_owned(), "fs")));
+        assert!(has_clamp(frag_function(&out, "fs")));
     }
 
     #[test]

@@ -390,12 +390,12 @@ impl<'a, W: Write> Writer<'a, W> {
                         if global.binding.is_none() {
                             return Err(Error::Custom(
                                 "subpass-input globals require a `@binding(N)` to emit \
-                                 `input_attachment_index`".into(),
+                                 `input_attachment_index`"
+                                    .into(),
                             ));
                         }
                     }
-                    let use_framebuffer_fetch =
-                        self.is_framebuffer_fetch_subpass_image(class);
+                    let use_framebuffer_fetch = self.is_framebuffer_fetch_subpass_image(class);
                     if use_framebuffer_fetch {
                         // Emit `layout(location = N) inout vec4 name;`.
                         // The location index is taken from the global's
@@ -769,8 +769,7 @@ impl<'a, W: Write> Writer<'a, W> {
                 return Err(Error::Custom(
                     "subpass input image reached non-subpass image-type writer".to_string(),
                 ))
-            }
-            // tiled-fork: end arm (ImageClass::Subpass)
+            } // tiled-fork: end arm (ImageClass::Subpass)
         };
 
         let precision = if self.options.version.is_es() {
@@ -2947,8 +2946,7 @@ impl<'a, W: Write> Writer<'a, W> {
                                     "ImageQuery on a subpass input is not supported in GLSL"
                                         .to_string(),
                                 ))
-                            }
-                            // tiled-fork: end arm (ImageClass::Subpass)
+                            } // tiled-fork: end arm (ImageClass::Subpass)
                         }
                         write!(self.out, ")")?;
                         if components != 1 || self.options.version.is_es() {
@@ -2973,8 +2971,7 @@ impl<'a, W: Write> Writer<'a, W> {
                                     "ImageQuery on a subpass input is not supported in GLSL"
                                         .to_string(),
                                 ))
-                            }
-                            // tiled-fork: end arm (ImageClass::Subpass)
+                            } // tiled-fork: end arm (ImageClass::Subpass)
                         };
                         write!(self.out, "{fun_name}(")?;
                         self.write_expr(image, ctx)?;
@@ -3003,8 +3000,7 @@ impl<'a, W: Write> Writer<'a, W> {
                                     "ImageQuery on a subpass input is not supported in GLSL"
                                         .to_string(),
                                 ))
-                            }
-                            // tiled-fork: end arm (ImageClass::Subpass)
+                            } // tiled-fork: end arm (ImageClass::Subpass)
                         };
                         write!(self.out, "{fun_name}(")?;
                         self.write_expr(image, ctx)?;
@@ -4302,11 +4298,9 @@ impl<'a, W: Write> Writer<'a, W> {
             // reject this in normal use.
             crate::ImageClass::Subpass { .. } => {
                 return Err(Error::Custom(
-                    "subpass input image used with ImageLoad; use SubpassLoad instead"
-                        .to_string(),
+                    "subpass input image used with ImageLoad; use SubpassLoad instead".to_string(),
                 ))
-            }
-            // tiled-fork: end arm (ImageClass::Subpass)
+            } // tiled-fork: end arm (ImageClass::Subpass)
         };
 
         // openGL es doesn't have 1D images so we need workaround it

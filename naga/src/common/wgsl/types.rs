@@ -270,8 +270,7 @@ where
                             write!(out, "subpass_input_stencil{multisampled_suffix}")?;
                         }
                     }
-                }
-                // tiled-fork: end arm (Subpass)
+                } // tiled-fork: end arm (Subpass)
             }
         }
         TypeInner::Scalar(scalar) => {

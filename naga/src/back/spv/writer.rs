@@ -1288,12 +1288,12 @@ impl Writer {
                         let name = member.name.as_deref();
                         let binding = member.binding.as_ref().unwrap();
                         // tiled-fork: begin storage-class (ColorAttachmentRead member)
-                        let class =
-                            if matches!(binding, crate::Binding::ColorAttachmentRead { .. }) {
-                                spirv::StorageClass::TileImageEXT
-                            } else {
-                                default_class
-                            };
+                        let class = if matches!(binding, crate::Binding::ColorAttachmentRead { .. })
+                        {
+                            spirv::StorageClass::TileImageEXT
+                        } else {
+                            default_class
+                        };
                         // tiled-fork: end storage-class (ColorAttachmentRead member)
                         let varying_id = self.write_varying(
                             ir_module,
@@ -3349,8 +3349,7 @@ impl Writer {
                     others: ArrayVec::new(),
                     blend_src: None,
                 })
-            }
-            // tiled-fork: end arm (Binding::ColorAttachmentRead)
+            } // tiled-fork: end arm (Binding::ColorAttachmentRead)
         }
     }
 
@@ -3379,13 +3378,12 @@ impl Writer {
             }
         };
 
-        let image_type_id =
-            self.get_type_id(LookupType::Local(LocalType::Image(LocalImageType {
-                sampled_type: scalar,
-                dim: spirv::Dim::DimTileImageDataEXT,
-                flags: super::ImageTypeFlags::empty(),
-                image_format: spirv::ImageFormat::Unknown,
-            })));
+        let image_type_id = self.get_type_id(LookupType::Local(LocalType::Image(LocalImageType {
+            sampled_type: scalar,
+            dim: spirv::Dim::DimTileImageDataEXT,
+            flags: super::ImageTypeFlags::empty(),
+            image_format: spirv::ImageFormat::Unknown,
+        })));
         let attachment_id = self.id_gen.next();
         body.push(Instruction::load(
             image_type_id,
@@ -3516,11 +3514,7 @@ impl Writer {
                 ir_module.types[global_variable.ty].inner,
                 crate::TypeInner::Image { class, .. } if class.is_subpass_input()
             ) {
-                self.decorate(
-                    id,
-                    Decoration::InputAttachmentIndex,
-                    &[res_binding.binding],
-                );
+                self.decorate(id, Decoration::InputAttachmentIndex, &[res_binding.binding]);
             }
             // tiled-fork: end decoration (InputAttachmentIndex)
 

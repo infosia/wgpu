@@ -815,13 +815,9 @@ impl VaryingContext<'_> {
             // exhaustiveness is satisfied.
             crate::Binding::ColorAttachmentRead { .. } => {
                 if self.stage != crate::ShaderStage::Fragment {
-                    return Err(VaryingError::InvalidAttributeInStage(
-                        "color",
-                        self.stage,
-                    ));
+                    return Err(VaryingError::InvalidAttributeInStage("color", self.stage));
                 }
-            }
-            // tiled-fork: end arm (ColorAttachmentRead)
+            } // tiled-fork: end arm (ColorAttachmentRead)
         }
 
         Ok(())
@@ -979,8 +975,7 @@ impl super::Validator {
                                         Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY,
                                     ));
                                 }
-                            }
-                            // tiled-fork: end arm (Subpass)
+                            } // tiled-fork: end arm (Subpass)
                         },
                         crate::TypeInner::Sampler { .. } => {
                             if !self

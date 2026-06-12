@@ -570,8 +570,7 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
             #[allow(clippy::todo)]
             crate::Binding::ColorAttachmentRead { .. } => {
                 todo!("Phase 6b: framebuffer-fetch (@color) emission for the HLSL backend")
-            }
-            // tiled-fork: end arm (Binding::ColorAttachmentRead)
+            } // tiled-fork: end arm (Binding::ColorAttachmentRead)
         }
 
         Ok(())
@@ -765,8 +764,7 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                     Some(crate::Binding::Location { location, .. }) => fs_input_locs.push(location),
                     Some(crate::Binding::BuiltIn(_)) | None => {}
                     // tiled-fork: begin arm (Binding::ColorAttachmentRead)
-                    Some(crate::Binding::ColorAttachmentRead { .. }) => {}
-                    // tiled-fork: end arm (Binding::ColorAttachmentRead)
+                    Some(crate::Binding::ColorAttachmentRead { .. }) => {} // tiled-fork: end arm (Binding::ColorAttachmentRead)
                 };
 
                 // NOTE: We don't need to handle struct nesting. See note in
@@ -797,8 +795,7 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                     }
                     Some(crate::Binding::BuiltIn(_)) | None => {}
                     // tiled-fork: begin arm (Binding::ColorAttachmentRead)
-                    Some(crate::Binding::ColorAttachmentRead { .. }) => {}
-                    // tiled-fork: end arm (Binding::ColorAttachmentRead)
+                    Some(crate::Binding::ColorAttachmentRead { .. }) => {} // tiled-fork: end arm (Binding::ColorAttachmentRead)
                 }
             }
 
@@ -4410,8 +4407,7 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
             #[allow(clippy::todo)]
             Expression::SubpassLoad { .. } => {
                 todo!("Phase 6b: subpass-input emission for the HLSL backend")
-            }
-            // tiled-fork: end arm (SubpassLoad)
+            } // tiled-fork: end arm (SubpassLoad)
         }
 
         if !closing_bracket.is_empty() {

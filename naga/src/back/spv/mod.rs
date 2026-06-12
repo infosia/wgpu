@@ -413,8 +413,7 @@ impl LocalImageType {
                     flags,
                     image_format: spirv::ImageFormat::Unknown,
                 }
-            }
-            // tiled-fork: end arm (ImageClass::Subpass)
+            } // tiled-fork: end arm (ImageClass::Subpass)
         }
     }
 }

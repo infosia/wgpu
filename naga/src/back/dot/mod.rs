@@ -781,14 +781,16 @@ fn write_function_expressions(
                 ("cooperativeMultiplyAdd".into(), 4)
             }
             // tiled-fork: begin arm (SubpassLoad)
-            E::SubpassLoad { image, sample_index } => {
+            E::SubpassLoad {
+                image,
+                sample_index,
+            } => {
                 edges.insert("image", image);
                 if let Some(s) = sample_index {
                     edges.insert("sample_index", s);
                 }
                 ("SubpassLoad".into(), 5)
-            }
-            // tiled-fork: end arm (SubpassLoad)
+            } // tiled-fork: end arm (SubpassLoad)
         };
 
         // give uniform expressions an outline
