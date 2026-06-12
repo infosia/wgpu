@@ -1617,6 +1617,9 @@ impl Parser {
                 // Branch for the `continuing` block, this must be
                 // the last thing in the loop body
 
+                // WGSL §6.4: the continuing block is nested within the loop body scope.
+                ctx.local_table.push_scope();
+
                 // Expect a opening brace to start the continuing block
                 let brace_span = lexer.expect_span(Token::Paren('{'))?;
                 let brace_nesting_level =
@@ -1641,11 +1644,13 @@ impl Parser {
                         // Expect a closing brace to close the continuing block,
                         // since the break if must be the last statement
                         lexer.expect(Token::Paren('}'))?;
+                        ctx.local_table.pop_scope();
                         // Stop parsing the continuing block
                         break;
                     } else if lexer.next_if(Token::Paren('}')) {
                         // If we encounter a closing brace it means we have reached
                         // the end of the continuing block and should stop processing
+                        ctx.local_table.pop_scope();
                         break;
                     } else {
                         // Otherwise try to parse a statement
