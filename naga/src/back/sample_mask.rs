@@ -148,13 +148,13 @@ pub fn apply_sample_mask<'a>(
 
     // Point the result at the new struct type when one was synthesized.
     let new_result = match &output {
-        SampleMaskOutput::AppendMember { new_ty, .. } | SampleMaskOutput::Wrap { new_ty } => {
+        &SampleMaskOutput::AppendMember { new_ty, .. } | &SampleMaskOutput::Wrap { new_ty } => {
             Some(FunctionResult {
-                ty: *new_ty,
+                ty: new_ty,
                 binding: None,
             })
         }
-        SampleMaskOutput::Scalar | SampleMaskOutput::ExistingMember { .. } => None,
+        &SampleMaskOutput::Scalar | &SampleMaskOutput::ExistingMember { .. } => None,
     };
 
     let ep = &mut module.entry_points[ep_index].function;
@@ -476,7 +476,7 @@ mod tests {
         assert!(!has_and(frag_function(&module, "fs")));
         let (out, _) = apply_sample_mask(&module, &info, (ShaderStage::Fragment, "fs"), 0b0101)
             .expect("transform should succeed");
-        assert!(has_and(frag_function(&out.into_owned(), "fs")));
+        assert!(has_and(frag_function(&out, "fs")));
     }
 
     #[test]
@@ -489,7 +489,7 @@ mod tests {
         let info = validate(&module);
         let (out, _) = apply_sample_mask(&module, &info, (ShaderStage::Fragment, "fs"), 0b0101)
             .expect("transform should succeed");
-        assert!(has_and(frag_function(&out.into_owned(), "fs")));
+        assert!(has_and(frag_function(&out, "fs")));
     }
 
     #[test]

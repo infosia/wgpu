@@ -865,8 +865,7 @@ impl FunctionInfo {
                     non_uniform_result: image_uniformity.or(sample_uniformity),
                     requirements: UniformityRequirements::empty(),
                 }
-            }
-            // tiled-fork: end arm (SubpassLoad)
+            } // tiled-fork: end arm (SubpassLoad)
         };
 
         let ty = resolve_context.resolve(expression, |h| Ok(&self[h].ty))?;

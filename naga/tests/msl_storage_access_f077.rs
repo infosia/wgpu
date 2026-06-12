@@ -9,6 +9,10 @@
 #![cfg(all(feature = "wgsl-in", feature = "msl-out"))]
 
 fn write_msl(src: &str) -> String {
+    write_msl_with_options(src, naga::back::msl::Options::default())
+}
+
+fn write_msl_with_options(src: &str, options: naga::back::msl::Options) -> String {
     let module = naga::front::wgsl::parse_str(src).expect("WGSL parse failed");
     let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
@@ -19,7 +23,7 @@ fn write_msl(src: &str) -> String {
     let (msl, _) = naga::back::msl::write_string(
         &module,
         &info,
-        &naga::back::msl::Options::default(),
+        &options,
         &naga::back::msl::PipelineOptions::default(),
     )
     .expect("MSL write_string must not panic or error");
@@ -66,5 +70,33 @@ var my_storage: texture_storage_2d<rgba8unorm, read>;
 @compute @workgroup_size(1)
 fn main() {}
 "#,
+    );
+}
+
+/// F-082 regression: a read_write storage texture written and then read in the
+/// same invocation needs a texture memory barrier in MSL.
+#[test]
+fn read_write_storage_texture_write_then_read_emits_texture_barrier() {
+    let msl = write_msl_with_options(
+        r#"
+@group(0) @binding(0)
+var st: texture_storage_2d<rgba8unorm, read_write>;
+@group(0) @binding(1)
+var<storage, read_write> out: vec4<f32>;
+
+@compute @workgroup_size(1)
+fn main() {
+    textureStore(st, vec2<i32>(0, 0), vec4<f32>(1.0, 0.0, 0.0, 1.0));
+    out = textureLoad(st, vec2<i32>(0, 0));
+}
+"#,
+        naga::back::msl::Options {
+            lang_version: (1, 2),
+            ..naga::back::msl::Options::default()
+        },
+    );
+    assert!(
+        msl.contains("threadgroup_barrier(metal::mem_flags::mem_texture);"),
+        "emitted MSL should contain a texture barrier after storage texture write; got:\n{msl}"
     );
 }

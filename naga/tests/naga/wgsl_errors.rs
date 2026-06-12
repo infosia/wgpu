@@ -1447,25 +1447,43 @@ fn invalid_arrays() {
         naga::valid::Capabilities::SHADER_INT64
     }
 
-    check_validation! {
+    // F-078: a LITERAL negative index is a shader-creation error raised by
+    // the WGSL lowerer (ExpectedNonNegative); a let-bound index is a runtime
+    // value and must NOT error (covered below).
+    check(
         r#"
             fn main() -> f32 {
                 let a = array<f32, 3>(0., 1., 2.);
                 return a[-1];
             }
-        "#:
-        Err(
-            naga::valid::ValidationError::Function {
-                name,
-                source: naga::valid::FunctionError::Expression {
-                    source: naga::valid::ExpressionError::NegativeIndex(_),
-                    ..
-                },
-                ..
+        "#,
+        r###"error: must be non-negative (>= 0)
+  ┌─ wgsl:4:26
+  │
+4 │                 return a[-1];
+  │                          ^^ must be non-negative
+
+"###,
+    );
+    // F-078: a let-bound negative index is a runtime value — the access is
+    // runtime-clamped, never a shader-creation error.
+    let let_negative = naga::front::wgsl::parse_str(
+        r#"
+            fn main() -> f32 {
+                let a = array<f32, 3>(0., 1., 2.);
+                let i = -1;
+                return a[i];
             }
-        )
-            if name == "main"
-    }
+        "#,
+    )
+    .expect("let-bound negative index must parse");
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::default(),
+    )
+    .validate(&let_negative)
+    .expect("let-bound negative index must validate (runtime access)");
+
 
     check(
         "alias Bad = array<f32, true>;",
@@ -2241,6 +2259,20 @@ fn invalid_access() {
             ..
         })
     }
+}
+
+#[test]
+fn let_index_out_of_bounds_is_runtime_access() {
+    no_validation_error(
+        r#"
+            fn main() -> f32 {
+                let a = array<f32, 3>(0., 1., 2.);
+                let index = (3u);
+                return a[index];
+            }
+        "#,
+        Capabilities::empty(),
+    );
 }
 
 #[test]

@@ -365,33 +365,12 @@ impl super::Validator {
                     }
                 }
 
-                // If index is const we can do check for non-negative index
-                match module
-                    .to_ctx()
-                    .get_const_val_from(index, &function.expressions)
-                {
-                    Ok(value) => {
-                        let length = if self.overrides_resolved {
-                            base_type.indexable_length_resolved(module)
-                        } else {
-                            base_type.indexable_length_pending(module)
-                        }?;
-                        // If we know both the length and the index, we can do the
-                        // bounds check now.
-                        if let crate::proc::IndexableLength::Known(known_length) = length {
-                            if value >= known_length {
-                                return Err(ExpressionError::IndexOutOfBounds(base, value));
-                            }
-                        }
-                    }
-                    Err(crate::proc::ConstValueError::Negative) => {
-                        return Err(ExpressionError::NegativeIndex(base))
-                    }
-                    Err(crate::proc::ConstValueError::NonConst) => {}
-                    Err(crate::proc::ConstValueError::InvalidType) => {
-                        return Err(ExpressionError::InvalidIndexType(index))
-                    }
-                }
+                // `Access` is a dynamic (runtime-clamped) index by construction:
+                // the WGSL lowerer emits `AccessIndex` for const-expression
+                // indices and rejects negative const-expressions itself
+                // (F-078). A let-bound index may still LOOK const-foldable
+                // here, but it is a runtime value per WGSL — do not
+                // value-check it.
 
                 ShaderStages::all()
             }

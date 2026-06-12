@@ -574,6 +574,39 @@ impl<'source, 'temp, 'out> ExpressionContext<'source, 'temp, 'out> {
         }
     }
 
+    fn ast_expression_uses_runtime_local(&self, handle: Handle<ast::Expression<'source>>) -> bool {
+        let expr = &self.ast_expressions[handle];
+        match *expr {
+            ast::Expression::Ident(ast::TemplateElaboratedIdent {
+                ident: ast::IdentExpr::Local(local),
+                ..
+            }) => match self.expr_type {
+                ExpressionContextType::Runtime(ref ctx)
+                | ExpressionContextType::Constant(Some(ref ctx)) => {
+                    matches!(ctx.local_table.get(&local), Some(Declared::Runtime(_)))
+                }
+                ExpressionContextType::Constant(None) | ExpressionContextType::Override => false,
+            },
+            ast::Expression::Unary { expr, .. }
+            | ast::Expression::AddrOf(expr)
+            | ast::Expression::Deref(expr) => self.ast_expression_uses_runtime_local(expr),
+            ast::Expression::Binary { left, right, .. } => {
+                self.ast_expression_uses_runtime_local(left)
+                    || self.ast_expression_uses_runtime_local(right)
+            }
+            ast::Expression::Call(ref call) => call
+                .arguments
+                .iter()
+                .any(|&arg| self.ast_expression_uses_runtime_local(arg)),
+            ast::Expression::Index { base, index } => {
+                self.ast_expression_uses_runtime_local(base)
+                    || self.ast_expression_uses_runtime_local(index)
+            }
+            ast::Expression::Member { base, .. } => self.ast_expression_uses_runtime_local(base),
+            ast::Expression::Literal(_) | ast::Expression::Ident(_) => false,
+        }
+    }
+
     fn get_expression_span(&self, handle: Handle<ir::Expression>) -> Span {
         match self.expr_type {
             ExpressionContextType::Runtime(ref ctx)
@@ -612,7 +645,13 @@ impl<'source, 'temp, 'out> ExpressionContext<'source, 'temp, 'out> {
         span: Span,
     ) -> Result<'source, Typed<Handle<ir::Expression>>> {
         match self.expr_type {
-            ExpressionContextType::Runtime(ref ctx) => Ok(ctx.local_table[local].runtime()),
+            ExpressionContextType::Runtime(ref mut ctx) => {
+                let value = ctx.local_table[local];
+                if let Declared::Runtime(Typed::Plain(handle)) = value {
+                    ctx.local_expression_kind_tracker.force_non_const(handle);
+                }
+                Ok(value.runtime())
+            }
             ExpressionContextType::Constant(Some(ref ctx)) => ctx.local_table[local]
                 .const_time()
                 .ok_or(Box::new(Error::UnexpectedOperationInConstContext(span))),
@@ -2451,9 +2490,14 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                     .ok_or(Error::FunctionReturnsVoid(span))?;
                 return Ok(Typed::Plain(handle));
             }
-            ast::Expression::Index { base, index } => {
+            ast::Expression::Index {
+                base,
+                index: ast_index,
+            } => {
                 let mut lowered_base = self.expression_for_reference(base, ctx)?;
-                let index = self.expression(index, ctx)?;
+                let index_is_const_expression = !ctx.ast_expression_uses_runtime_local(ast_index);
+                let ast_index_span = ctx.ast_expressions.get_span(ast_index);
+                let index = self.expression(ast_index, ctx)?;
 
                 // <https://www.w3.org/TR/WGSL/#language_extension-pointer_composite_access>
                 // Declare pointer as reference
@@ -2463,9 +2507,20 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                     }
                 }
 
-                lowered_base.try_map(|base| match ctx.get_const_val(index).ok() {
-                    Some(index) => Ok::<_, Box<Error>>(ir::Expression::AccessIndex { base, index }),
-                    None => {
+                lowered_base.try_map(|base| match index_is_const_expression
+                    .then(|| ctx.get_const_val(index))
+                {
+                    Some(Ok(index)) => {
+                        Ok::<_, Box<Error>>(ir::Expression::AccessIndex { base, index })
+                    }
+                    // A WGSL const-expression index that is negative is a
+                    // shader-creation error (F-078: the check lives here so the
+                    // validator never value-checks dynamic `Access` indices —
+                    // a let-bound index is runtime even when const-foldable).
+                    Some(Err(proc::ConstValueError::Negative)) => {
+                        Err(Box::new(Error::ExpectedNonNegative(ast_index_span)))
+                    }
+                    Some(Err(_)) | None => {
                         // When an abstract array value e is indexed by an expression
                         // that is not a const-expression, then the array is concretized
                         // before the index is applied.

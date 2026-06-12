@@ -1665,6 +1665,15 @@ impl<W: Write> Writer<W> {
             self.put_expression(expr, &context.expression, true)?;
         }
         writeln!(self.out, ");")?;
+        if let crate::TypeInner::Image {
+            class: crate::ImageClass::Storage { access, .. },
+            ..
+        } = *context.expression.resolve_type(image)
+        {
+            if access.contains(crate::StorageAccess::LOAD | crate::StorageAccess::STORE) {
+                self.write_barrier(crate::Barrier::TEXTURE, level)?;
+            }
+        }
 
         Ok(())
     }

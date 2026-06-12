@@ -679,8 +679,7 @@ impl super::Validator {
                 if let Some(idx) = sample_index {
                     handle.check_dep(idx)?;
                 }
-            }
-            // tiled-fork: end arm (SubpassLoad)
+            } // tiled-fork: end arm (SubpassLoad)
         }
         Ok(())
     }
