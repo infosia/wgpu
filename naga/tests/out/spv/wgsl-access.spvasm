@@ -1,16 +1,16 @@
 ; SPIR-V
 ; Version: 1.1
 ; Generator: rspirv
-; Bound: 511
+; Bound: 519
 OpCapability Shader
 OpExtension "SPV_KHR_storage_buffer_storage_class"
 %1 = OpExtInstImport "GLSL.std.450"
 OpMemoryModel Logical GLSL450
 OpEntryPoint Vertex %428 "foo_vert" %423 %426
 OpEntryPoint Fragment %484 "foo_frag" %483
-OpEntryPoint GLCompute %502 "foo_compute"
+OpEntryPoint GLCompute %510 "foo_compute"
 OpExecutionMode %484 OriginUpperLeft
-OpExecutionMode %502 LocalSize 1 1 1
+OpExecutionMode %510 LocalSize 1 1 1
 %3 = OpString "access.wgsl"
 OpSource Unknown 0 %3 "// This snapshot tests accessing various containers, dereferencing pointers.
 
@@ -359,7 +359,7 @@ OpName %428 "foo_vert"
 OpName %439 "foo"
 OpName %440 "c2"
 OpName %484 "foo_frag"
-OpName %502 "foo_compute"
+OpName %510 "foo_compute"
 OpMemberDecorate %7 0 Offset 0
 OpMemberDecorate %7 1 Offset 16
 OpMemberDecorate %7 2 Offset 28
@@ -608,7 +608,7 @@ OpDecorate %483 Location 0
 %493 = OpConstantComposite  %19  %491 %492
 %494 = OpConstantNull  %24
 %495 = OpConstantComposite  %32  %433 %433 %433 %433
-%503 = OpConstantTrue  %42
+%511 = OpConstantTrue  %42
 %69 = OpFunction  %13  None %72
 %70 = OpFunctionParameter  %22
 %71 = OpFunctionParameter  %4
@@ -1201,39 +1201,50 @@ OpLine %3 150 63
 OpLine %3 150 19
 OpLine %3 150 5
 %498 = OpAccessChain  %448  %58 %52
-OpStore %498 %490
+%499 = OpCompositeExtract  %11  %490 0
+%500 = OpAccessChain  %454  %498 %52
+OpStore %500 %499
+%501 = OpCompositeExtract  %11  %490 1
+%502 = OpAccessChain  %454  %498 %44
+OpStore %502 %501
+%503 = OpCompositeExtract  %11  %490 2
+%504 = OpAccessChain  %454  %498 %15
+OpStore %504 %503
+%505 = OpCompositeExtract  %11  %490 3
+%506 = OpAccessChain  %454  %498 %434
+OpStore %506 %505
 OpLine %3 151 5
 OpLine %3 151 35
 OpLine %3 151 15
 OpLine %3 151 5
-%499 = OpAccessChain  %451  %58 %40
-OpStore %499 %493
+%507 = OpAccessChain  %451  %58 %40
+OpStore %507 %493
 OpLine %3 152 5
 OpLine %3 152 5
 OpLine %3 152 5
-%500 = OpAccessChain  %462  %58 %31 %44 %52
-OpStore %500 %88
+%508 = OpAccessChain  %462  %58 %31 %44 %52
+OpStore %508 %88
 OpLine %3 153 5
 OpStore %485 %494
 OpLine %3 155 12
 OpStore %483 %495
 OpReturn
 OpFunctionEnd
-%502 = OpFunction  %2  None %85
-%501 = OpLabel
-OpBranch %504
-%504 = OpLabel
+%510 = OpFunction  %2  None %85
+%509 = OpLabel
+OpBranch %512
+%512 = OpLabel
 OpLine %3 250 5
-%505 = OpFunctionCall  %2  %321
+%513 = OpFunctionCall  %2  %321
 OpLine %3 251 5
-%506 = OpFunctionCall  %2  %358
+%514 = OpFunctionCall  %2  %358
 OpLine %3 252 5
-%507 = OpFunctionCall  %42  %370 %503
+%515 = OpFunctionCall  %42  %370 %511
 OpLine %3 253 5
-%508 = OpFunctionCall  %6  %381
+%516 = OpFunctionCall  %6  %381
 OpLine %3 254 5
-%509 = OpFunctionCall  %6  %391
+%517 = OpFunctionCall  %6  %391
 OpLine %3 255 5
-%510 = OpFunctionCall  %6  %402
+%518 = OpFunctionCall  %6  %402
 OpReturn
 OpFunctionEnd

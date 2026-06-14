@@ -13,8 +13,10 @@ use super::{
     ResultMember, WrappedFunction, Writer, WriterFlags,
 };
 use crate::{
-    arena::Handle, back::spv::helpers::is_uniform_matcx2_struct_member_access,
-    proc::index::GuardedIndex, Statement,
+    arena::Handle,
+    back::spv::helpers::is_uniform_matcx2_struct_member_access,
+    proc::{index::GuardedIndex, TypeResolution},
+    Statement,
 };
 
 fn get_dimension(type_inner: &crate::TypeInner) -> Dimension {
@@ -24,6 +26,44 @@ fn get_dimension(type_inner: &crate::TypeInner) -> Dimension {
         crate::TypeInner::Matrix { .. } => Dimension::Matrix,
         crate::TypeInner::CooperativeMatrix { .. } => Dimension::CooperativeMatrix,
         _ => unreachable!(),
+    }
+}
+
+fn type_needs_padding_preserving_store(ty: &crate::TypeInner, module: &crate::Module) -> bool {
+    match *ty {
+        crate::TypeInner::Vector {
+            size: crate::VectorSize::Tri,
+            scalar: crate::Scalar { width: 2 | 4, .. },
+        } => true,
+        crate::TypeInner::Matrix {
+            rows: crate::VectorSize::Tri,
+            ..
+        } => true,
+        crate::TypeInner::Array {
+            base,
+            size: crate::ArraySize::Constant(_) | crate::ArraySize::Pending(_),
+            ..
+        } => type_needs_padding_preserving_store(&module.types[base].inner, module),
+        crate::TypeInner::Struct {
+            ref members, span, ..
+        } => {
+            let mut last_offset = 0;
+            for member in members {
+                if member.offset > last_offset {
+                    return true;
+                }
+
+                let ty_inner = &module.types[member.ty].inner;
+                if type_needs_padding_preserving_store(ty_inner, module) {
+                    return true;
+                }
+
+                last_offset = member.offset + ty_inner.size(module.to_ctx());
+            }
+
+            last_offset < span
+        }
+        _ => false,
     }
 }
 
@@ -278,6 +318,160 @@ impl Writer {
 }
 
 impl BlockContext<'_> {
+    fn write_padding_preserving_store(
+        &mut self,
+        pointer_id: Word,
+        value_id: Word,
+        pointer_space: crate::AddressSpace,
+        ty: &TypeResolution,
+        body: &mut Vec<Instruction>,
+    ) -> Result<(), Error> {
+        let mut path = Vec::new();
+        self.write_padding_preserving_store_components(
+            pointer_id,
+            value_id,
+            pointer_space,
+            &mut path,
+            ty,
+            body,
+        )
+    }
+
+    fn write_padding_preserving_store_components(
+        &mut self,
+        pointer_id: Word,
+        value_id: Word,
+        pointer_space: crate::AddressSpace,
+        path: &mut Vec<u32>,
+        ty: &TypeResolution,
+        body: &mut Vec<Instruction>,
+    ) -> Result<(), Error> {
+        match *ty.inner_with(&self.ir_module.types) {
+            crate::TypeInner::Struct { ref members, .. } => {
+                for (index, member) in members.iter().enumerate() {
+                    path.push(index as u32);
+                    self.write_padding_preserving_store_components(
+                        pointer_id,
+                        value_id,
+                        pointer_space,
+                        path,
+                        &TypeResolution::Handle(member.ty),
+                        body,
+                    )?;
+                    path.pop();
+                }
+            }
+            crate::TypeInner::Array { base, size, .. } => {
+                if let crate::proc::IndexableLength::Known(len) =
+                    size.resolve(self.ir_module.to_ctx())?
+                {
+                    for index in 0..len {
+                        path.push(index);
+                        self.write_padding_preserving_store_components(
+                            pointer_id,
+                            value_id,
+                            pointer_space,
+                            path,
+                            &TypeResolution::Handle(base),
+                            body,
+                        )?;
+                        path.pop();
+                    }
+                } else {
+                    self.write_padding_preserving_store_leaf(
+                        pointer_id,
+                        value_id,
+                        pointer_space,
+                        path,
+                        ty,
+                        body,
+                    );
+                }
+            }
+            crate::TypeInner::Matrix {
+                columns,
+                rows: crate::VectorSize::Tri,
+                scalar,
+            } => {
+                let column_ty = TypeResolution::Value(crate::TypeInner::Vector {
+                    size: crate::VectorSize::Tri,
+                    scalar,
+                });
+                for index in 0..columns as u32 {
+                    path.push(index);
+                    self.write_padding_preserving_store_leaf(
+                        pointer_id,
+                        value_id,
+                        pointer_space,
+                        path,
+                        &column_ty,
+                        body,
+                    );
+                    path.pop();
+                }
+            }
+            _ => {
+                self.write_padding_preserving_store_leaf(
+                    pointer_id,
+                    value_id,
+                    pointer_space,
+                    path,
+                    ty,
+                    body,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    fn write_padding_preserving_store_leaf(
+        &mut self,
+        pointer_id: Word,
+        value_id: Word,
+        pointer_space: crate::AddressSpace,
+        path: &[u32],
+        ty: &TypeResolution,
+        body: &mut Vec<Instruction>,
+    ) {
+        let leaf_value_id = if path.is_empty() {
+            value_id
+        } else {
+            let leaf_value_id = self.gen_id();
+            let leaf_type_id = self.writer.get_expression_type_id(ty);
+            body.push(Instruction::composite_extract(
+                leaf_type_id,
+                leaf_value_id,
+                value_id,
+                path,
+            ));
+            leaf_value_id
+        };
+
+        let leaf_pointer_id = if path.is_empty() {
+            pointer_id
+        } else {
+            let leaf_pointer_id = self.gen_id();
+            let leaf_type_id = self.writer.get_expression_type_id(ty);
+            let leaf_pointer_type_id = self
+                .writer
+                .get_pointer_type_id(leaf_type_id, map_storage_class(pointer_space));
+            let index_ids: Vec<_> = path
+                .iter()
+                .map(|&index| self.writer.get_constant_scalar(crate::Literal::U32(index)))
+                .collect();
+            body.push(Instruction::access_chain(
+                leaf_pointer_type_id,
+                leaf_pointer_id,
+                pointer_id,
+                &index_ids,
+            ));
+            leaf_pointer_id
+        };
+
+        body.push(Instruction::store(leaf_pointer_id, leaf_value_id, None));
+    }
+
     /// Generates code to ensure that a loop is bounded. Should be called immediately
     /// after adding the OpLoopMerge instruction to `block`. This function will
     /// [`consume()`](crate::back::spv::Function::consume) `block` and append its
@@ -3777,38 +3971,61 @@ impl BlockContext<'_> {
                 }
                 Statement::Store { pointer, value } => {
                     let value_id = self.cached[value];
+                    let (atomic_space, padding_store) =
+                        match *self.fun_info[pointer].ty.inner_with(&self.ir_module.types) {
+                            crate::TypeInner::Pointer { base, space } => {
+                                let atomic_space = match self.ir_module.types[base].inner {
+                                    crate::TypeInner::Atomic { .. } => Some(space),
+                                    _ => None,
+                                };
+                                let writes_storage = matches!(
+                                    space,
+                                    crate::AddressSpace::Storage { access }
+                                        if access.contains(crate::StorageAccess::STORE)
+                                );
+                                let padding_store = if atomic_space.is_none()
+                                    && writes_storage
+                                    && type_needs_padding_preserving_store(
+                                        &self.ir_module.types[base].inner,
+                                        self.ir_module,
+                                    ) {
+                                    Some((space, TypeResolution::Handle(base)))
+                                } else {
+                                    None
+                                };
+                                (atomic_space, padding_store)
+                            }
+                            _ => (None, None),
+                        };
                     match self.write_access_chain(
                         pointer,
                         &mut block,
                         AccessTypeAdjustment::None,
                     )? {
                         ExpressionPointer::Ready { pointer_id } => {
-                            let atomic_space = match *self.fun_info[pointer]
-                                .ty
-                                .inner_with(&self.ir_module.types)
-                            {
-                                crate::TypeInner::Pointer { base, space } => {
-                                    match self.ir_module.types[base].inner {
-                                        crate::TypeInner::Atomic { .. } => Some(space),
-                                        _ => None,
-                                    }
-                                }
-                                _ => None,
-                            };
-                            let instruction = if let Some(space) = atomic_space {
+                            if let Some(space) = atomic_space {
                                 let (semantics, scope) = space.to_spirv_semantics_and_scope();
                                 let scope_constant_id = self.get_scope_constant(scope as u32);
                                 let semantics_id = self.get_index_constant(semantics.bits());
-                                Instruction::atomic_store(
+                                block.body.push(Instruction::atomic_store(
                                     pointer_id,
                                     scope_constant_id,
                                     semantics_id,
                                     value_id,
-                                )
+                                ));
+                            } else if let Some((space, ref ty)) = padding_store {
+                                self.write_padding_preserving_store(
+                                    pointer_id,
+                                    value_id,
+                                    space,
+                                    ty,
+                                    &mut block.body,
+                                )?;
                             } else {
-                                Instruction::store(pointer_id, value_id, None)
-                            };
-                            block.body.push(instruction);
+                                block
+                                    .body
+                                    .push(Instruction::store(pointer_id, value_id, None));
+                            }
                         }
                         ExpressionPointer::Conditional { condition, access } => {
                             let mut selection = Selection::start(&mut block, ());
@@ -3817,10 +4034,20 @@ impl BlockContext<'_> {
                             // The in-bounds path. Perform the access and the store.
                             let pointer_id = access.result_id.unwrap();
                             selection.block().body.push(access);
-                            selection
-                                .block()
-                                .body
-                                .push(Instruction::store(pointer_id, value_id, None));
+                            if let Some((space, ref ty)) = padding_store {
+                                self.write_padding_preserving_store(
+                                    pointer_id,
+                                    value_id,
+                                    space,
+                                    ty,
+                                    &mut selection.block().body,
+                                )?;
+                            } else {
+                                selection
+                                    .block()
+                                    .body
+                                    .push(Instruction::store(pointer_id, value_id, None));
+                            }
 
                             // Finish the in-bounds block and start the merge block. This
                             // is the block we'll leave current on return.
