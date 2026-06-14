@@ -45,6 +45,7 @@
                         offset: 4,
                     ),
                 ],
+                alignment: (4),
                 span: 8,
             ),
         ),

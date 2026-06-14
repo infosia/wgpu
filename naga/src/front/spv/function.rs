@@ -418,6 +418,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
                     let ty = &module.types[result.ty];
                     if let crate::TypeInner::Struct {
                         members: ref original_members,
+                        alignment,
                         span,
                     } = ty.inner
                     {
@@ -438,6 +439,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
                                     name: ty.name.clone(),
                                     inner: crate::TypeInner::Struct {
                                         members: new_members,
+                                        alignment,
                                         span,
                                     },
                                 },
@@ -582,6 +584,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
                         name: None,
                         inner: crate::TypeInner::Struct {
                             members,
+                            alignment: struct_alignment,
                             span: struct_alignment.round_up(next_member_offset),
                         },
                     },

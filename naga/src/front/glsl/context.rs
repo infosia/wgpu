@@ -267,6 +267,11 @@ impl<'a> Context<'a> {
         self.emit_start()
     }
 
+    pub fn type_layout(&mut self, ty: Handle<Type>) -> crate::proc::TypeLayout {
+        self.layouter.update(self.module.to_ctx()).unwrap();
+        self.layouter[ty]
+    }
+
     pub fn add_expression(&mut self, expr: Expression, meta: Span) -> Result<Handle<Expression>> {
         let mut eval = if self.is_const {
             crate::proc::ConstantEvaluator::for_glsl_module(

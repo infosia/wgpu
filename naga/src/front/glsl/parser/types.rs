@@ -86,7 +86,7 @@ impl ParsingContext<'_> {
                 let ty_name = self.expect_ident(frontend)?.0;
                 self.expect(frontend, TokenValue::LeftBrace)?;
                 let mut members = Vec::new();
-                let span = self.parse_struct_declaration_list(
+                let (span, alignment) = self.parse_struct_declaration_list(
                     frontend,
                     ctx,
                     &mut members,
@@ -97,7 +97,11 @@ impl ParsingContext<'_> {
                 let ty = ctx.module.types.insert(
                     Type {
                         name: Some(ty_name.clone()),
-                        inner: TypeInner::Struct { members, span },
+                        inner: TypeInner::Struct {
+                            members,
+                            alignment,
+                            span,
+                        },
                     },
                     meta,
                 );

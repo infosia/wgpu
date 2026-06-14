@@ -49,6 +49,7 @@ impl TypeTracer<'_> {
             }
             Ti::Struct {
                 ref members,
+                alignment: _,
                 span: _,
             } => {
                 self.types_used.insert_iter(members.iter().map(|m| m.ty));
@@ -99,6 +100,7 @@ impl ModuleMap {
             }
             Ti::Struct {
                 ref mut members,
+                alignment: _,
                 span: _,
             } => {
                 for member in members {

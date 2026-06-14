@@ -642,7 +642,11 @@ impl super::Validator {
                     immediates_compatibility: base_info.immediates_compatibility.clone(),
                 }
             }
-            Ti::Struct { ref members, span } => {
+            Ti::Struct {
+                ref members,
+                alignment: _,
+                span,
+            } => {
                 if members.is_empty() {
                     return Err(TypeError::EmptyStruct);
                 }

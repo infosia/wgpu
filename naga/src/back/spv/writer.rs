@@ -2184,6 +2184,7 @@ impl Writer {
                 }
                 crate::TypeInner::Struct {
                     ref members,
+                    alignment: _,
                     span: _,
                 } => {
                     let mut has_runtime_array = false;

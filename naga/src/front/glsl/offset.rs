@@ -170,7 +170,11 @@ pub fn calculate_offset(
             ty = types.insert(
                 Type {
                     name,
-                    inner: TypeInner::Struct { members, span },
+                    inner: TypeInner::Struct {
+                        members,
+                        alignment: align,
+                        span,
+                    },
                 },
                 ty_span,
             );

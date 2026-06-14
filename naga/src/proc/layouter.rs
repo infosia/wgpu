@@ -167,6 +167,13 @@ impl Layouter {
         self.layouts.clear();
     }
 
+    /// Return the maximum alignment required by a struct's members.
+    pub fn struct_alignment(&self, members: &[crate::StructMember]) -> Alignment {
+        members.iter().fold(Alignment::ONE, |alignment, member| {
+            alignment.max(self[member.ty].alignment)
+        })
+    }
+
     #[expect(rustdoc::private_intra_doc_links)]
     /// Extend this `Layouter` with layouts for any new entries in `gctx.types`.
     ///
@@ -248,11 +255,15 @@ impl Layouter {
                         return Err(LayoutErrorInner::InvalidArrayElementType(base).with(ty_handle));
                     },
                 },
-                Ti::Struct { span, ref members } => {
-                    let mut alignment = Alignment::ONE;
+                Ti::Struct {
+                    span,
+                    alignment,
+                    ref members,
+                } => {
+                    let mut derived_alignment = Alignment::ONE;
                     for (index, member) in members.iter().enumerate() {
-                        alignment = if member.ty < ty_handle {
-                            alignment.max(self[member.ty].alignment)
+                        if member.ty < ty_handle {
+                            derived_alignment = derived_alignment.max(self[member.ty].alignment);
                         } else {
                             return Err(LayoutErrorInner::InvalidStructMemberType(
                                 index as u32,
@@ -261,6 +272,10 @@ impl Layouter {
                             .with(ty_handle));
                         };
                     }
+                    debug_assert!(
+                        alignment >= derived_alignment,
+                        "struct alignment {alignment} is lower than member alignment {derived_alignment}"
+                    );
                     TypeLayout {
                         size: span,
                         alignment,

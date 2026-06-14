@@ -106,6 +106,7 @@ pub fn global_needs_wrapper(ir_module: &crate::Module, var: &crate::GlobalVariab
     match ir_module.types[var.ty].inner {
         crate::TypeInner::Struct {
             ref members,
+            alignment: _,
             span: _,
         } => match members.last() {
             Some(member) => match ir_module.types[member.ty].inner {

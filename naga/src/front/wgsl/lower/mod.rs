@@ -2507,27 +2507,27 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                     }
                 }
 
-                lowered_base.try_map(|base| match index_is_const_expression
-                    .then(|| ctx.get_const_val(index))
-                {
-                    Some(Ok(index)) => {
-                        Ok::<_, Box<Error>>(ir::Expression::AccessIndex { base, index })
-                    }
-                    // A WGSL const-expression index that is negative is a
-                    // shader-creation error (F-078: the check lives here so the
-                    // validator never value-checks dynamic `Access` indices —
-                    // a let-bound index is runtime even when const-foldable).
-                    Some(Err(proc::ConstValueError::Negative)) => {
-                        Err(Box::new(Error::ExpectedNonNegative(ast_index_span)))
-                    }
-                    Some(Err(_)) | None => {
-                        // When an abstract array value e is indexed by an expression
-                        // that is not a const-expression, then the array is concretized
-                        // before the index is applied.
-                        // https://www.w3.org/TR/WGSL/#array-access-expr
-                        // Also applies to vectors and matrices.
-                        let base = ctx.concretize(base)?;
-                        Ok(ir::Expression::Access { base, index })
+                lowered_base.try_map(|base| {
+                    match index_is_const_expression.then(|| ctx.get_const_val(index)) {
+                        Some(Ok(index)) => {
+                            Ok::<_, Box<Error>>(ir::Expression::AccessIndex { base, index })
+                        }
+                        // A WGSL const-expression index that is negative is a
+                        // shader-creation error (F-078: the check lives here so the
+                        // validator never value-checks dynamic `Access` indices —
+                        // a let-bound index is runtime even when const-foldable).
+                        Some(Err(proc::ConstValueError::Negative)) => {
+                            Err(Box::new(Error::ExpectedNonNegative(ast_index_span)))
+                        }
+                        Some(Err(_)) | None => {
+                            // When an abstract array value e is indexed by an expression
+                            // that is not a const-expression, then the array is concretized
+                            // before the index is applied.
+                            // https://www.w3.org/TR/WGSL/#array-access-expr
+                            // Also applies to vectors and matrices.
+                            let base = ctx.concretize(base)?;
+                            Ok(ir::Expression::Access { base, index })
+                        }
                     }
                 })?
             }
@@ -2911,9 +2911,7 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                         if width != 4
                             || !matches!(
                                 kind,
-                                ir::ScalarKind::Float
-                                    | ir::ScalarKind::Sint
-                                    | ir::ScalarKind::Uint
+                                ir::ScalarKind::Float | ir::ScalarKind::Sint | ir::ScalarKind::Uint
                             )
                         {
                             return Err(Box::new(Error::BadTextureSampleType { span, scalar }));
@@ -4574,8 +4572,7 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                     } => self.expression(args.next()?, ctx)?,
                     ir::ImageClass::Subpass { .. } => {
                         self.expression_with_leaf_scalar(args.next()?, ir::Scalar::F32, ctx)?
-                    }
-                    // tiled-fork: end arm (ImageClass::Subpass)
+                    } // tiled-fork: end arm (ImageClass::Subpass)
                 };
                 level = ir::SampleLevel::Exact(exact);
                 depth_ref = None;
@@ -4775,6 +4772,7 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
         let size = struct_alignment.round_up(offset);
         let inner = ir::TypeInner::Struct {
             members,
+            alignment: struct_alignment,
             span: size,
         };
 

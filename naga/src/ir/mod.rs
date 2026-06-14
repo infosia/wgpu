@@ -1049,6 +1049,8 @@ pub enum TypeInner {
     /// [`compare_types`]: crate::proc::compare_types
     Struct {
         members: Vec<StructMember>,
+        /// The required alignment of this structure.
+        alignment: crate::proc::Alignment,
         //TODO: should this be unaligned?
         span: u32,
     },

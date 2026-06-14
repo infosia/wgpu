@@ -554,7 +554,8 @@ impl ParsingContext<'_> {
         };
 
         let mut members = Vec::new();
-        let span = self.parse_struct_declaration_list(frontend, ctx, &mut members, layout)?;
+        let (span, alignment) =
+            self.parse_struct_declaration_list(frontend, ctx, &mut members, layout)?;
         self.expect(frontend, TokenValue::RightBrace)?;
 
         let mut ty = ctx.module.types.insert(
@@ -562,6 +563,7 @@ impl ParsingContext<'_> {
                 name: Some(ty_name),
                 inner: TypeInner::Struct {
                     members: members.clone(),
+                    alignment,
                     span,
                 },
             },
@@ -628,7 +630,7 @@ impl ParsingContext<'_> {
         ctx: &mut Context,
         members: &mut Vec<StructMember>,
         layout: StructLayout,
-    ) -> Result<u32> {
+    ) -> Result<(u32, Alignment)> {
         let mut span = 0;
         let mut align = Alignment::ONE;
 
@@ -679,6 +681,6 @@ impl ParsingContext<'_> {
 
         span = align.round_up(span);
 
-        Ok(span)
+        Ok((span, align))
     }
 }

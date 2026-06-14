@@ -223,7 +223,10 @@ fn build_injected_output(
         offset,
     };
 
-    if let TypeInner::Struct { ref members, span } = module.types[orig_ty].inner {
+    if let TypeInner::Struct {
+        ref members, span, ..
+    } = module.types[orig_ty].inner
+    {
         // Append a sample-mask member after the existing struct.
         let orig_member_count = members.len() as u32;
         let mut members = members.clone();
@@ -236,6 +239,7 @@ fn build_injected_output(
                 name: Some(String::from("naga_sample_mask_output")),
                 inner: TypeInner::Struct {
                     members,
+                    alignment,
                     span: new_span,
                 },
             },
@@ -263,7 +267,11 @@ fn build_injected_output(
         let new_ty = module.types.insert(
             Type {
                 name: Some(String::from("naga_sample_mask_output")),
-                inner: TypeInner::Struct { members, span },
+                inner: TypeInner::Struct {
+                    members,
+                    alignment,
+                    span,
+                },
             },
             Span::default(),
         );

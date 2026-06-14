@@ -4,7 +4,7 @@ Type generators.
 
 use alloc::{string::ToString, vec};
 
-use crate::{arena::Handle, span::Span};
+use crate::{arena::Handle, proc::Alignment, span::Span};
 
 impl crate::Module {
     /// Populate this module's [`SpecialTypes::ray_desc`] type.
@@ -94,6 +94,7 @@ impl crate::Module {
                             offset: 32,
                         },
                     ],
+                    alignment: Alignment::SIXTEEN,
                     span: 48,
                 },
             },
@@ -266,6 +267,7 @@ impl crate::Module {
                             offset: 112,
                         },
                     ],
+                    alignment: Alignment::SIXTEEN,
                     span: 176,
                 },
             },
@@ -380,6 +382,7 @@ impl crate::Module {
                             offset: 12,
                         },
                     ],
+                    alignment: Alignment::FOUR,
                     span: 16,
                 },
             },
@@ -441,6 +444,7 @@ impl crate::Module {
                             offset: 200,
                         },
                     ],
+                    alignment: Alignment::SIXTEEN,
                     span: 208,
                 },
             },
@@ -495,6 +499,7 @@ impl crate::Module {
                                 offset: scalar.width as u32,
                             },
                         ],
+                        alignment: Alignment::from_width(scalar.width),
                         span: scalar.width as u32 * 2,
                     },
                 }
@@ -520,6 +525,11 @@ impl crate::Module {
                 } else {
                     (float_ty, scalar.width as u32)
                 };
+                let alignment = if let Some(size) = size {
+                    Alignment::from(size) * Alignment::from_width(scalar.width)
+                } else {
+                    Alignment::from_width(scalar.width)
+                };
 
                 crate::Type {
                     name: Some(name),
@@ -538,6 +548,7 @@ impl crate::Module {
                                 offset: second_offset,
                             },
                         ],
+                        alignment,
                         span: second_offset * 2,
                     },
                 }
@@ -587,6 +598,11 @@ impl crate::Module {
                 } else {
                     (float_ty, int_ty, scalar.width as u32)
                 };
+                let alignment = if let Some(size) = size {
+                    Alignment::from(size) * Alignment::from_width(scalar.width)
+                } else {
+                    Alignment::from_width(scalar.width)
+                };
 
                 crate::Type {
                     name: Some(name),
@@ -605,6 +621,7 @@ impl crate::Module {
                                 offset: second_offset,
                             },
                         ],
+                        alignment,
                         span: second_offset * 2,
                     },
                 }

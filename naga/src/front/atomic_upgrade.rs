@@ -185,7 +185,11 @@ impl UpgradeState<'_> {
                 size,
                 stride,
             },
-            TypeInner::Struct { ref members, span } => {
+            TypeInner::Struct {
+                ref members,
+                alignment,
+                span,
+            } => {
                 // If no field or subfield of this struct was ever accessed
                 // atomically, no change is needed. We should never have arrived here.
                 let Some(fields) = upgrades.fields.get(&ty) else {
@@ -199,6 +203,7 @@ impl UpgradeState<'_> {
 
                 TypeInner::Struct {
                     members: new_members,
+                    alignment,
                     span,
                 }
             }

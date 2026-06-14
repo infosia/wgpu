@@ -294,6 +294,7 @@ impl super::Validator {
                 match struct_type.inner {
                     crate::TypeInner::Struct {
                         ref members,
+                        alignment: _,
                         span: ref _span,
                     } => {
                         (0..members.len())
@@ -421,6 +422,7 @@ impl super::Validator {
             }
             crate::TypeInner::Struct {
                 ref members,
+                alignment: _,
                 span: _,
             } => {
                 handle.check_dep_iter(members.iter().map(|m| m.ty))?;

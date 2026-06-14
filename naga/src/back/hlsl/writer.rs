@@ -353,7 +353,10 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
 
         // Write all structs
         for (handle, ty) in module.types.iter() {
-            if let TypeInner::Struct { ref members, span } = ty.inner {
+            if let TypeInner::Struct {
+                ref members, span, ..
+            } = ty.inner
+            {
                 if module.types[members.last().unwrap().ty]
                     .inner
                     .is_dynamically_sized(&module.types)

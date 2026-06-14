@@ -1283,6 +1283,7 @@ impl Frontend {
         );
 
         let mut span = 0;
+        let mut alignment = crate::proc::Alignment::ONE;
         let mut members = Vec::new();
         let mut components = Vec::new();
 
@@ -1305,6 +1306,8 @@ impl Frontend {
                 pointer,
                 ty,
                 &mut |ctx, name, pointer, ty, binding| {
+                    let layout = ctx.type_layout(ty);
+                    alignment = alignment.max(layout.alignment);
                     members.push(StructMember {
                         name,
                         ty,
@@ -1312,7 +1315,7 @@ impl Frontend {
                         offset: span,
                     });
 
-                    span += ctx.module.types[ty].inner.size(ctx.module.to_ctx());
+                    span += layout.size;
 
                     let len = ctx.expressions.len();
                     let load = ctx
@@ -1333,7 +1336,11 @@ impl Frontend {
             let ty = ctx.module.types.insert(
                 Type {
                     name: None,
-                    inner: TypeInner::Struct { members, span },
+                    inner: TypeInner::Struct {
+                        members,
+                        alignment,
+                        span,
+                    },
                 },
                 Default::default(),
             );

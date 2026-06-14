@@ -1364,8 +1364,7 @@ impl super::Validator {
                     _ => return Err(ExpressionError::ExpectedImageType(image_ty)),
                 }
                 ShaderStages::FRAGMENT
-            }
-            // tiled-fork: end arm (SubpassLoad)
+            } // tiled-fork: end arm (SubpassLoad)
         };
         Ok(stages)
     }

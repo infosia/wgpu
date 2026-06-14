@@ -2588,7 +2588,11 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
 
         span = alignment.round_up(span);
 
-        let inner = crate::TypeInner::Struct { span, members };
+        let inner = crate::TypeInner::Struct {
+            members,
+            alignment,
+            span,
+        };
 
         let ty_handle = module.types.insert(
             crate::Type {
