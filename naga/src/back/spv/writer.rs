@@ -2157,6 +2157,13 @@ impl Writer {
             let id = self.id_gen.next();
             let instruction = match ty.inner {
                 crate::TypeInner::Array { base, size, stride } => {
+                    let stride = match module.types[base].inner {
+                        crate::TypeInner::Scalar(crate::Scalar {
+                            kind: crate::ScalarKind::Bool,
+                            ..
+                        }) => 4,
+                        _ => stride,
+                    };
                     self.decorate(id, Decoration::ArrayStride, &[stride]);
 
                     let type_id = self.get_handle_type_id(base);

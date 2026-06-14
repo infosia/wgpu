@@ -42,6 +42,12 @@ Bottom level categories:
 
 ## Unreleased
 
+### Bug Fixes
+
+#### naga
+
+- Fix SPIR-V layout for `bool` arrays so robust workgroup array writes use the correct stride.
+
 ## v29.0.3 (2026-05-01)
 
 ### Bug Fixes

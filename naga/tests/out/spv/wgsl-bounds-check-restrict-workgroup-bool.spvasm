@@ -1,0 +1,58 @@
+; SPIR-V
+; Version: 1.1
+; Generator: rspirv
+; Bound: 36
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %20 "main" %25
+OpExecutionMode %20 LocalSize 1 1 1
+OpDecorate %4 ArrayStride 4
+OpDecorate %25 BuiltIn LocalInvocationIndex
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%6 = OpTypeInt 32 0
+%5 = OpConstant  %6  4
+%4 = OpTypeArray %3 %5
+%8 = OpTypePointer Workgroup %4
+%7 = OpVariable  %8  Workgroup
+%12 = OpTypeFunction %2 %6
+%13 = OpConstantTrue  %3
+%15 = OpTypePointer Workgroup %3
+%16 = OpConstant  %6  3
+%21 = OpTypeFunction %2
+%22 = OpConstant  %6  10
+%24 = OpConstantNull  %4
+%26 = OpTypePointer Input %6
+%25 = OpVariable  %26  Input
+%28 = OpConstant  %6  0
+%32 = OpConstant  %6  2
+%33 = OpConstant  %6  264
+%11 = OpFunction  %2  None %12
+%10 = OpFunctionParameter  %6
+%9 = OpLabel
+OpBranch %14
+%14 = OpLabel
+%17 = OpExtInst  %6  %1 UMin %10 %16
+%18 = OpAccessChain  %15  %7 %17
+OpStore %18 %13
+OpReturn
+OpFunctionEnd
+%20 = OpFunction  %2  None %21
+%19 = OpLabel
+OpBranch %23
+%23 = OpLabel
+%27 = OpLoad  %6  %25
+%29 = OpIEqual  %3  %27 %28
+OpSelectionMerge %30 None
+OpBranchConditional %29 %31 %30
+%31 = OpLabel
+OpStore %7 %24
+OpBranch %30
+%30 = OpLabel
+OpControlBarrier %32 %32 %33
+OpBranch %34
+%34 = OpLabel
+%35 = OpFunctionCall  %2  %11 %22
+OpReturn
+OpFunctionEnd
