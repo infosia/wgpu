@@ -43,7 +43,10 @@ void test_msl_packed_vec3_(
     device FooStruct& alignment
 ) {
     int idx = 1;
-    alignment.v3_ = metal::float3(1.0);
+    {
+        const metal::float3 _value = metal::float3(1.0);
+        (*reinterpret_cast<device metal::packed_float3*>(&alignment.v3_)) = metal::packed_float3(_value);
+    }
     alignment.v3_[0] = 1.0;
     alignment.v3_[0] = 2.0;
     int _e16 = idx;

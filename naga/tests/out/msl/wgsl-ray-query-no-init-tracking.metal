@@ -85,7 +85,10 @@ kernel void main_(
     RayIntersection _e7 = query_loop(pos_1, dir_1, acc_struct);
     output.visible = static_cast<uint>(_e7.kind == 0u);
     metal::float3 _e18 = get_torus_normal(dir_1 * _e7.t, _e7);
-    output.normal = _e18;
+    {
+        const metal::float3 _value = _e18;
+        (*reinterpret_cast<device metal::packed_float3*>(&output.normal)) = metal::packed_float3(_value);
+    }
     return;
 }
 

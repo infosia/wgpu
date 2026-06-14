@@ -318,7 +318,13 @@ fragment foo_fragOutput foo_frag(
 , constant _mslBufferSizes& _buffer_sizes [[buffer(24)]]
 ) {
     bar._matrix[1].z = 1.0;
-    bar._matrix = metal::float4x3(metal::float3(0.0), metal::float3(1.0), metal::float3(2.0), metal::float3(3.0));
+    {
+        const metal::float4x3 _value = metal::float4x3(metal::float3(0.0), metal::float3(1.0), metal::float3(2.0), metal::float3(3.0));
+        (*reinterpret_cast<device metal::packed_float3*>(&bar._matrix[0])) = metal::packed_float3(_value[0]);
+        (*reinterpret_cast<device metal::packed_float3*>(&bar._matrix[1])) = metal::packed_float3(_value[1]);
+        (*reinterpret_cast<device metal::packed_float3*>(&bar._matrix[2])) = metal::packed_float3(_value[2]);
+        (*reinterpret_cast<device metal::packed_float3*>(&bar._matrix[3])) = metal::packed_float3(_value[3]);
+    }
     bar.arr = type_10 {{metal::uint2(0u), metal::uint2(1u)}};
     bar.data[1].value = 1;
     qux = metal::int2 {};

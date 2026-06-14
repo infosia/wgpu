@@ -84,7 +84,10 @@ half f16_function(
     output.val_f16_2_ = _e60 + _e63;
     metal::half3 _e69 = input_uniform.val_f16_3_;
     metal::half3 _e72 = input_storage.val_f16_3_;
-    output.val_f16_3_ = _e69 + _e72;
+    {
+        const metal::half3 _value = _e69 + _e72;
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_f16_3_)) = metal::packed_half3(_value);
+    }
     metal::half4 _e78 = input_uniform.val_f16_4_;
     metal::half4 _e81 = input_storage.val_f16_4_;
     output.val_f16_4_ = _e78 + _e81;
@@ -93,7 +96,11 @@ half f16_function(
     output.val_mat2x2_ = _e87 + _e90;
     metal::half2x3 _e96 = input_uniform.val_mat2x3_;
     metal::half2x3 _e99 = input_storage.val_mat2x3_;
-    output.val_mat2x3_ = _e96 + _e99;
+    {
+        const metal::half2x3 _value = _e96 + _e99;
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat2x3_[0])) = metal::packed_half3(_value[0]);
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat2x3_[1])) = metal::packed_half3(_value[1]);
+    }
     metal::half2x4 _e105 = input_uniform.val_mat2x4_;
     metal::half2x4 _e108 = input_storage.val_mat2x4_;
     output.val_mat2x4_ = _e105 + _e108;
@@ -102,7 +109,12 @@ half f16_function(
     output.val_mat3x2_ = _e114 + _e117;
     metal::half3x3 _e123 = input_uniform.val_mat3x3_;
     metal::half3x3 _e126 = input_storage.val_mat3x3_;
-    output.val_mat3x3_ = _e123 + _e126;
+    {
+        const metal::half3x3 _value = _e123 + _e126;
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat3x3_[0])) = metal::packed_half3(_value[0]);
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat3x3_[1])) = metal::packed_half3(_value[1]);
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat3x3_[2])) = metal::packed_half3(_value[2]);
+    }
     metal::half3x4 _e132 = input_uniform.val_mat3x4_;
     metal::half3x4 _e135 = input_storage.val_mat3x4_;
     output.val_mat3x4_ = _e132 + _e135;
@@ -111,7 +123,13 @@ half f16_function(
     output.val_mat4x2_ = _e141 + _e144;
     metal::half4x3 _e150 = input_uniform.val_mat4x3_;
     metal::half4x3 _e153 = input_storage.val_mat4x3_;
-    output.val_mat4x3_ = _e150 + _e153;
+    {
+        const metal::half4x3 _value = _e150 + _e153;
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat4x3_[0])) = metal::packed_half3(_value[0]);
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat4x3_[1])) = metal::packed_half3(_value[1]);
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat4x3_[2])) = metal::packed_half3(_value[2]);
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat4x3_[3])) = metal::packed_half3(_value[3]);
+    }
     metal::half4x4 _e159 = input_uniform.val_mat4x4_;
     metal::half4x4 _e162 = input_storage.val_mat4x4_;
     output.val_mat4x4_ = _e159 + _e162;
@@ -147,26 +165,44 @@ half f16_function(
     output.val_f16_2_ = static_cast<metal::half2>(float_vec2_);
     metal::half3 _e212 = input_uniform.val_f16_3_;
     metal::float3 float_vec3_ = static_cast<metal::float3>(_e212);
-    output.val_f16_3_ = static_cast<metal::half3>(float_vec3_);
+    {
+        const metal::half3 _value = static_cast<metal::half3>(float_vec3_);
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_f16_3_)) = metal::packed_half3(_value);
+    }
     metal::half4 _e219 = input_uniform.val_f16_4_;
     metal::float4 float_vec4_ = static_cast<metal::float4>(_e219);
     output.val_f16_4_ = static_cast<metal::half4>(float_vec4_);
     metal::half2x2 _e228 = input_uniform.val_mat2x2_;
     output.val_mat2x2_ = metal::half2x2(metal::float2x2(_e228));
     metal::half2x3 _e235 = input_uniform.val_mat2x3_;
-    output.val_mat2x3_ = metal::half2x3(metal::float2x3(_e235));
+    {
+        const metal::half2x3 _value = metal::half2x3(metal::float2x3(_e235));
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat2x3_[0])) = metal::packed_half3(_value[0]);
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat2x3_[1])) = metal::packed_half3(_value[1]);
+    }
     metal::half2x4 _e242 = input_uniform.val_mat2x4_;
     output.val_mat2x4_ = metal::half2x4(metal::float2x4(_e242));
     metal::half3x2 _e249 = input_uniform.val_mat3x2_;
     output.val_mat3x2_ = metal::half3x2(metal::float3x2(_e249));
     metal::half3x3 _e256 = input_uniform.val_mat3x3_;
-    output.val_mat3x3_ = metal::half3x3(metal::float3x3(_e256));
+    {
+        const metal::half3x3 _value = metal::half3x3(metal::float3x3(_e256));
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat3x3_[0])) = metal::packed_half3(_value[0]);
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat3x3_[1])) = metal::packed_half3(_value[1]);
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat3x3_[2])) = metal::packed_half3(_value[2]);
+    }
     metal::half3x4 _e263 = input_uniform.val_mat3x4_;
     output.val_mat3x4_ = metal::half3x4(metal::float3x4(_e263));
     metal::half4x2 _e270 = input_uniform.val_mat4x2_;
     output.val_mat4x2_ = metal::half4x2(metal::float4x2(_e270));
     metal::half4x3 _e277 = input_uniform.val_mat4x3_;
-    output.val_mat4x3_ = metal::half4x3(metal::float4x3(_e277));
+    {
+        const metal::half4x3 _value = metal::half4x3(metal::float4x3(_e277));
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat4x3_[0])) = metal::packed_half3(_value[0]);
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat4x3_[1])) = metal::packed_half3(_value[1]);
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat4x3_[2])) = metal::packed_half3(_value[2]);
+        (*reinterpret_cast<device metal::packed_half3*>(&output.val_mat4x3_[3])) = metal::packed_half3(_value[3]);
+    }
     metal::half4x4 _e284 = input_uniform.val_mat4x4_;
     output.val_mat4x4_ = metal::half4x4(metal::float4x4(_e284));
     half _e287 = val;

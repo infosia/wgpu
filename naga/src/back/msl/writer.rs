@@ -383,20 +383,19 @@ impl Display for TypeContext<'_> {
                         // when the texture is declared but never used by the entry
                         // point (self.access is empty). This is valid WGSL: an unused
                         // binding does not affect module validity.
-                        let resolve_access =
-                            |flags: crate::StorageAccess| -> Option<&'static str> {
-                                if flags.contains(
-                                    crate::StorageAccess::LOAD | crate::StorageAccess::STORE,
-                                ) {
-                                    Some("read_write")
-                                } else if flags.contains(crate::StorageAccess::STORE) {
-                                    Some("write")
-                                } else if flags.contains(crate::StorageAccess::LOAD) {
-                                    Some("read")
-                                } else {
-                                    None
-                                }
-                            };
+                        let resolve_access = |flags: crate::StorageAccess| -> Option<&'static str> {
+                            if flags
+                                .contains(crate::StorageAccess::LOAD | crate::StorageAccess::STORE)
+                            {
+                                Some("read_write")
+                            } else if flags.contains(crate::StorageAccess::STORE) {
+                                Some("write")
+                            } else if flags.contains(crate::StorageAccess::LOAD) {
+                                Some("read")
+                            } else {
+                                None
+                            }
+                        };
                         let access = if let Some(a) = resolve_access(self.access) {
                             a
                         } else if let Some(a) = resolve_access(type_access) {
@@ -674,6 +673,53 @@ fn should_pack_struct_member(
     }
 }
 
+fn type_needs_padding_preserving_store(ty: &crate::TypeInner, module: &crate::Module) -> bool {
+    match *ty {
+        crate::TypeInner::Vector {
+            size: crate::VectorSize::Tri,
+            scalar: crate::Scalar { width: 2 | 4, .. },
+        } => true,
+        crate::TypeInner::Matrix {
+            rows: crate::VectorSize::Tri,
+            ..
+        } => true,
+        crate::TypeInner::Array {
+            base,
+            size: crate::ArraySize::Constant(_) | crate::ArraySize::Pending(_),
+            ..
+        } => type_needs_padding_preserving_store(&module.types[base].inner, module),
+        crate::TypeInner::Struct {
+            ref members, span, ..
+        } => {
+            let mut last_offset = 0;
+            for (index, member) in members.iter().enumerate() {
+                if member.offset > last_offset {
+                    return true;
+                }
+
+                let ty_inner = &module.types[member.ty].inner;
+                if type_needs_padding_preserving_store(ty_inner, module) {
+                    return true;
+                }
+
+                last_offset = member.offset + ty_inner.size(module.to_ctx());
+                if should_pack_struct_member(members, span, index, module).is_none() {
+                    if let crate::TypeInner::Vector {
+                        size: crate::VectorSize::Tri,
+                        scalar,
+                    } = *ty_inner
+                    {
+                        last_offset += scalar.width as u32;
+                    }
+                }
+            }
+
+            last_offset < span
+        }
+        _ => false,
+    }
+}
+
 fn needs_array_length(ty: Handle<crate::Type>, arena: &crate::UniqueArena<crate::Type>) -> bool {
     match arena[ty].inner {
         crate::TypeInner::Struct { ref members, .. } => {
@@ -929,6 +975,14 @@ impl<'a> ExpressionContext<'a> {
 struct StatementContext<'a> {
     expression: ExpressionContext<'a>,
     result_struct: Option<&'a str>,
+}
+
+struct PaddingStoreContext<'a, 'b> {
+    pointer: Handle<crate::Expression>,
+    policy: index::BoundsCheckPolicy,
+    value: &'b str,
+    level: back::Level,
+    expression: &'b ExpressionContext<'a>,
 }
 
 impl<W: Write> Writer<W> {
@@ -4529,6 +4583,25 @@ impl<W: Write> Writer<W> {
             write!(self.out, ", ")?;
             self.put_expression(value, &context.expression, true)?;
             writeln!(self.out, ", {NAMESPACE}::memory_order_relaxed);")?;
+        } else if let Some(base_ty) = context
+            .expression
+            .resolve_type(pointer)
+            .pointer_base_type()
+            .filter(|_| {
+                matches!(
+                    context.expression.resolve_type(pointer).pointer_space(),
+                    Some(crate::AddressSpace::Storage { access })
+                        if access.contains(crate::StorageAccess::STORE)
+                )
+            })
+            .filter(|base_ty| {
+                type_needs_padding_preserving_store(
+                    base_ty.inner_with(&context.expression.module.types),
+                    context.expression.module,
+                )
+            })
+        {
+            self.put_padding_preserving_store(pointer, value, policy, &base_ty, level, context)?;
         } else {
             write!(self.out, "{level}")?;
             self.put_access_chain(pointer, policy, &context.expression)?;
@@ -4536,6 +4609,152 @@ impl<W: Write> Writer<W> {
             self.put_expression(value, &context.expression, true)?;
             writeln!(self.out, ";")?;
         }
+
+        Ok(())
+    }
+
+    fn put_padding_preserving_store(
+        &mut self,
+        pointer: Handle<crate::Expression>,
+        value: Handle<crate::Expression>,
+        policy: index::BoundsCheckPolicy,
+        ty: &TypeResolution,
+        level: back::Level,
+        context: &StatementContext,
+    ) -> BackendResult {
+        let tmp = "_value";
+        writeln!(self.out, "{level}{{")?;
+        write!(self.out, "{}const ", level.next())?;
+        self.start_baking_expression(value, &context.expression, tmp)?;
+        self.put_expression(value, &context.expression, true)?;
+        writeln!(self.out, ";")?;
+        let store_context = PaddingStoreContext {
+            pointer,
+            policy,
+            level: level.next(),
+            value: tmp,
+            expression: &context.expression,
+        };
+        self.put_padding_preserving_store_components(&store_context, "", ty)?;
+        writeln!(self.out, "{level}}}")?;
+
+        Ok(())
+    }
+
+    fn put_padding_preserving_store_components(
+        &mut self,
+        store: &PaddingStoreContext,
+        suffix: &str,
+        ty: &TypeResolution,
+    ) -> BackendResult {
+        match *ty.inner_with(&store.expression.module.types) {
+            crate::TypeInner::Struct { ref members, .. } => {
+                let ty_handle = ty.handle().ok_or_else(|| {
+                    Error::GenericValidation("Expected struct type to have a handle".into())
+                })?;
+                for (index, member) in members.iter().enumerate() {
+                    let name = &self.names[&NameKey::StructMember(ty_handle, index as u32)];
+                    let member_suffix = format!("{suffix}.{name}");
+                    self.put_padding_preserving_store_components(
+                        store,
+                        &member_suffix,
+                        &TypeResolution::Handle(member.ty),
+                    )?;
+                }
+            }
+            crate::TypeInner::Array { base, size, .. } => {
+                if let proc::IndexableLength::Known(len) =
+                    size.resolve(store.expression.module.to_ctx())?
+                {
+                    for index in 0..len {
+                        let element_suffix = format!("{suffix}.{WRAPPED_ARRAY_FIELD}[{index}]");
+                        self.put_padding_preserving_store_components(
+                            store,
+                            &element_suffix,
+                            &TypeResolution::Handle(base),
+                        )?;
+                    }
+                } else {
+                    self.put_padding_preserving_store_leaf(
+                        store,
+                        suffix,
+                        ty.inner_with(&store.expression.module.types),
+                    )?;
+                }
+            }
+            crate::TypeInner::Matrix {
+                columns,
+                rows: crate::VectorSize::Tri,
+                scalar,
+            } => {
+                for index in 0..columns as u32 {
+                    let column_suffix = format!("{suffix}[{index}]");
+                    self.put_packed_vec3_store(store, &column_suffix, scalar)?;
+                }
+            }
+            _ => {
+                self.put_padding_preserving_store_leaf(
+                    store,
+                    suffix,
+                    ty.inner_with(&store.expression.module.types),
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn put_padding_preserving_store_leaf(
+        &mut self,
+        store: &PaddingStoreContext,
+        suffix: &str,
+        ty: &crate::TypeInner,
+    ) -> BackendResult {
+        if let crate::TypeInner::Vector {
+            size: crate::VectorSize::Tri,
+            scalar,
+        } = *ty
+        {
+            self.put_packed_vec3_store(store, suffix, scalar)?;
+        } else {
+            write!(self.out, "{}", store.level)?;
+            self.put_access_chain(store.pointer, store.policy, store.expression)?;
+            write!(self.out, "{suffix} = {}{suffix};", store.value)?;
+            writeln!(self.out)?;
+        }
+
+        Ok(())
+    }
+
+    fn put_packed_vec3_store(
+        &mut self,
+        store: &PaddingStoreContext,
+        suffix: &str,
+        scalar: crate::Scalar,
+    ) -> BackendResult {
+        let address_space = store
+            .expression
+            .resolve_type(store.pointer)
+            .pointer_space()
+            .and_then(crate::AddressSpace::to_msl_name)
+            .ok_or_else(|| {
+                Error::GenericValidation("Expected store target to be a pointer".into())
+            })?;
+
+        write!(
+            self.out,
+            "{}(*reinterpret_cast<{address_space} {NAMESPACE}::packed_{}3*>(&",
+            store.level,
+            scalar.to_msl_name()
+        )?;
+        self.put_access_chain(store.pointer, store.policy, store.expression)?;
+        write!(
+            self.out,
+            "{suffix})) = {NAMESPACE}::packed_{}3({}{suffix});",
+            scalar.to_msl_name(),
+            store.value
+        )?;
+        writeln!(self.out)?;
 
         Ok(())
     }
