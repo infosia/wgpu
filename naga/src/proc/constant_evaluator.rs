@@ -1274,9 +1274,7 @@ impl<'a> ConstantEvaluator<'a> {
 
                 match convert {
                     Some(width) => self.cast(expr, crate::Scalar { kind, width }, span),
-                    None => Err(ConstantEvaluatorError::NotImplemented(
-                        "bitcast built-in function".into(),
-                    )),
+                    None => self.bitcast(expr, kind, span),
                 }
             }
             Expression::Select {
@@ -1781,6 +1779,9 @@ impl<'a> ConstantEvaluator<'a> {
             crate::MathFunction::FirstLeadingBit => {
                 component_wise_concrete_int(self, span, [arg], |ci| Ok(first_leading_bit(ci)))
             }
+            crate::MathFunction::InsertBits => {
+                self.insert_bits(arg, arg1.unwrap(), arg2.unwrap(), arg3.unwrap(), span)
+            }
 
             // vector
             crate::MathFunction::Dot4I8Packed => {
@@ -1941,7 +1942,6 @@ impl<'a> ConstantEvaluator<'a> {
             | crate::MathFunction::Determinant
             | crate::MathFunction::QuantizeToF16
             | crate::MathFunction::ExtractBits
-            | crate::MathFunction::InsertBits
             | crate::MathFunction::Pack4x8snorm
             | crate::MathFunction::Pack4x8unorm
             | crate::MathFunction::Pack2x16snorm
@@ -2065,6 +2065,97 @@ impl<'a> ConstantEvaluator<'a> {
             },
             span,
         )
+    }
+
+    /// Const-evaluate a `bitcast<T>(expr)` (a Naga [`As`] with `convert: None`).
+    ///
+    /// Bitcast reinterprets the bit pattern of `expr`'s scalar components as
+    /// the target scalar `kind`, preserving the bit width (and, for vectors,
+    /// the vector size and total bit width). This implements the 32-bit
+    /// reinterprets among `{U32, I32, F32}` (component-wise for vectors);
+    /// other combinations (e.g. f16 `pack2x16`-style bitcasts) return
+    /// [`ConstantEvaluatorError::NotImplemented`].
+    ///
+    /// [`As`]: crate::Expression::As
+    fn bitcast(
+        &mut self,
+        expr: Handle<Expression>,
+        kind: ScalarKind,
+        span: Span,
+    ) -> Result<Handle<Expression>, ConstantEvaluatorError> {
+        let expr = self.eval_zero_value(expr, span)?;
+        let vector = self.extract_vec(expr, true)?;
+
+        // The source components, viewed as raw 32-bit patterns.
+        let bits: ArrayVec<u32, { crate::VectorSize::MAX }> = match vector {
+            LiteralVector::U32(ref v) => v.iter().copied().collect(),
+            LiteralVector::I32(ref v) => v.iter().map(|&x| x as u32).collect(),
+            LiteralVector::F32(ref v) => v.iter().map(|&x| f32::to_bits(x)).collect(),
+            _ => {
+                return Err(ConstantEvaluatorError::NotImplemented(
+                    "bitcast of this scalar type".into(),
+                ))
+            }
+        };
+
+        let result = match kind {
+            ScalarKind::Uint => LiteralVector::U32(bits),
+            ScalarKind::Sint => LiteralVector::I32(bits.iter().map(|&b| b as i32).collect()),
+            ScalarKind::Float => {
+                LiteralVector::F32(bits.iter().map(|&b| f32::from_bits(b)).collect())
+            }
+            ScalarKind::Bool | ScalarKind::AbstractInt | ScalarKind::AbstractFloat => {
+                return Err(ConstantEvaluatorError::NotImplemented(
+                    "bitcast to this scalar type".into(),
+                ))
+            }
+        };
+
+        result.register_as_evaluated_expr(self, span)
+    }
+
+    fn insert_bits(
+        &mut self,
+        e: Handle<Expression>,
+        newbits: Handle<Expression>,
+        offset: Handle<Expression>,
+        count: Handle<Expression>,
+        span: Span,
+    ) -> Result<Handle<Expression>, ConstantEvaluatorError> {
+        let e = self.extract_vec(e, true)?;
+        let newbits = self.extract_vec(newbits, true)?;
+        let offset = self.extract_vec(offset, true)?;
+        let count = self.extract_vec(count, true)?;
+
+        let LiteralVector::U32(offset) = offset else {
+            return Err(ConstantEvaluatorError::InvalidMathArg);
+        };
+        let LiteralVector::U32(count) = count else {
+            return Err(ConstantEvaluatorError::InvalidMathArg);
+        };
+        let (&[offset], &[count]) = (offset.as_slice(), count.as_slice()) else {
+            return Err(ConstantEvaluatorError::InvalidMathArg);
+        };
+
+        let result = match (e, newbits) {
+            (LiteralVector::U32(e), LiteralVector::U32(newbits)) if e.len() == newbits.len() => {
+                let mut out = ArrayVec::new();
+                for (&e, &newbits) in e.iter().zip(&newbits) {
+                    out.push(insert_bits_u32(e, newbits, offset, count));
+                }
+                LiteralVector::U32(out)
+            }
+            (LiteralVector::I32(e), LiteralVector::I32(newbits)) if e.len() == newbits.len() => {
+                let mut out = ArrayVec::new();
+                for (&e, &newbits) in e.iter().zip(&newbits) {
+                    out.push(insert_bits_u32(e as u32, newbits as u32, offset, count) as i32);
+                }
+                LiteralVector::I32(out)
+            }
+            _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+        };
+
+        result.register_as_evaluated_expr(self, span)
     }
 
     /// Extract the values of a `vecN` from `expr`.
@@ -3544,6 +3635,31 @@ fn first_trailing_bit(concrete_int: ConcreteInt<1>) -> ConcreteInt<1> {
     }
 }
 
+const fn insert_bits_u32(e: u32, newbits: u32, offset: u32, count: u32) -> u32 {
+    let mask = if count == 0 {
+        0
+    } else if count >= 32 {
+        u32::MAX
+    } else {
+        (u32::MAX >> (32 - count)).wrapping_shl(offset)
+    };
+    (e & !mask) | (newbits.wrapping_shl(offset) & mask)
+}
+
+#[test]
+fn insert_bits_smoke() {
+    assert_eq!(insert_bits_u32(0, 0xFF, 0, 8), 0xFF);
+    assert_eq!(insert_bits_u32(0, 0xFF, 8, 8), 0xFF00);
+    assert_eq!(insert_bits_u32(0xFFFFFFFF, 0, 8, 8), 0xFFFF00FF);
+    assert_eq!(insert_bits_u32(0xFFFFFFFF, 0, 0, 32), 0);
+    assert_eq!(insert_bits_u32(2303862050, 1234, 4, 12), 2303872290);
+    assert_eq!(
+        insert_bits_u32(-1i32 as u32, 0i32 as u32, 0, 16) as i32,
+        -65536
+    );
+    assert_eq!(insert_bits_u32(0xAAAAAAAA, 0xFF, 5, 0), 0xAAAAAAAA);
+}
+
 #[test]
 fn first_trailing_bit_smoke() {
     assert_eq!(
@@ -4328,6 +4444,79 @@ mod tests {
         assert_eq!(
             global_expressions[res],
             Expression::Literal(Literal::Bool(true))
+        );
+    }
+
+    #[test]
+    fn bitcast() {
+        // Helper: const-evaluate `bitcast<kind>(literal)` and return the
+        // resulting (scalar) `Literal`.
+        fn eval_bitcast(input: Literal, kind: ScalarKind) -> Literal {
+            let mut types = UniqueArena::new();
+            let constants = Arena::new();
+            let overrides = Arena::new();
+            let mut global_expressions = Arena::new();
+
+            let expr = global_expressions.append(Expression::Literal(input), Default::default());
+
+            let root = Expression::As {
+                expr,
+                kind,
+                // `convert: None` is what the front-end emits for `bitcast`.
+                convert: None,
+            };
+
+            let expression_kind_tracker =
+                &mut ExpressionKindTracker::from_arena(&global_expressions);
+            let mut solver = ConstantEvaluator {
+                behavior: Behavior::Wgsl(WgslRestrictions::Const(None)),
+                types: &mut types,
+                constants: &constants,
+                overrides: &overrides,
+                expressions: &mut global_expressions,
+                expression_kind_tracker,
+                layouter: &mut crate::proc::Layouter::default(),
+            };
+
+            let res = solver
+                .try_eval_and_append(root, Default::default())
+                .unwrap();
+
+            match global_expressions[res] {
+                Expression::Literal(lit) => lit,
+                ref other => panic!("expected a literal, got {other:?}"),
+            }
+        }
+
+        // u32 -> i32: 2303862050u reinterpreted is -1991105246i32 (CTS input).
+        assert_eq!(
+            eval_bitcast(Literal::U32(2303862050), ScalarKind::Sint),
+            Literal::I32(-1991105246)
+        );
+
+        // u32 -> i32 -> u32 round-trip preserves the bit pattern.
+        let Literal::I32(round) = eval_bitcast(Literal::U32(2303862050), ScalarKind::Sint) else {
+            unreachable!()
+        };
+        assert_eq!(
+            eval_bitcast(Literal::I32(round), ScalarKind::Uint),
+            Literal::U32(2303862050)
+        );
+
+        // f32 <-> u32 reinterpret (1.0f32 has bit pattern 0x3F80_0000).
+        assert_eq!(
+            eval_bitcast(Literal::F32(1.0), ScalarKind::Uint),
+            Literal::U32(0x3F80_0000)
+        );
+        assert_eq!(
+            eval_bitcast(Literal::U32(0x3F80_0000), ScalarKind::Float),
+            Literal::F32(1.0)
+        );
+
+        // Same-kind bitcast is a no-op.
+        assert_eq!(
+            eval_bitcast(Literal::I32(-1991105246), ScalarKind::Sint),
+            Literal::I32(-1991105246)
         );
     }
 
