@@ -1796,13 +1796,8 @@ impl<W: Write> Writer<W> {
             }
         };
 
-        let (size, stride) = match context.module.types[array_ty].inner {
-            crate::TypeInner::Array { base, stride, .. } => (
-                context.module.types[base]
-                    .inner
-                    .size(context.module.to_ctx()),
-                stride,
-            ),
+        let stride = match context.module.types[array_ty].inner {
+            crate::TypeInner::Array { stride, .. } => stride,
             ref ty => {
                 return Err(Error::GenericValidation(format!(
                     "Expected array type, got {ty:?}"
@@ -1810,24 +1805,18 @@ impl<W: Write> Writer<W> {
             }
         };
 
-        // When the stride length is larger than the size, the final element's stride of
-        // bytes would have padding following the value. But the buffer size in
-        // `buffer_sizes.sizeN` may not include this padding - it only needs to be large
-        // enough to hold the actual values' bytes.
-        //
-        // So subtract off the size to get a byte size that falls at the start or within
-        // the final element. Then divide by the stride size, to get one less than the
-        // length, and then add one. This works even if the buffer size does include the
-        // stride padding, since division rounds towards zero (MSL 2.4 §6.1). It will fail
-        // if there are zero elements in the array, but the WebGPU `validating shader binding`
-        // rules, together with draw-time validation when `minBindingSize` is zero,
-        // prevent that.
+        // `arrayLength` must be `floor((bindingSize - arrayOffset) / stride)` per the
+        // WGSL/WebGPU spec. The caller adds one, so subtract one stride before dividing
+        // to produce one less than the length. The element data size must not be used:
+        // doing so over-counts when trailing bytes can hold a full element's data but not
+        // a full stride, such as array<vec3<f32>> with stride 16, data size 12, and a
+        // 1004-byte binding yielding 63 instead of the spec's 62. The WebGPU
+        // shader-binding validation rules guarantee the array has at least one element.
         write!(
             self.out,
-            "(_buffer_sizes.{member} - {offset} - {size}) / {stride}",
+            "(_buffer_sizes.{member} - {offset} - {stride}) / {stride}",
             member = ArraySizeMember(handle),
             offset = offset,
-            size = size,
             stride = stride,
         )?;
         Ok(())
