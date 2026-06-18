@@ -1366,7 +1366,39 @@ impl<W: Write> Writer<W> {
                 write!(self.out, ")")?;
             }
             crate::SampleLevel::Gradient { x, y } => {
-                write!(self.out, ", {NAMESPACE}::gradient2d(")?;
+                // Select the gradient constructor by the image's dimension: a
+                // 3D/cube `textureSampleGrad` passes vec3 derivatives, which
+                // `gradient2d` (vec2) cannot accept. Metal has no 1D gradient,
+                // and WGSL `textureSampleGrad` forbids 1D textures, so the
+                // validator never produces a 1D gradient here.
+                let constructor = match *context.resolve_type(image) {
+                    crate::TypeInner::Image {
+                        dim: crate::ImageDimension::D2,
+                        ..
+                    } => "gradient2d",
+                    crate::TypeInner::Image {
+                        dim: crate::ImageDimension::D3,
+                        ..
+                    } => "gradient3d",
+                    crate::TypeInner::Image {
+                        dim: crate::ImageDimension::Cube,
+                        ..
+                    } => "gradientcube",
+                    crate::TypeInner::Image {
+                        dim: crate::ImageDimension::D1,
+                        ..
+                    } => {
+                        return Err(Error::GenericValidation(
+                            "1D textures do not support gradient sampling".into(),
+                        ))
+                    }
+                    _ => {
+                        return Err(Error::GenericValidation(
+                            "Invalid image type for gradient sampling".into(),
+                        ))
+                    }
+                };
+                write!(self.out, ", {NAMESPACE}::{constructor}(")?;
                 self.put_expression(x, context, true)?;
                 write!(self.out, ", ")?;
                 self.put_expression(y, context, true)?;
