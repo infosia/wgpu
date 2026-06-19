@@ -2464,21 +2464,17 @@
                     Load(
                         pointer: 27,
                     ),
-                    GlobalVariable(3),
-                    Load(
-                        pointer: 29,
-                    ),
                     GlobalVariable(1),
                     AccessIndex(
-                        base: 31,
+                        base: 29,
                         index: 5,
                     ),
                     AccessIndex(
-                        base: 32,
+                        base: 30,
                         index: 0,
                     ),
                     AccessIndex(
-                        base: 33,
+                        base: 31,
                         index: 0,
                     ),
                     CallResult(2),
@@ -2494,10 +2490,10 @@
                         ty: 25,
                         components: [
                             28,
+                            34,
+                            35,
                             36,
                             37,
-                            38,
-                            39,
                         ],
                     ),
                     LocalVariable(1),
@@ -2505,42 +2501,42 @@
                     Binary(
                         op: Add,
                         left: 0,
-                        right: 42,
+                        right: 40,
                     ),
                     Access(
-                        base: 41,
-                        index: 43,
+                        base: 39,
+                        index: 41,
                     ),
                     Literal(I32(42)),
                     Access(
-                        base: 41,
+                        base: 39,
                         index: 0,
                     ),
                     Load(
-                        pointer: 46,
+                        pointer: 44,
                     ),
                     ZeroValue(23),
                     CallResult(3),
                     Splat(
                         size: Quad,
-                        value: 47,
+                        value: 45,
                     ),
                     As(
-                        expr: 50,
+                        expr: 48,
                         kind: Float,
                         convert: Some(4),
                     ),
                     Binary(
                         op: Multiply,
                         left: 9,
-                        right: 51,
+                        right: 49,
                     ),
                     Literal(F32(2.0)),
                     Compose(
                         ty: 24,
                         components: [
-                            52,
-                            53,
+                            50,
+                            51,
                         ],
                     ),
                 ],
@@ -2553,10 +2549,9 @@
                     13: "index",
                     18: "b",
                     28: "a",
-                    30: "c",
-                    34: "data_pointer",
-                    35: "foo_value",
-                    47: "value",
+                    32: "data_pointer",
+                    33: "foo_value",
+                    45: "value",
                 },
                 body: [
                     Emit((
@@ -2610,61 +2605,57 @@
                         end: 31,
                     )),
                     Emit((
-                        start: 32,
+                        start: 31,
                         end: 33,
-                    )),
-                    Emit((
-                        start: 33,
-                        end: 35,
                     )),
                     Call(
                         function: 2,
                         arguments: [
                             2,
                         ],
-                        result: Some(35),
+                        result: Some(33),
                     ),
                     Emit((
-                        start: 36,
-                        end: 37,
+                        start: 34,
+                        end: 35,
                     )),
                     Emit((
-                        start: 40,
-                        end: 41,
-                    )),
-                    Store(
-                        pointer: 41,
-                        value: 40,
-                    ),
-                    Emit((
-                        start: 43,
-                        end: 45,
+                        start: 38,
+                        end: 39,
                     )),
                     Store(
-                        pointer: 44,
-                        value: 45,
+                        pointer: 39,
+                        value: 38,
                     ),
                     Emit((
-                        start: 46,
-                        end: 48,
+                        start: 41,
+                        end: 43,
+                    )),
+                    Store(
+                        pointer: 42,
+                        value: 43,
+                    ),
+                    Emit((
+                        start: 44,
+                        end: 46,
                     )),
                     Call(
                         function: 3,
                         arguments: [
-                            48,
+                            46,
                         ],
-                        result: Some(49),
+                        result: Some(47),
                     ),
                     Emit((
-                        start: 50,
-                        end: 53,
+                        start: 48,
+                        end: 51,
                     )),
                     Emit((
-                        start: 54,
-                        end: 55,
+                        start: 52,
+                        end: 53,
                     )),
                     Return(
-                        value: Some(54),
+                        value: Some(52),
                     ),
                 ],
                 diagnostic_filter_leaf: None,

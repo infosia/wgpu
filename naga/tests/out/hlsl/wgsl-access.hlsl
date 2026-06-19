@@ -395,12 +395,11 @@ float4 foo_vert(uint vi : SV_VertexID) : SV_Position
     uint2 arr_1[2] = Constructarray2_uint2_(asuint(bar.Load2(144+0)), asuint(bar.Load2(144+8)));
     float b = asfloat(bar.Load(0+3u*16+0));
     int a_2 = asint(bar.Load(0+(((NagaBufferLengthRW(bar) - 160) / 8) - 2u)*8+160));
-    int2 c = asint(qux.Load2(0));
-    const float _e35 = read_from_private(foo);
+    const float _e33 = read_from_private(foo);
     c2_ = Constructarray5_int_(a_2, naga_f2i32(b), int(3), int(4), int(5));
     c2_[min(uint((vi + 1u)), 4u)] = int(42);
     int value_1 = c2_[min(uint(vi), 4u)];
-    const float _e49 = test_arr_as_arg(ZeroValuearray5_array10_float__());
+    const float _e47 = test_arr_as_arg(ZeroValuearray5_array10_float__());
     return float4(mul(float4((value_1).xxxx), _matrix), 2.0);
 }
 

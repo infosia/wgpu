@@ -43,9 +43,7 @@ layout(std430) buffer Bar_block_0Vertex {
 
 layout(std140) uniform Baz_block_1Vertex { Baz _group_0_binding_1_vs; };
 
-layout(std430) buffer type_13_block_2Vertex { ivec2 _group_0_binding_2_vs; };
-
-layout(std140) uniform MatCx2InArray_block_3Vertex { MatCx2InArray _group_0_binding_3_vs; };
+layout(std140) uniform MatCx2InArray_block_2Vertex { MatCx2InArray _group_0_binding_3_vs; };
 
 
 void test_matrix_within_struct_accesses() {
@@ -225,12 +223,11 @@ void main() {
     uvec2 arr_1[2] = _group_0_binding_0_vs.arr;
     float b = _group_0_binding_0_vs._matrix[3u][0];
     int a_2 = _group_0_binding_0_vs.data[(uint(_group_0_binding_0_vs.data.length()) - 2u)].value;
-    ivec2 c = _group_0_binding_2_vs;
-    float _e35 = read_from_private(foo);
+    float _e33 = read_from_private(foo);
     c2_ = int[5](a_2, int(b), 3, 4, 5);
     c2_[(vi + 1u)] = 42;
     int value_1 = c2_[vi];
-    float _e49 = test_arr_as_arg(float[5][10](float[10](0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), float[10](0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), float[10](0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), float[10](0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), float[10](0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)));
+    float _e47 = test_arr_as_arg(float[5][10](float[10](0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), float[10](0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), float[10](0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), float[10](0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), float[10](0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)));
     gl_Position = vec4((_matrix * vec4(ivec4(value_1))), 2.0);
     gl_Position.yz = vec2(-gl_Position.y, gl_Position.z * 2.0 - gl_Position.w);
     return;

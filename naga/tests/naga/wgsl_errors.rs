@@ -232,6 +232,131 @@ fn fs(@location(0) @interpolate(flat,) value: i32) {}
 }
 
 #[test]
+fn decl_var_shader_stage_rejects_wrong_stage_resource_use() {
+    for source in [
+        r#"
+var<workgroup> v: u32;
+@vertex
+fn main() -> @builtin(position) vec4f {
+    _ = v;
+    return vec4f();
+}
+"#,
+        r#"
+var<workgroup> v: u32;
+@fragment
+fn main() {
+    _ = v;
+}
+"#,
+        r#"
+@group(0) @binding(0) var<storage, read_write> v: u32;
+@vertex
+fn main() -> @builtin(position) vec4f {
+    _ = v;
+    return vec4f();
+}
+"#,
+        r#"
+@group(0) @binding(0) var v: texture_storage_2d<r32uint, write>;
+@vertex
+fn main() -> @builtin(position) vec4f {
+    _ = v;
+    return vec4f();
+}
+"#,
+    ] {
+        check_parse_or_validate_error(source);
+    }
+
+    for source in [
+        r#"
+var<workgroup> v: u32;
+@compute @workgroup_size(1)
+fn main() {
+    _ = v;
+}
+"#,
+        r#"
+@group(0) @binding(0) var<storage, read> v: u32;
+@vertex
+fn main() -> @builtin(position) vec4f {
+    _ = v;
+    return vec4f();
+}
+"#,
+        r#"
+@group(0) @binding(0) var<storage, read_write> v: u32;
+@fragment
+fn main() {
+    _ = v;
+}
+"#,
+    ] {
+        check_parse_and_validate_success(source);
+    }
+}
+
+#[test]
+fn decl_var_module_scope_atomic_storage_requires_read_write() {
+    check_parse_or_validate_error(
+        r#"
+@group(0) @binding(0) var<storage, read> v: atomic<u32>;
+"#,
+    );
+    check_parse_or_validate_error(
+        r#"
+alias AtomicI32 = atomic<i32>;
+@group(0) @binding(0) var<storage> v: AtomicI32;
+"#,
+    );
+
+    check_parse_and_validate_success(
+        r#"
+@group(0) @binding(0) var<storage, read_write> v: atomic<u32>;
+"#,
+    );
+    check_parse_and_validate_success(
+        r#"
+var<workgroup> v: atomic<i32>;
+"#,
+    );
+}
+
+#[test]
+fn decl_override_array_size_rejected_outside_workgroup_address_space() {
+    // An override-expression array size is only permitted in the workgroup
+    // address space; in any other space (here a `private` pointer parameter) it
+    // must be rejected. (Accepting `ptr<workgroup, ...>` parameters themselves
+    // needs the `unrestricted_pointer_parameters` extension, which naga does not
+    // yet support, so that case is deferred — not asserted here.)
+    check_parse_or_validate_error(
+        r#"
+override size = 1;
+fn f(a: ptr<private, array<u32, size>>) {}
+"#,
+    );
+}
+
+#[test]
+fn decl_var_address_space_accepts_trailing_comma_without_access_mode() {
+    check_parse_and_validate_success(
+        r#"
+fn f() {
+    var<function,> v: u32;
+}
+"#,
+    );
+    check_parse_or_validate_error(
+        r#"
+fn f() {
+    var<private, read> v: u32;
+}
+"#,
+    );
+}
+
+#[test]
 fn very_negative_integers() {
     // wgpu#4492
     check(
@@ -2002,7 +2127,6 @@ fn invalid_functions() {
         })
         if function_name == "unacceptable_ptr_space" && argument_name == "arg"
     }
-
     check_validation! {
         "
         struct AFloat {
@@ -2026,7 +2150,7 @@ fn invalid_functions() {
     check_validation! {
         "
         @group(0) @binding(0)
-        var<storage> atom: atomic<u32>;
+        var<storage, read_write> atom: atomic<u32>;
 
         fn return_atomic() -> atomic<u32> {
            return atom;
@@ -2916,7 +3040,7 @@ fn host_shareable_types() {
     for ty in types.split_whitespace() {
         check_one_validation! {
             &format!("struct AStruct {{ member: array<atomic<u32>, 8> }};
-                      @group(0) @binding(1) var<storage> sbuf: {ty};"),
+                      @group(0) @binding(1) var<storage, read_write> sbuf: {ty};"),
             Ok(_module)
         }
     }

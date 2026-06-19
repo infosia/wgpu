@@ -43,6 +43,8 @@ pub enum GlobalVariableError {
     InitializerNotAllowed(crate::AddressSpace),
     #[error("Storage address space doesn't support write-only access")]
     StorageAddressSpaceWriteOnlyNotSupported,
+    #[error("Atomic types in storage address space require read_write access")]
+    AtomicInReadOnlyStorage,
     #[error("Type is not valid for use as a immediate data")]
     InvalidImmediateType(#[source] ImmediateError),
     #[error("Task payload must not be zero-sized")]
@@ -207,6 +209,41 @@ fn storage_usage(access: crate::StorageAccess) -> GlobalUse {
         storage_usage |= GlobalUse::ATOMIC;
     }
     storage_usage
+}
+
+fn type_contains_atomic(
+    ty: Handle<crate::Type>,
+    types: &UniqueArena<crate::Type>,
+    visited: &mut BitSet,
+) -> bool {
+    if !visited.insert(ty.index()) {
+        return false;
+    }
+
+    match types[ty].inner {
+        crate::TypeInner::Atomic(_) => true,
+        crate::TypeInner::Array { base, .. }
+        | crate::TypeInner::BindingArray { base, .. }
+        | crate::TypeInner::Pointer { base, .. } => type_contains_atomic(base, types, visited),
+        crate::TypeInner::Struct { ref members, .. } => members
+            .iter()
+            .any(|member| type_contains_atomic(member.ty, types, visited)),
+        _ => false,
+    }
+}
+
+fn storage_texture_access(
+    ty: Handle<crate::Type>,
+    types: &UniqueArena<crate::Type>,
+) -> Option<crate::StorageAccess> {
+    match types[ty].inner {
+        crate::TypeInner::BindingArray { base, .. } => storage_texture_access(base, types),
+        crate::TypeInner::Image {
+            class: crate::ImageClass::Storage { access, .. },
+            ..
+        } => Some(access),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1053,6 +1090,11 @@ impl super::Validator {
                 if access == crate::StorageAccess::STORE {
                     return Err(GlobalVariableError::StorageAddressSpaceWriteOnlyNotSupported);
                 }
+                if !access.contains(crate::StorageAccess::STORE)
+                    && type_contains_atomic(inner_ty, &gctx.types, &mut BitSet::new())
+                {
+                    return Err(GlobalVariableError::AtomicInReadOnlyStorage);
+                }
                 (
                     TypeFlags::DATA | TypeFlags::HOST_SHAREABLE | TypeFlags::CREATION_RESOLVED,
                     true,
@@ -1498,6 +1540,35 @@ impl super::Validator {
                     return Err(EntryPointError::TaskPayloadTooSmall(size)
                         .with_span_handle(var_handle, &module.global_variables));
                 }
+            }
+
+            match var.space {
+                crate::AddressSpace::WorkGroup
+                    if matches!(
+                        ep.stage,
+                        crate::ShaderStage::Vertex | crate::ShaderStage::Fragment
+                    ) =>
+                {
+                    return Err(EntryPointError::InvalidGlobalUsage(var_handle, usage)
+                        .with_span_handle(var_handle, &module.global_variables));
+                }
+                crate::AddressSpace::Storage { access }
+                    if ep.stage == crate::ShaderStage::Vertex
+                        && access.contains(crate::StorageAccess::STORE)
+                        && !type_contains_atomic(var.ty, &module.types, &mut BitSet::new()) =>
+                {
+                    return Err(EntryPointError::InvalidGlobalUsage(var_handle, usage)
+                        .with_span_handle(var_handle, &module.global_variables));
+                }
+                crate::AddressSpace::Handle if ep.stage == crate::ShaderStage::Vertex => {
+                    if storage_texture_access(var.ty, &module.types)
+                        .is_some_and(|access| access.contains(crate::StorageAccess::STORE))
+                    {
+                        return Err(EntryPointError::InvalidGlobalUsage(var_handle, usage)
+                            .with_span_handle(var_handle, &module.global_variables));
+                    }
+                }
+                _ => {}
             }
 
             let allowed_usage = match var.space {

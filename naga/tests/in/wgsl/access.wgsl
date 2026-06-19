@@ -127,7 +127,6 @@ fn foo_vert(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
     let index = 3u;
     let b = bar._matrix[index].x;
     let a = bar.data[arrayLength(&bar.data) - 2u].value;
-    let c = qux;
 
     // test pointer types
     let data_pointer: ptr<storage, i32, read_write> = &bar.data[0].value;

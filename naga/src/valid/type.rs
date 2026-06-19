@@ -520,7 +520,13 @@ impl super::Validator {
                 // space of pointer arguments explicitly before checking the
                 // `ARGUMENT` flag, to give better error messages. But it seems
                 // best to set `ARGUMENT` accurately anyway.
-                let argument_flag = ptr_space_argument_flag(space);
+                let argument_flag = if base_info.flags.contains(TypeFlags::CREATION_RESOLVED)
+                    || space == As::WorkGroup
+                {
+                    ptr_space_argument_flag(space)
+                } else {
+                    TypeFlags::empty()
+                };
 
                 // Pointers cannot be stored in variables, structure members, or
                 // array elements, so we do not mark them as `DATA`.

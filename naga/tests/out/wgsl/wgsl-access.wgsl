@@ -237,13 +237,12 @@ fn foo_vert(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
     let arr_1 = bar.arr;
     let b = bar._matrix[3u][0];
     let a_2 = bar.data[(arrayLength((&bar.data)) - 2u)].value;
-    let c = qux;
     let data_pointer = (&bar.data[0].value);
-    let _e35 = read_from_private((&foo));
+    let _e33 = read_from_private((&foo));
     c2_ = array<i32, 5>(a_2, i32(b), 3i, 4i, 5i);
     c2_[(vi + 1u)] = 42i;
     let value_1 = c2_[vi];
-    let _e49 = test_arr_as_arg(array<array<f32, 10>, 5>());
+    let _e47 = test_arr_as_arg(array<array<f32, 10>, 5>());
     return vec4<f32>((_matrix * vec4<f32>(vec4(value_1))), 2f);
 }
 

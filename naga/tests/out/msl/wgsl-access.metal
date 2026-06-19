@@ -283,7 +283,6 @@ vertex foo_vertOutput foo_vert(
   uint vi [[vertex_id]]
 , device Bar const& bar [[buffer(0)]]
 , constant Baz& baz [[buffer(1)]]
-, device metal::int2 const& qux [[buffer(2)]]
 , constant MatCx2InArray& nested_mat_cx2_ [[buffer(3)]]
 , constant _mslBufferSizes& _buffer_sizes [[buffer(24)]]
 ) {
@@ -299,12 +298,11 @@ vertex foo_vertOutput foo_vert(
     type_10 arr_1 = bar.arr;
     float b = bar._matrix[3u].x;
     int a_2 = bar.data[(1 + (_buffer_sizes.size1 - 160 - 8) / 8) - 2u].value;
-    metal::int2 c = qux;
-    float _e35 = read_from_private(foo);
+    float _e33 = read_from_private(foo);
     c2_ = type_20 {{a_2, naga_f2i32(b), 3, 4, 5}};
     c2_.inner[vi + 1u] = 42;
     int value_1 = c2_.inner[vi];
-    float _e49 = test_arr_as_arg(type_18 {});
+    float _e47 = test_arr_as_arg(type_18 {});
     return foo_vertOutput { metal::float4(_matrix * static_cast<metal::float4>(metal::int4(value_1)), 2.0) };
 }
 

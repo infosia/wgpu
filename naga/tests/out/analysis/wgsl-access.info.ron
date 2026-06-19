@@ -3609,7 +3609,7 @@
                 ("READ"),
                 ("READ | QUERY"),
                 ("READ"),
-                ("READ"),
+                (""),
                 ("READ"),
             ],
             expressions: [
@@ -3985,29 +3985,6 @@
                         requirements: (""),
                     ),
                     ref_count: 1,
-                    assignable_global: Some(3),
-                    ty: Value(Pointer(
-                        base: 17,
-                        space: Storage(
-                            access: ("LOAD | STORE"),
-                        ),
-                    )),
-                ),
-                (
-                    uniformity: (
-                        non_uniform_result: Some(29),
-                        requirements: (""),
-                    ),
-                    ref_count: 0,
-                    assignable_global: None,
-                    ty: Handle(17),
-                ),
-                (
-                    uniformity: (
-                        non_uniform_result: Some(31),
-                        requirements: (""),
-                    ),
-                    ref_count: 1,
                     assignable_global: Some(1),
                     ty: Value(Pointer(
                         base: 14,
@@ -4018,7 +3995,7 @@
                 ),
                 (
                     uniformity: (
-                        non_uniform_result: Some(31),
+                        non_uniform_result: Some(29),
                         requirements: (""),
                     ),
                     ref_count: 1,
@@ -4032,7 +4009,7 @@
                 ),
                 (
                     uniformity: (
-                        non_uniform_result: Some(31),
+                        non_uniform_result: Some(29),
                         requirements: (""),
                     ),
                     ref_count: 1,
@@ -4046,7 +4023,7 @@
                 ),
                 (
                     uniformity: (
-                        non_uniform_result: Some(31),
+                        non_uniform_result: Some(29),
                         requirements: (""),
                     ),
                     ref_count: 0,
@@ -4126,7 +4103,7 @@
                 ),
                 (
                     uniformity: (
-                        non_uniform_result: Some(41),
+                        non_uniform_result: Some(39),
                         requirements: (""),
                     ),
                     ref_count: 3,
@@ -4159,7 +4136,7 @@
                 ),
                 (
                     uniformity: (
-                        non_uniform_result: Some(41),
+                        non_uniform_result: Some(39),
                         requirements: (""),
                     ),
                     ref_count: 1,
@@ -4183,7 +4160,7 @@
                 ),
                 (
                     uniformity: (
-                        non_uniform_result: Some(41),
+                        non_uniform_result: Some(39),
                         requirements: (""),
                     ),
                     ref_count: 1,
@@ -4195,7 +4172,7 @@
                 ),
                 (
                     uniformity: (
-                        non_uniform_result: Some(41),
+                        non_uniform_result: Some(39),
                         requirements: (""),
                     ),
                     ref_count: 1,
@@ -4222,7 +4199,7 @@
                 ),
                 (
                     uniformity: (
-                        non_uniform_result: Some(41),
+                        non_uniform_result: Some(39),
                         requirements: (""),
                     ),
                     ref_count: 1,
@@ -4237,7 +4214,7 @@
                 ),
                 (
                     uniformity: (
-                        non_uniform_result: Some(41),
+                        non_uniform_result: Some(39),
                         requirements: (""),
                     ),
                     ref_count: 1,

@@ -1258,6 +1258,15 @@ impl Parser {
                     if class_str != "function" {
                         return Err(Box::new(Error::InvalidLocalVariableAddressSpace(span)));
                     }
+                    if lexer.next_if(Token::Separator(','))
+                        && !matches!(lexer.peek().0, Token::TemplateArgsEnd)
+                    {
+                        let span = lexer.next().1;
+                        return Err(Box::new(Error::Unexpected(
+                            span,
+                            ExpectedToken::Token(Token::TemplateArgsEnd),
+                        )));
+                    }
                     lexer.expect(Token::TemplateArgsEnd)?;
                 }
 
