@@ -139,6 +139,58 @@ bitflags::bitflags! {
     }
 }
 
+bitflags::bitflags! {
+    /// Indicates how a function's pointer argument is used.
+    #[cfg_attr(feature = "serialize", derive(serde::Serialize))]
+    #[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct PointerUse: u8 {
+        /// Data will be read through the pointer.
+        const READ = 0x1;
+        /// Data will be written through the pointer.
+        const WRITE = 0x2;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MemoryRoot {
+    Global(Handle<crate::GlobalVariable>),
+    Argument(u32),
+    Local,
+}
+
+impl MemoryRoot {
+    fn from_expression(
+        expression_arena: &Arena<crate::Expression>,
+        expression: Handle<crate::Expression>,
+    ) -> Option<Self> {
+        let mut current = expression;
+        loop {
+            match expression_arena[current] {
+                crate::Expression::Access { base, .. }
+                | crate::Expression::AccessIndex { base, .. } => current = base,
+                crate::Expression::GlobalVariable(handle) => return Some(Self::Global(handle)),
+                crate::Expression::FunctionArgument(index) => return Some(Self::Argument(index)),
+                crate::Expression::LocalVariable(_) => return Some(Self::Local),
+                _ => return None,
+            }
+        }
+    }
+}
+
+impl From<PointerUse> for GlobalUse {
+    fn from(value: PointerUse) -> Self {
+        let mut global_use = GlobalUse::empty();
+        if value.contains(PointerUse::READ) {
+            global_use |= GlobalUse::READ;
+        }
+        if value.contains(PointerUse::WRITE) {
+            global_use |= GlobalUse::WRITE;
+        }
+        global_use
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 #[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
@@ -271,6 +323,12 @@ pub struct FunctionInfo {
     /// its usage information.
     pub global_uses: Box<[GlobalUse]>,
 
+    /// How this function and its callees use each pointer argument.
+    ///
+    /// This is indexed by function argument index. Non-pointer arguments always
+    /// have empty usage.
+    pub pointer_argument_uses: Box<[PointerUse]>,
+
     /// Information about each expression in this function's body.
     ///
     /// This is indexed by `Handle<Expression>` indices. However, `FunctionInfo`
@@ -311,6 +369,12 @@ impl FunctionInfo {
     pub const fn expression_count(&self) -> usize {
         self.expressions.len()
     }
+    pub fn pointer_argument_use(&self, index: usize) -> PointerUse {
+        self.pointer_argument_uses
+            .get(index)
+            .copied()
+            .unwrap_or_else(PointerUse::empty)
+    }
     pub fn dominates_global_use(&self, other: &Self) -> bool {
         for (self_global_uses, other_global_uses) in
             self.global_uses.iter().zip(other.global_uses.iter())
@@ -320,6 +384,25 @@ impl FunctionInfo {
             }
         }
         true
+    }
+
+    fn add_pointer_ref(
+        &mut self,
+        expr: Handle<crate::Expression>,
+        pointer_use: PointerUse,
+        expression_arena: &Arena<crate::Expression>,
+    ) {
+        match MemoryRoot::from_expression(expression_arena, expr) {
+            Some(MemoryRoot::Argument(index)) => {
+                if let Some(uses) = self.pointer_argument_uses.get_mut(index as usize) {
+                    *uses |= pointer_use;
+                }
+            }
+            Some(MemoryRoot::Global(handle)) => {
+                self.global_uses[handle.index()] |= GlobalUse::from(pointer_use);
+            }
+            Some(MemoryRoot::Local) | None => {}
+        }
     }
 }
 
@@ -498,6 +581,17 @@ impl FunctionInfo {
             *mine |= *other;
         }
 
+        for (index, callee_pointer_use) in callee.pointer_argument_uses.iter().enumerate() {
+            if callee_pointer_use.is_empty() {
+                continue;
+            }
+            let Some(&argument) = arguments.get(index) else {
+                // Argument count mismatch, will be reported later by validate_call.
+                break;
+            };
+            self.add_pointer_ref(argument, *callee_pointer_use, expression_arena);
+        }
+
         Ok(FunctionUniformity {
             result: callee.uniformity.clone(),
             exit: if callee.may_kill {
@@ -672,10 +766,13 @@ impl FunctionInfo {
                 non_uniform_result: Some(handle),
                 requirements: UniformityRequirements::empty(),
             },
-            E::Load { pointer } => Uniformity {
-                non_uniform_result: self.add_ref(pointer),
-                requirements: UniformityRequirements::empty(),
-            },
+            E::Load { pointer } => {
+                self.add_pointer_ref(pointer, PointerUse::READ, expression_arena);
+                Uniformity {
+                    non_uniform_result: self.add_ref(pointer),
+                    requirements: UniformityRequirements::empty(),
+                }
+            }
             E::ImageSample {
                 image,
                 sampler,
@@ -955,6 +1052,7 @@ impl FunctionInfo {
                     exit: ExitFlags::empty(),
                 },
                 S::WorkGroupUniformLoad { pointer, .. } => {
+                    self.add_pointer_ref(pointer, PointerUse::READ, expression_arena);
                     let _condition_nur = self.add_ref(pointer);
 
                     // Don't check that this call occurs in uniform control flow until Naga implements WGSL's standard
@@ -1080,6 +1178,7 @@ impl FunctionInfo {
                 // and their results do not affect the function return value,
                 // so we can ignore their non-uniformity.
                 S::Store { pointer, value } => {
+                    self.add_pointer_ref(pointer, PointerUse::WRITE, expression_arena);
                     let _ = self.add_ref_impl(pointer, GlobalUse::WRITE);
                     let _ = self.add_ref(value);
                     FunctionUniformity::new()
@@ -1116,6 +1215,11 @@ impl FunctionInfo {
                     value,
                     result: _,
                 } => {
+                    self.add_pointer_ref(
+                        pointer,
+                        PointerUse::READ | PointerUse::WRITE,
+                        expression_arena,
+                    );
                     let _ = self.add_ref_impl(pointer, GlobalUse::READ | GlobalUse::WRITE);
                     let _ = self.add_ref(value);
                     if let crate::AtomicFunction::Exchange { compare: Some(cmp) } = *fun {
@@ -1197,10 +1301,12 @@ impl FunctionInfo {
                 }
                 S::CooperativeStore { target, ref data } => FunctionUniformity {
                     result: Uniformity {
-                        non_uniform_result: self
-                            .add_ref(target)
-                            .or(self.add_ref_impl(data.pointer, GlobalUse::WRITE))
-                            .or(self.add_ref(data.stride)),
+                        non_uniform_result: {
+                            self.add_pointer_ref(data.pointer, PointerUse::WRITE, expression_arena);
+                            self.add_ref(target)
+                                .or(self.add_ref_impl(data.pointer, GlobalUse::WRITE))
+                                .or(self.add_ref(data.stride))
+                        },
                         requirements: UniformityRequirements::COOP_OPS,
                     },
                     exit: ExitFlags::empty(),
@@ -1257,6 +1363,8 @@ impl ModuleInfo {
             may_kill: false,
             sampling_set: crate::FastHashSet::default(),
             global_uses: vec![GlobalUse::empty(); module.global_variables.len()].into_boxed_slice(),
+            pointer_argument_uses: vec![PointerUse::empty(); fun.arguments.len()]
+                .into_boxed_slice(),
             expressions: vec![ExpressionInfo::new(); fun.expressions.len()].into_boxed_slice(),
             sampling: crate::FastHashSet::default(),
             dual_source_blending: false,
@@ -1392,6 +1500,7 @@ fn uniform_control_flow() {
         may_kill: false,
         sampling_set: crate::FastHashSet::default(),
         global_uses: vec![GlobalUse::empty(); global_var_arena.len()].into_boxed_slice(),
+        pointer_argument_uses: Box::default(),
         expressions: vec![ExpressionInfo::new(); expressions.len()].into_boxed_slice(),
         sampling: crate::FastHashSet::default(),
         dual_source_blending: false,

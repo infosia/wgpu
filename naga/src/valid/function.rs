@@ -1,8 +1,8 @@
 use alloc::{format, string::String};
 
 use super::{
-    analyzer::{UniformityDisruptor, UniformityRequirements},
-    ExpressionError, FunctionInfo, ModuleInfo,
+    analyzer::{PointerUse, UniformityDisruptor, UniformityRequirements},
+    ExpressionError, FunctionInfo, GlobalUse, ModuleInfo,
 };
 use crate::arena::{Arena, UniqueArena};
 use crate::arena::{Handle, HandleSet};
@@ -170,6 +170,23 @@ pub enum FunctionError {
         #[source]
         error: CallError,
     },
+    #[error(
+        "Pointer arguments {first} and {second} may alias, and the callee writes through at least one of them"
+    )]
+    AliasingPointerArguments {
+        first: usize,
+        second: usize,
+        first_expression: Handle<crate::Expression>,
+        second_expression: Handle<crate::Expression>,
+    },
+    #[error(
+        "Pointer argument {argument} may alias module-scope variable {global:?}, and at least one access is a write"
+    )]
+    PointerArgumentAliasesGlobal {
+        argument: usize,
+        argument_expression: Handle<crate::Expression>,
+        global: Handle<crate::GlobalVariable>,
+    },
     #[error("Atomic operation is invalid")]
     InvalidAtomic(#[from] AtomicError),
     #[error("Ray Query {0:?} is not a local variable")]
@@ -267,6 +284,13 @@ struct BlockContext<'a> {
     local_expr_kind: &'a crate::proc::ExpressionKindTracker,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PointerRoot {
+    Global(Handle<crate::GlobalVariable>),
+    Local(Handle<crate::LocalVariable>),
+    Argument(u32),
+}
+
 impl<'a> BlockContext<'a> {
     fn new(
         fun: &'a crate::Function,
@@ -335,9 +359,116 @@ impl<'a> BlockContext<'a> {
     fn compare_types(&self, lhs: &TypeResolution, rhs: &TypeResolution) -> bool {
         crate::proc::compare_types(lhs, rhs, self.types)
     }
+
+    fn pointer_root(&self, expression: Handle<crate::Expression>) -> Option<PointerRoot> {
+        let mut current = expression;
+        loop {
+            match self.expressions[current] {
+                crate::Expression::Access { base, .. }
+                | crate::Expression::AccessIndex { base, .. } => current = base,
+                crate::Expression::GlobalVariable(handle) => {
+                    return Some(PointerRoot::Global(handle))
+                }
+                crate::Expression::LocalVariable(handle) => {
+                    return Some(PointerRoot::Local(handle))
+                }
+                crate::Expression::FunctionArgument(index) => {
+                    return Some(PointerRoot::Argument(index))
+                }
+                _ => return None,
+            }
+        }
+    }
 }
 
 impl super::Validator {
+    fn validate_call_pointer_aliases(
+        &self,
+        function: Handle<crate::Function>,
+        arguments: &[Handle<crate::Expression>],
+        context: &BlockContext,
+    ) -> Result<(), WithSpan<FunctionError>> {
+        fn global_use_is_access(global_use: GlobalUse) -> bool {
+            global_use.intersects(GlobalUse::READ | GlobalUse::WRITE | GlobalUse::ATOMIC)
+        }
+
+        fn global_use_writes(global_use: GlobalUse) -> bool {
+            global_use.intersects(GlobalUse::WRITE | GlobalUse::ATOMIC)
+        }
+
+        let fun = &context.functions[function];
+        let callee_info = &context.prev_infos[function.index()];
+
+        for (first, first_argument) in fun.arguments.iter().enumerate() {
+            if context.types[first_argument.ty]
+                .inner
+                .pointer_space()
+                .is_none()
+            {
+                continue;
+            }
+
+            let first_use = callee_info.pointer_argument_use(first);
+            if first_use.is_empty() {
+                continue;
+            }
+
+            let first_expression = arguments[first];
+            let Some(first_root) = context.pointer_root(first_expression) else {
+                continue;
+            };
+
+            for (second, second_argument) in fun.arguments.iter().enumerate().skip(first + 1) {
+                if context.types[second_argument.ty]
+                    .inner
+                    .pointer_space()
+                    .is_none()
+                {
+                    continue;
+                }
+
+                let second_use = callee_info.pointer_argument_use(second);
+                if second_use.is_empty() {
+                    continue;
+                }
+
+                let second_expression = arguments[second];
+                if context.pointer_root(second_expression) == Some(first_root)
+                    && (first_use | second_use).contains(PointerUse::WRITE)
+                {
+                    return Err(FunctionError::AliasingPointerArguments {
+                        first,
+                        second,
+                        first_expression,
+                        second_expression,
+                    }
+                    .with_span()
+                    .with_handle(first_expression, context.expressions)
+                    .with_handle(second_expression, context.expressions));
+                }
+            }
+
+            let PointerRoot::Global(global) = first_root else {
+                continue;
+            };
+            let global_use = callee_info[global];
+            if global_use_is_access(global_use)
+                && (first_use.contains(PointerUse::WRITE) || global_use_writes(global_use))
+            {
+                return Err(FunctionError::PointerArgumentAliasesGlobal {
+                    argument: first,
+                    argument_expression: first_expression,
+                    global,
+                }
+                .with_span()
+                .with_handle(first_expression, context.expressions)
+                .with_handle(global, context.global_vars));
+            }
+        }
+
+        Ok(())
+    }
+
     fn validate_call(
         &mut self,
         function: Handle<crate::Function>,
@@ -1254,7 +1385,10 @@ impl super::Validator {
                     ref arguments,
                     result,
                 } => match self.validate_call(function, arguments, result, context) {
-                    Ok(callee_stages) => stages &= callee_stages,
+                    Ok(callee_stages) => {
+                        self.validate_call_pointer_aliases(function, arguments, context)?;
+                        stages &= callee_stages;
+                    }
                     Err(error) => {
                         return Err(error.and_then(|error| {
                             FunctionError::InvalidCall { function, error }

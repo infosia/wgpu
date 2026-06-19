@@ -75,6 +75,102 @@ fn check_parse_or_validate_error(input: &str) {
 }
 
 #[test]
+fn pointer_aliasing_two_arguments_write_errors() {
+    check_parse_or_validate_error(
+        r#"
+fn callee(pa: ptr<function, i32>, pb: ptr<function, i32>) {
+    *pa = 1;
+    let rb = *pb;
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    var x: i32;
+    callee(&x, &x);
+}
+"#,
+    );
+}
+
+#[test]
+fn pointer_aliasing_non_aliased_arguments_validate() {
+    check_parse_and_validate_success(
+        r#"
+fn callee(pa: ptr<function, i32>, pb: ptr<function, i32>) {
+    *pa = 1;
+    let rb = *pb;
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    var x: i32;
+    var y: i32;
+    callee(&x, &y);
+}
+"#,
+    );
+}
+
+#[test]
+fn pointer_aliasing_read_read_arguments_validate() {
+    check_parse_and_validate_success(
+        r#"
+fn callee(pa: ptr<function, i32>, pb: ptr<function, i32>) {
+    let ra = *pa;
+    let rb = *pb;
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    var x: i32;
+    callee(&x, &x);
+}
+"#,
+    );
+}
+
+#[test]
+fn pointer_aliasing_argument_and_module_scope_write_errors() {
+    check_parse_or_validate_error(
+        r#"
+var<private> x: i32;
+
+fn callee(pa: ptr<private, i32>) {
+    x = 1;
+    let ra = *pa;
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    callee(&x);
+}
+"#,
+    );
+}
+
+#[test]
+fn pointer_aliasing_transitive_subcall_errors() {
+    check_parse_or_validate_error(
+        r#"
+fn inner(pa: ptr<function, i32>, pb: ptr<function, i32>) {
+    *pa = 1;
+    let rb = *pb;
+}
+
+fn outer(pa: ptr<function, i32>, pb: ptr<function, i32>) {
+    inner(pa, pb);
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    var x: i32;
+    outer(&x, &x);
+}
+"#,
+    );
+}
+
+#[test]
 fn shader_io_integral_location_requires_explicit_flat_interpolation() {
     check_parse_or_validate_error(
         r#"

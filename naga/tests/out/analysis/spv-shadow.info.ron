@@ -39,6 +39,10 @@
                 (""),
                 (""),
             ],
+            pointer_argument_uses: [
+                (""),
+                (""),
+            ],
             expressions: [
                 (
                     uniformity: (
@@ -437,6 +441,7 @@
                 ("READ"),
                 ("WRITE"),
             ],
+            pointer_argument_uses: [],
             expressions: [
                 (
                     uniformity: (
@@ -1616,6 +1621,10 @@
                 ("READ | WRITE"),
                 ("READ | WRITE"),
                 ("READ | WRITE"),
+            ],
+            pointer_argument_uses: [
+                (""),
+                (""),
             ],
             expressions: [
                 (

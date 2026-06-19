@@ -18,6 +18,9 @@
             global_uses: [
                 (""),
             ],
+            pointer_argument_uses: [
+                (""),
+            ],
             expressions: [
                 (
                     uniformity: (
@@ -289,6 +292,9 @@
             sampling_set: [],
             global_uses: [
                 ("READ | WRITE"),
+            ],
+            pointer_argument_uses: [
+                (""),
             ],
             expressions: [
                 (

@@ -19,6 +19,7 @@
                 ("READ"),
                 ("WRITE"),
             ],
+            pointer_argument_uses: [],
             expressions: [
                 (
                     uniformity: (

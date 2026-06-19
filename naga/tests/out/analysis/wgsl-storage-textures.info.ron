@@ -26,6 +26,7 @@
                 (""),
                 (""),
             ],
+            pointer_argument_uses: [],
             expressions: [
                 (
                     uniformity: (
@@ -202,6 +203,7 @@
                 ("WRITE"),
                 ("WRITE"),
             ],
+            pointer_argument_uses: [],
             expressions: [
                 (
                     uniformity: (
