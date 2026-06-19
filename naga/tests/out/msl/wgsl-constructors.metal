@@ -20,7 +20,6 @@ struct type_12 {
 };
 constant metal::float3 const1_ = metal::float3(0.0);
 constant metal::float2x2 const3_ = metal::float2x2(metal::float2(0.0, 1.0), metal::float2(2.0, 3.0));
-constant type_6 const4_ = type_6 {{metal::float2x2(metal::float2(0.0, 1.0), metal::float2(2.0, 3.0))}};
 constant bool cz0_ = bool {};
 constant int cz1_ = int {};
 constant uint cz2_ = uint {};

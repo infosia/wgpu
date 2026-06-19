@@ -720,6 +720,26 @@ fn type_needs_padding_preserving_store(ty: &crate::TypeInner, module: &crate::Mo
     }
 }
 
+fn const_must_inline(ty: Handle<crate::Type>, module: &crate::Module) -> bool {
+    fn contains_matrix(ty: Handle<crate::Type>, module: &crate::Module) -> bool {
+        match module.types[ty].inner {
+            crate::TypeInner::Matrix { .. } => true,
+            crate::TypeInner::Array { base, .. } => contains_matrix(base, module),
+            crate::TypeInner::Struct { ref members, .. } => members
+                .iter()
+                .any(|member| contains_matrix(member.ty, module)),
+            _ => false,
+        }
+    }
+
+    match module.types[ty].inner {
+        crate::TypeInner::Array { .. } | crate::TypeInner::Struct { .. } => {
+            contains_matrix(ty, module)
+        }
+        _ => false,
+    }
+}
+
 fn needs_array_length(ty: Handle<crate::Type>, arena: &crate::UniqueArena<crate::Type>) -> bool {
     match arena[ty].inner {
         crate::TypeInner::Struct { ref members, .. } => {
@@ -2045,7 +2065,7 @@ impl<W: Write> Writer<W> {
             }
             crate::Expression::Constant(handle) => {
                 let constant = &module.constants[handle];
-                if constant.name.is_some() {
+                if constant.name.is_some() && !const_must_inline(constant.ty, module) {
                     write!(self.out, "{}", self.names[&NameKey::Constant(handle)])?;
                 } else {
                     self.put_const_expression(
@@ -5202,7 +5222,10 @@ template <typename A>
         module: &crate::Module,
         mod_info: &valid::ModuleInfo,
     ) -> BackendResult {
-        let constants = module.constants.iter().filter(|&(_, c)| c.name.is_some());
+        let constants = module
+            .constants
+            .iter()
+            .filter(|&(_, c)| c.name.is_some() && !const_must_inline(c.ty, module));
 
         for (handle, constant) in constants {
             let ty_name = TypeContext {

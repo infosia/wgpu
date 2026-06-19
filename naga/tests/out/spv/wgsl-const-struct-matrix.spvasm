@@ -1,0 +1,77 @@
+; SPIR-V
+; Version: 1.1
+; Generator: rspirv
+; Bound: 61
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %46 "main"
+OpExecutionMode %46 LocalSize 1 1 1
+OpMemberDecorate %6 0 Offset 0
+OpMemberDecorate %6 1 Offset 8
+OpMemberDecorate %6 1 ColMajor
+OpMemberDecorate %6 1 MatrixStride 8
+OpMemberDecorate %6 2 Offset 32
+OpDecorate %7 ArrayStride 24
+%2 = OpTypeVoid
+%3 = OpTypeFloat 32
+%5 = OpTypeVector %3 2
+%4 = OpTypeMatrix %5 3
+%6 = OpTypeStruct %3 %4 %5
+%9 = OpTypeInt 32 0
+%8 = OpConstant  %9  2
+%7 = OpTypeArray %4 %8
+%10 = OpConstant  %3  1
+%11 = OpConstant  %3  2
+%12 = OpConstantComposite  %5  %10 %11
+%13 = OpConstant  %3  3
+%14 = OpConstant  %3  4
+%15 = OpConstantComposite  %5  %13 %14
+%16 = OpConstant  %3  5
+%17 = OpConstant  %3  6
+%18 = OpConstantComposite  %5  %16 %17
+%19 = OpConstantComposite  %4  %12 %15 %18
+%20 = OpConstant  %3  7
+%21 = OpConstant  %3  8
+%22 = OpConstantComposite  %5  %20 %21
+%23 = OpConstantComposite  %6  %11 %19 %22
+%24 = OpConstant  %3  9
+%25 = OpConstant  %3  10
+%26 = OpConstantComposite  %5  %24 %25
+%27 = OpConstant  %3  11
+%28 = OpConstant  %3  12
+%29 = OpConstantComposite  %5  %27 %28
+%30 = OpConstant  %3  13
+%31 = OpConstant  %3  14
+%32 = OpConstantComposite  %5  %30 %31
+%33 = OpConstantComposite  %4  %26 %29 %32
+%34 = OpConstant  %3  15
+%35 = OpConstant  %3  16
+%36 = OpConstantComposite  %5  %34 %35
+%37 = OpConstant  %3  17
+%38 = OpConstant  %3  18
+%39 = OpConstantComposite  %5  %37 %38
+%40 = OpConstant  %3  19
+%41 = OpConstant  %3  20
+%42 = OpConstantComposite  %5  %40 %41
+%43 = OpConstantComposite  %4  %36 %39 %42
+%44 = OpConstantComposite  %7  %33 %43
+%47 = OpTypeFunction %2
+%46 = OpFunction  %2  None %47
+%45 = OpLabel
+OpBranch %48
+%48 = OpLabel
+%49 = OpCompositeExtract  %3  %23 0
+%50 = OpCompositeExtract  %4  %23 1
+%51 = OpCompositeExtract  %5  %50 2
+%52 = OpCompositeExtract  %3  %51 1
+%53 = OpFAdd  %3  %49 %52
+%54 = OpCompositeExtract  %5  %23 2
+%55 = OpCompositeExtract  %3  %54 0
+%56 = OpFAdd  %3  %53 %55
+%57 = OpCompositeExtract  %4  %44 1
+%58 = OpCompositeExtract  %5  %57 0
+%59 = OpCompositeExtract  %3  %58 1
+%60 = OpFAdd  %3  %56 %59
+OpReturn
+OpFunctionEnd
