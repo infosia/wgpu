@@ -940,6 +940,12 @@ impl<'source, 'temp, 'out> ExpressionContext<'source, 'temp, 'out> {
     ) -> Result<'source, Handle<ir::Expression>> {
         match expr {
             Typed::Reference(pointer) => {
+                if let ir::TypeInner::Pointer { base, .. } = *resolve_inner!(self, pointer) {
+                    if matches!(self.module.types[base].inner, ir::TypeInner::Atomic(_)) {
+                        let span = self.get_expression_span(pointer);
+                        return Err(Box::new(Error::InvalidAtomicOperandType(span)));
+                    }
+                }
                 let load = ir::Expression::Load { pointer };
                 let span = self.get_expression_span(pointer);
                 self.append_expression(load, span)

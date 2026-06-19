@@ -75,6 +75,71 @@ fn check_parse_or_validate_error(input: &str) {
 }
 
 #[test]
+fn function_call_pointer_arguments_must_match_parameter_pointer_type() {
+    check_parse_or_validate_error(
+        r#"
+fn takes_function_u32(p: ptr<function, u32>) {
+    let x = *p;
+}
+
+var<private> private_u32: u32;
+
+@compute @workgroup_size(1)
+fn main() {
+    takes_function_u32(&private_u32);
+}
+"#,
+    );
+
+    check_parse_or_validate_error(
+        r#"
+struct Constructible {
+    a: i32,
+}
+
+fn takes_private_constructible(p: ptr<private, Constructible>) {
+    let x = (*p).a;
+}
+
+var<private> private_u32: u32;
+
+@compute @workgroup_size(1)
+fn main() {
+    takes_private_constructible(&private_u32);
+}
+"#,
+    );
+}
+
+#[test]
+fn id_attribute_is_rejected_on_function() {
+    check_parse_or_validate_error(
+        r#"
+@id(0)
+fn helper() {
+}
+"#,
+    );
+}
+
+#[test]
+fn atomic_values_cannot_be_loaded_by_value() {
+    for expr in ["a1 + a2", "a1", "abs(a1)"] {
+        check_parse_or_validate_error(&format!(
+            r#"
+var<workgroup> a1: atomic<u32>;
+var<workgroup> a2: atomic<u32>;
+
+@compute @workgroup_size(1)
+fn main() {{
+    let x: u32 = {expr};
+}}
+"#
+        ));
+    }
+}
+
+#[test]
 fn pointer_aliasing_two_arguments_write_errors() {
     check_parse_or_validate_error(
         r#"
@@ -2243,7 +2308,7 @@ fn invalid_functions() {
         if function_name == "return_pointer"
     }
 
-    check_validation! {
+    check_parse_or_validate_error(
         "
         @group(0) @binding(0)
         var<storage, read_write> atom: atomic<u32>;
@@ -2251,14 +2316,8 @@ fn invalid_functions() {
         fn return_atomic() -> atomic<u32> {
            return atom;
         }
-        ":
-        Err(naga::valid::ValidationError::Function {
-            name: function_name,
-            source: naga::valid::FunctionError::NonConstructibleReturnType,
-            ..
-        })
-        if function_name == "return_atomic"
-    }
+        ",
+    );
 }
 
 #[test]

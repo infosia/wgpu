@@ -360,6 +360,58 @@ impl<'a> BlockContext<'a> {
         crate::proc::compare_types(lhs, rhs, self.types)
     }
 
+    fn compare_call_argument_types(
+        &self,
+        parameter: Handle<crate::Type>,
+        argument: &TypeResolution,
+    ) -> bool {
+        match (
+            self.types[parameter].inner.clone(),
+            argument.inner_with(self.types),
+        ) {
+            (
+                crate::TypeInner::Pointer {
+                    base: parameter_base,
+                    space: parameter_space,
+                },
+                &crate::TypeInner::Pointer {
+                    base: argument_base,
+                    space: argument_space,
+                },
+            ) => {
+                parameter_space == argument_space
+                    && self.compare_types(
+                        &TypeResolution::Handle(parameter_base),
+                        &TypeResolution::Handle(argument_base),
+                    )
+            }
+            (
+                crate::TypeInner::Pointer {
+                    base: parameter_base,
+                    space: parameter_space,
+                },
+                &crate::TypeInner::ValuePointer {
+                    size,
+                    scalar,
+                    space: argument_space,
+                },
+            ) => {
+                parameter_space == argument_space
+                    && match self.types[parameter_base].inner {
+                        crate::TypeInner::Scalar(parameter_scalar) => {
+                            size.is_none() && parameter_scalar == scalar
+                        }
+                        crate::TypeInner::Vector {
+                            size: parameter_size,
+                            scalar: parameter_scalar,
+                        } => size == Some(parameter_size) && parameter_scalar == scalar,
+                        _ => false,
+                    }
+            }
+            _ => self.compare_types(&TypeResolution::Handle(parameter), argument),
+        }
+    }
+
     fn pointer_root(&self, expression: Handle<crate::Expression>) -> Option<PointerRoot> {
         let mut current = expression;
         loop {
@@ -491,7 +543,7 @@ impl super::Validator {
                     CallError::Argument { index, source }
                         .with_span_handle(expr, context.expressions)
                 })?;
-            if !context.compare_types(&TypeResolution::Handle(arg.ty), ty) {
+            if !context.compare_call_argument_types(arg.ty, ty) {
                 return Err(CallError::ArgumentType {
                     index,
                     required: arg.ty,

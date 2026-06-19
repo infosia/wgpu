@@ -2234,6 +2234,9 @@ impl Parser {
                 Some(ast::GlobalDeclKind::Var(var))
             }
             (Token::Word("fn"), _) => {
+                if let Some(span) = id.name_span {
+                    return Err(Box::new(Error::UnknownAttribute(span)));
+                }
                 if stage.value.is_none() {
                     if let Some(span) = workgroup_size.name_span {
                         return Err(Box::new(Error::UnknownAttribute(span)));
