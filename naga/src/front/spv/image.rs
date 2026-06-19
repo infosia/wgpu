@@ -128,6 +128,7 @@ fn extract_image_coordinates(
                     kind: crate::ScalarKind::Sint,
                     expr: array_index_f32,
                     convert: Some(4),
+                    bitcast_width: None,
                 },
                 base_span,
             );
@@ -558,6 +559,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
                             expr: lod_handle,
                             kind: crate::ScalarKind::Sint,
                             convert: Some(4),
+                            bitcast_width: None,
                         };
                         let s32_lod_handle = ctx.expressions.append(expr, span);
                         crate::SampleLevel::Exact(s32_lod_handle)
@@ -868,6 +870,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
                 expr: ctx.expressions.append(expr, self.span_from_with_op(start)),
                 kind: crate::ScalarKind::Sint,
                 convert: Some(4),
+                bitcast_width: None,
             }
         } else {
             expr
@@ -913,6 +916,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
                 expr: ctx.expressions.append(expr, self.span_from_with_op(start)),
                 kind: crate::ScalarKind::Sint,
                 convert: Some(4),
+                bitcast_width: None,
             }
         } else {
             expr

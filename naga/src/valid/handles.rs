@@ -639,6 +639,7 @@ impl super::Validator {
                 expr: input,
                 kind: _,
                 convert: _,
+                bitcast_width: _,
             } => {
                 handle.check_dep(input)?;
             }

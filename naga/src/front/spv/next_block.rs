@@ -897,6 +897,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                             expr: left,
                             kind: crate::ScalarKind::Float,
                             convert: Some(size),
+                            bitcast_width: None,
                         },
                         span,
                     );
@@ -905,6 +906,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                             expr: right,
                             kind: crate::ScalarKind::Float,
                             convert: Some(size),
+                            bitcast_width: None,
                         },
                         span,
                     );
@@ -931,6 +933,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                             expr: floor,
                             kind,
                             convert: Some(size),
+                            bitcast_width: None,
                         },
                         span,
                     );
@@ -1131,6 +1134,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                                 expr: offset_handle,
                                 kind: crate::ScalarKind::Uint,
                                 convert: None,
+                                bitcast_width: None,
                             },
                             span,
                         )
@@ -1144,6 +1148,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                                 expr: count_handle,
                                 kind: crate::ScalarKind::Uint,
                                 convert: None,
+                                bitcast_width: None,
                             },
                             span,
                         )
@@ -1199,6 +1204,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                                 expr: offset_handle,
                                 kind: crate::ScalarKind::Uint,
                                 convert: None,
+                                bitcast_width: None,
                             },
                             span,
                         )
@@ -1212,6 +1218,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                                 expr: count_handle,
                                 kind: crate::ScalarKind::Uint,
                                 convert: None,
+                                bitcast_width: None,
                             },
                             span,
                         )
@@ -1617,6 +1624,16 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                         | crate::TypeInner::Matrix { scalar, .. } => scalar,
                         _ => return Err(Error::InvalidAsType(ty_lookup.handle)),
                     };
+                    let bitcast_width = if inst.op == Op::Bitcast {
+                        let source_lookup = self.lookup_type.lookup(value_lexp.type_id)?;
+                        let source_width = ctx.module.types[source_lookup.handle]
+                            .inner
+                            .scalar_width()
+                            .unwrap();
+                        (scalar.width != source_width).then_some(scalar.width)
+                    } else {
+                        None
+                    };
 
                     let expr = crate::Expression::As {
                         expr: get_expr_handle!(value_id, value_lexp),
@@ -1628,6 +1645,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                         } else {
                             Some(scalar.width)
                         },
+                        bitcast_width,
                     };
                     self.lookup_expression.insert(
                         result_id,
@@ -2154,6 +2172,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                                     kind: crate::ScalarKind::Sint,
                                     expr: selector_handle,
                                     convert: None,
+                                    bitcast_width: None,
                                 },
                                 span,
                             )

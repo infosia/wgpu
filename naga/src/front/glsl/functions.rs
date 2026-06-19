@@ -142,6 +142,7 @@ impl Frontend {
                         kind: scalar.kind,
                         expr,
                         convert: Some(scalar.width),
+                        bitcast_width: None,
                     },
                     meta,
                 )?
@@ -156,6 +157,7 @@ impl Frontend {
                         kind: scalar.kind,
                         expr: value,
                         convert: Some(scalar.width),
+                        bitcast_width: None,
                     },
                     meta,
                 )?

@@ -1759,6 +1759,7 @@ impl<W: Write> super::Writer<'_, W> {
                 expr,
                 kind,
                 convert: Some(width),
+                bitcast_width: None,
             } = *expression
             {
                 // Avoid undefined behaviour when casting from a float to integer

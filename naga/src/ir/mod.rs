@@ -1954,6 +1954,13 @@ pub enum Expression {
         /// If provided, converts to the specified byte width.
         /// Otherwise, bitcast.
         convert: Option<Bytes>,
+        /// For bitcasts, if provided, the target scalar byte width.
+        ///
+        /// If omitted, bitcasts preserve the source scalar width. Conversions
+        /// use `convert` instead.
+        #[cfg_attr(feature = "serialize", serde(skip_serializing_if = "Option::is_none"))]
+        #[cfg_attr(feature = "deserialize", serde(default))]
+        bitcast_width: Option<Bytes>,
     },
     /// Result of calling another function.
     CallResult(Handle<Function>),

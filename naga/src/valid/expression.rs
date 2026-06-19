@@ -1221,17 +1221,26 @@ impl super::Validator {
                 expr,
                 kind,
                 convert,
+                bitcast_width,
             } => {
-                let mut base_scalar = match resolver[expr] {
-                    crate::TypeInner::Scalar(scalar) | crate::TypeInner::Vector { scalar, .. } => {
-                        scalar
-                    }
-                    crate::TypeInner::Matrix { scalar, .. } => scalar,
+                let (mut base_scalar, components) = match resolver[expr] {
+                    crate::TypeInner::Scalar(scalar) => (scalar, 1),
+                    crate::TypeInner::Vector { scalar, size } => (scalar, u8::from(size)),
+                    crate::TypeInner::Matrix { scalar, .. } if convert.is_some() => (scalar, 1),
                     _ => return Err(ExpressionError::InvalidCastArgument),
                 };
                 base_scalar.kind = kind;
                 if let Some(width) = convert {
                     base_scalar.width = width;
+                } else {
+                    base_scalar.width = bitcast_width.unwrap_or(base_scalar.width);
+                    let total_width = components * resolver[expr].scalar_width().unwrap();
+                    if base_scalar.width == 0
+                        || total_width % base_scalar.width != 0
+                        || !matches!(total_width / base_scalar.width, 1..=4)
+                    {
+                        return Err(ExpressionError::InvalidCastArgument);
+                    }
                 }
                 if self.check_width(base_scalar).is_err() {
                     return Err(ExpressionError::InvalidCastArgument);

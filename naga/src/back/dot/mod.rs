@@ -740,6 +740,7 @@ fn write_function_expressions(
                 kind,
                 expr,
                 convert,
+                ..
             } => {
                 edges.insert("", expr);
                 let string = match convert {

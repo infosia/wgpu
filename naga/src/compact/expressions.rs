@@ -232,6 +232,7 @@ impl ExpressionTracer<'_> {
                 expr,
                 kind: _,
                 convert: _,
+                bitcast_width: _,
             } => {
                 self.expressions_used.insert(expr);
             }
@@ -417,6 +418,7 @@ impl ModuleMap {
                 ref mut expr,
                 kind: _,
                 convert: _,
+                bitcast_width: _,
             } => adjust(expr),
             Ex::CallResult(ref mut function) => {
                 self.functions.adjust(function);

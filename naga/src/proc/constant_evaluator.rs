@@ -1269,12 +1269,13 @@ impl<'a> ConstantEvaluator<'a> {
                 convert,
                 expr,
                 kind,
+                bitcast_width,
             } => {
                 let expr = self.check_and_get(expr)?;
 
                 match convert {
                     Some(width) => self.cast(expr, crate::Scalar { kind, width }, span),
-                    None => self.bitcast(expr, kind, span),
+                    None => self.bitcast(expr, kind, bitcast_width, span),
                 }
             }
             Expression::Select {
@@ -2069,28 +2070,54 @@ impl<'a> ConstantEvaluator<'a> {
 
     /// Const-evaluate a `bitcast<T>(expr)` (a Naga [`As`] with `convert: None`).
     ///
-    /// Bitcast reinterprets the bit pattern of `expr`'s scalar components as
-    /// the target scalar `kind`, preserving the bit width (and, for vectors,
-    /// the vector size and total bit width). This implements the 32-bit
-    /// reinterprets among `{U32, I32, F32}` (component-wise for vectors);
-    /// other combinations (e.g. f16 `pack2x16`-style bitcasts) return
-    /// [`ConstantEvaluatorError::NotImplemented`].
+    /// Bitcast reinterprets the little-endian bytes of `expr` as the target
+    /// scalar `kind` and width, preserving total bit width.
     ///
     /// [`As`]: crate::Expression::As
     fn bitcast(
         &mut self,
         expr: Handle<Expression>,
         kind: ScalarKind,
+        bitcast_width: Option<crate::Bytes>,
         span: Span,
     ) -> Result<Handle<Expression>, ConstantEvaluatorError> {
         let expr = self.eval_zero_value(expr, span)?;
         let vector = self.extract_vec(expr, true)?;
 
-        // The source components, viewed as raw 32-bit patterns.
-        let bits: ArrayVec<u32, { crate::VectorSize::MAX }> = match vector {
-            LiteralVector::U32(ref v) => v.iter().copied().collect(),
-            LiteralVector::I32(ref v) => v.iter().map(|&x| x as u32).collect(),
-            LiteralVector::F32(ref v) => v.iter().map(|&x| f32::to_bits(x)).collect(),
+        let mut bytes = ArrayVec::<u8, { crate::VectorSize::MAX * 4 }>::new();
+        let source_width = match vector {
+            LiteralVector::F16(ref v) => {
+                for &x in v {
+                    for byte in x.to_bits().to_le_bytes() {
+                        bytes.push(byte);
+                    }
+                }
+                2
+            }
+            LiteralVector::U32(ref v) => {
+                for &x in v {
+                    for byte in x.to_le_bytes() {
+                        bytes.push(byte);
+                    }
+                }
+                4
+            }
+            LiteralVector::I32(ref v) => {
+                for &x in v {
+                    for byte in (x as u32).to_le_bytes() {
+                        bytes.push(byte);
+                    }
+                }
+                4
+            }
+            LiteralVector::F32(ref v) => {
+                for &x in v {
+                    for byte in x.to_bits().to_le_bytes() {
+                        bytes.push(byte);
+                    }
+                }
+                4
+            }
             _ => {
                 return Err(ConstantEvaluatorError::NotImplemented(
                     "bitcast of this scalar type".into(),
@@ -2098,13 +2125,54 @@ impl<'a> ConstantEvaluator<'a> {
             }
         };
 
-        let result = match kind {
-            ScalarKind::Uint => LiteralVector::U32(bits),
-            ScalarKind::Sint => LiteralVector::I32(bits.iter().map(|&b| b as i32).collect()),
-            ScalarKind::Float => {
-                LiteralVector::F32(bits.iter().map(|&b| f32::from_bits(b)).collect())
+        let target_width = bitcast_width.unwrap_or(source_width);
+        if target_width == 0 || bytes.len() % usize::from(target_width) != 0 {
+            return Err(ConstantEvaluatorError::InvalidMathArg);
+        }
+
+        let result_len = bytes.len() / usize::from(target_width);
+        if !(1..=crate::VectorSize::MAX).contains(&result_len) {
+            return Err(ConstantEvaluatorError::InvalidMathArg);
+        }
+
+        let result = match (kind, target_width) {
+            (ScalarKind::Uint, 4) => {
+                let mut out = ArrayVec::new();
+                for chunk in bytes.chunks_exact(4) {
+                    out.push(u32::from_le_bytes(chunk.try_into().unwrap()));
+                }
+                LiteralVector::U32(out)
             }
-            ScalarKind::Bool | ScalarKind::AbstractInt | ScalarKind::AbstractFloat => {
+            (ScalarKind::Sint, 4) => {
+                let mut out = ArrayVec::new();
+                for chunk in bytes.chunks_exact(4) {
+                    out.push(u32::from_le_bytes(chunk.try_into().unwrap()) as i32);
+                }
+                LiteralVector::I32(out)
+            }
+            (ScalarKind::Float, 2) => {
+                let mut out = ArrayVec::new();
+                for chunk in bytes.chunks_exact(2) {
+                    out.push(f16::from_bits(u16::from_le_bytes(
+                        chunk.try_into().unwrap(),
+                    )));
+                }
+                LiteralVector::F16(out)
+            }
+            (ScalarKind::Float, 4) => {
+                let mut out = ArrayVec::new();
+                for chunk in bytes.chunks_exact(4) {
+                    out.push(f32::from_bits(u32::from_le_bytes(
+                        chunk.try_into().unwrap(),
+                    )));
+                }
+                LiteralVector::F32(out)
+            }
+            (ScalarKind::Uint | ScalarKind::Sint, 2)
+            | (ScalarKind::Bool, _)
+            | (ScalarKind::AbstractInt, _)
+            | (ScalarKind::AbstractFloat, _)
+            | (_, _) => {
                 return Err(ConstantEvaluatorError::NotImplemented(
                     "bitcast to this scalar type".into(),
                 ))
@@ -3994,9 +4062,12 @@ where
 mod tests {
     use alloc::{vec, vec::Vec};
 
+    use arrayvec::ArrayVec;
+    use half::f16;
+
     use crate::{
         Arena, BinaryOperator, Constant, Expression, FastHashMap, Handle, Literal, ScalarKind,
-        Type, TypeInner, UnaryOperator, UniqueArena, VectorSize,
+        Span, Type, TypeInner, UnaryOperator, UniqueArena, VectorSize,
     };
 
     use super::{Behavior, ConstantEvaluator, ExpressionKindTracker, WgslRestrictions};
@@ -4189,7 +4260,7 @@ mod tests {
         fn new() -> Self {
             let mut types = UniqueArena::new();
             let mut expressions = Arena::new();
-            let span = crate::Span::default();
+            let span = Span::default();
 
             let (mut vec_tys, mut mat_tys) = (FastHashMap::default(), FastHashMap::default());
             for c in 2..=4 {
@@ -4424,6 +4495,7 @@ mod tests {
             expr,
             kind: ScalarKind::Bool,
             convert: Some(crate::BOOL_WIDTH),
+            bitcast_width: None,
         };
 
         let expression_kind_tracker = &mut ExpressionKindTracker::from_arena(&global_expressions);
@@ -4464,6 +4536,7 @@ mod tests {
                 kind,
                 // `convert: None` is what the front-end emits for `bitcast`.
                 convert: None,
+                bitcast_width: None,
             };
 
             let expression_kind_tracker =
@@ -4518,6 +4591,117 @@ mod tests {
             eval_bitcast(Literal::I32(-1991105246), ScalarKind::Sint),
             Literal::I32(-1991105246)
         );
+    }
+
+    #[test]
+    fn bitcast_f16() {
+        fn eval_root(
+            root: Expression,
+            global_expressions: &mut Arena<Expression>,
+            types: &mut UniqueArena<Type>,
+        ) -> ArrayVec<Literal, { VectorSize::MAX }> {
+            let constants = Arena::new();
+            let overrides = Arena::new();
+            let expression_kind_tracker =
+                &mut ExpressionKindTracker::from_arena(global_expressions);
+            let mut solver = ConstantEvaluator {
+                behavior: Behavior::Wgsl(WgslRestrictions::Const(None)),
+                types,
+                constants: &constants,
+                overrides: &overrides,
+                expressions: global_expressions,
+                expression_kind_tracker,
+                layouter: &mut crate::proc::Layouter::default(),
+            };
+
+            let res = solver
+                .try_eval_and_append(root, Default::default())
+                .unwrap();
+
+            match solver.expressions[res] {
+                Expression::Literal(literal) => [literal].into_iter().collect(),
+                Expression::Compose { ty, ref components } => {
+                    let mut out = ArrayVec::new();
+                    for expr in crate::proc::flatten_compose(
+                        ty,
+                        components,
+                        solver.expressions,
+                        solver.types,
+                    ) {
+                        match solver.expressions[expr] {
+                            Expression::Literal(literal) => out.push(literal),
+                            ref other => panic!("expected literal component, got {other:?}"),
+                        }
+                    }
+                    out
+                }
+                ref other => panic!("expected literal or compose, got {other:?}"),
+            }
+        }
+
+        fn eval_bitcast_literal(
+            input: Literal,
+            kind: ScalarKind,
+            bitcast_width: Option<crate::Bytes>,
+            types: &mut UniqueArena<Type>,
+        ) -> ArrayVec<Literal, { VectorSize::MAX }> {
+            let mut global_expressions = Arena::new();
+            let expr = global_expressions.append(Expression::Literal(input), Default::default());
+            let root = Expression::As {
+                expr,
+                kind,
+                convert: None,
+                bitcast_width,
+            };
+            eval_root(root, &mut global_expressions, types)
+        }
+
+        let mut types = UniqueArena::new();
+        let half_vec2 = types.insert(
+            Type {
+                name: None,
+                inner: TypeInner::Vector {
+                    size: VectorSize::Bi,
+                    scalar: crate::Scalar::F16,
+                },
+            },
+            Span::UNDEFINED,
+        );
+
+        let low = f16::from_bits(0x3C00);
+        let high = f16::from_bits(0xC000);
+
+        let mut global_expressions = Arena::new();
+        let low_expr =
+            global_expressions.append(Expression::Literal(Literal::F16(low)), Default::default());
+        let high_expr =
+            global_expressions.append(Expression::Literal(Literal::F16(high)), Default::default());
+        let input = global_expressions.append(
+            Expression::Compose {
+                ty: half_vec2,
+                components: [low_expr, high_expr].into_iter().collect(),
+            },
+            Default::default(),
+        );
+        let result = eval_root(
+            Expression::As {
+                expr: input,
+                kind: ScalarKind::Uint,
+                convert: None,
+                bitcast_width: Some(4),
+            },
+            &mut global_expressions,
+            &mut types,
+        );
+        assert_eq!(result.as_slice(), &[Literal::U32(0xC000_3C00)]);
+
+        let result = eval_bitcast_literal(
+            Literal::U32(0xC000_3C00),
+            ScalarKind::Float,
+            Some(2),
+            &mut types,
+        );
+        assert_eq!(result.as_slice(), &[Literal::F16(low), Literal::F16(high)]);
     }
 
     #[test]

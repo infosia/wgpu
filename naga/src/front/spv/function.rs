@@ -356,6 +356,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
                             expr: arg_expr,
                             kind: crate::ScalarKind::Sint,
                             convert: Some(4),
+                            bitcast_width: None,
                         },
                         span,
                     );

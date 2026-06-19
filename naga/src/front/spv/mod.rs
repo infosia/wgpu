@@ -1090,6 +1090,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                         expr: left,
                         kind,
                         convert: None,
+                        bitcast_width: None,
                     },
                     span,
                 )
@@ -1156,6 +1157,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                         expr: left,
                         kind,
                         convert: None,
+                        bitcast_width: None,
                     },
                     span,
                 )
@@ -1168,6 +1170,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                         expr: right,
                         kind,
                         convert: None,
+                        bitcast_width: None,
                     },
                     span,
                 )
@@ -1231,6 +1234,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                         expr: left,
                         kind,
                         convert: None,
+                        bitcast_width: None,
                     },
                     span,
                 )
@@ -1243,6 +1247,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                         expr: right,
                         kind,
                         convert: None,
+                        bitcast_width: None,
                     },
                     span,
                 )
@@ -1287,6 +1292,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                 expr: p2_handle,
                 kind: crate::ScalarKind::Uint,
                 convert: None,
+                bitcast_width: None,
             },
             span,
         );

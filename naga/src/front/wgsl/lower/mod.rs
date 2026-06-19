@@ -3136,12 +3136,19 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                             }));
                         }
                     };
+                    let source_width = resolve!(ctx, expr)
+                        .inner_with(&ctx.module.types)
+                        .scalar_width()
+                        .unwrap();
+                    let bitcast_width =
+                        (element_scalar.width != source_width).then_some(element_scalar.width);
 
                     (
                         ir::Expression::As {
                             expr,
                             kind: element_scalar.kind,
                             convert: None,
+                            bitcast_width,
                         },
                         MustUse::Yes,
                     )

@@ -3906,6 +3906,7 @@ impl<'a, W: Write> Writer<'a, W> {
                 expr,
                 kind: target_kind,
                 convert,
+                ..
             } => {
                 let inner = ctx.resolve_type(expr, &self.module.types);
                 match convert {

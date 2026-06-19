@@ -940,6 +940,7 @@ fn array_length_override_mutual() {
             expr: sum,
             kind: crate::ScalarKind::Uint,
             convert: None,
+            bitcast_width: None,
         },
         nowhere,
     );
@@ -1275,6 +1276,7 @@ fn unnamed_override_type() {
             expr: unnamed_override_expr,
             kind: crate::ScalarKind::Sint,
             convert: None,
+            bitcast_width: None,
         },
         nowhere,
     );

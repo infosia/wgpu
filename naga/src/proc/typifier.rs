@@ -743,23 +743,101 @@ impl<'a> ResolveContext<'a> {
                 expr,
                 kind,
                 convert,
+                bitcast_width,
             } => match *past(expr)?.inner_with(types) {
-                Ti::Scalar(crate::Scalar { width, .. }) => {
-                    TypeResolution::Value(Ti::Scalar(crate::Scalar {
-                        kind,
-                        width: convert.unwrap_or(width),
-                    }))
+                Ti::Scalar(crate::Scalar {
+                    width: source_width,
+                    ..
+                }) => {
+                    let width = convert.or(bitcast_width).unwrap_or(source_width);
+                    let scalar = crate::Scalar { kind, width };
+                    if convert.is_some() {
+                        TypeResolution::Value(Ti::Scalar(scalar))
+                    } else {
+                        match width {
+                            _ if width == 0 => {
+                                return Err(ResolveError::IncompatibleOperands(
+                                    "bitcast to zero-width scalar".into(),
+                                ))
+                            }
+                            _ if width == 1 => {
+                                return Err(ResolveError::IncompatibleOperands(
+                                    "bitcast to unsupported scalar width".into(),
+                                ))
+                            }
+                            _ => {
+                                let total_width = source_width;
+                                match total_width / width {
+                                    1 if total_width % width == 0 => {
+                                        TypeResolution::Value(Ti::Scalar(scalar))
+                                    }
+                                    2 if total_width % width == 0 => {
+                                        TypeResolution::Value(Ti::Vector {
+                                            size: crate::VectorSize::Bi,
+                                            scalar,
+                                        })
+                                    }
+                                    3 if total_width % width == 0 => {
+                                        TypeResolution::Value(Ti::Vector {
+                                            size: crate::VectorSize::Tri,
+                                            scalar,
+                                        })
+                                    }
+                                    4 if total_width % width == 0 => {
+                                        TypeResolution::Value(Ti::Vector {
+                                            size: crate::VectorSize::Quad,
+                                            scalar,
+                                        })
+                                    }
+                                    _ => {
+                                        return Err(ResolveError::IncompatibleOperands(format!(
+                                            "invalid bitcast from scalar width {total_width} to scalar width {width}"
+                                        )))
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 Ti::Vector {
                     size,
-                    scalar: crate::Scalar { kind: _, width },
-                } => TypeResolution::Value(Ti::Vector {
-                    size,
-                    scalar: crate::Scalar {
-                        kind,
-                        width: convert.unwrap_or(width),
-                    },
-                }),
+                    scalar:
+                        crate::Scalar {
+                            kind: _,
+                            width: source_width,
+                        },
+                } => {
+                    let width = match convert {
+                        Some(width) => width,
+                        None => bitcast_width.unwrap_or(source_width),
+                    };
+                    let size = if convert.is_some() {
+                        Some(size)
+                    } else {
+                        if width == 0 {
+                            return Err(ResolveError::IncompatibleOperands(
+                                "bitcast to zero-width scalar".into(),
+                            ));
+                        }
+                        let total_width = u8::from(size) * source_width;
+                        match total_width / width {
+                            1 if total_width % width == 0 => None,
+                            2 if total_width % width == 0 => Some(crate::VectorSize::Bi),
+                            3 if total_width % width == 0 => Some(crate::VectorSize::Tri),
+                            4 if total_width % width == 0 => Some(crate::VectorSize::Quad),
+                            _ => {
+                                return Err(ResolveError::IncompatibleOperands(format!(
+                                    "invalid bitcast from vector width {total_width} to scalar width {width}"
+                                )))
+                            }
+                        }
+                    };
+                    let scalar = crate::Scalar { kind, width };
+                    TypeResolution::Value(match size {
+                        Some(size) => Ti::Vector { size, scalar },
+                        None => Ti::Scalar(scalar),
+                    })
+                }
                 Ti::Matrix {
                     columns,
                     rows,

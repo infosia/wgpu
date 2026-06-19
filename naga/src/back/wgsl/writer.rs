@@ -1722,11 +1722,12 @@ impl<W: Write> Writer<W> {
             }
 
             Expression::As {
-                expr,
+                expr: source,
                 kind,
                 convert,
+                ..
             } => {
-                let inner = func_ctx.resolve_type(expr, &module.types);
+                let inner = func_ctx.resolve_type(source, &module.types);
                 match *inner {
                     TypeInner::Matrix {
                         columns,
@@ -1746,32 +1747,69 @@ impl<W: Write> Writer<W> {
                             scalar_kind_str
                         )?;
                     }
-                    TypeInner::Vector {
-                        size,
-                        scalar: crate::Scalar { width, .. },
-                    } => {
-                        let scalar = crate::Scalar {
-                            kind,
-                            width: convert.unwrap_or(width),
+                    TypeInner::Vector { size, .. } => {
+                        let scalar = if convert.is_some() {
+                            crate::Scalar {
+                                kind,
+                                width: convert.unwrap(),
+                            }
+                        } else {
+                            func_ctx.resolve_type(expr, &module.types).scalar().unwrap()
                         };
                         let vector_size_str = common::vector_size_str(size);
                         let scalar_kind_str = scalar.to_wgsl_if_implemented()?;
                         if convert.is_some() {
                             write!(self.out, "vec{vector_size_str}<{scalar_kind_str}>")?;
                         } else {
-                            write!(self.out, "bitcast<vec{vector_size_str}<{scalar_kind_str}>>")?;
+                            match *func_ctx.resolve_type(expr, &module.types) {
+                                TypeInner::Vector { size, .. } => {
+                                    let vector_size_str = common::vector_size_str(size);
+                                    write!(
+                                        self.out,
+                                        "bitcast<vec{vector_size_str}<{scalar_kind_str}>>"
+                                    )?;
+                                }
+                                TypeInner::Scalar(_) => {
+                                    write!(self.out, "bitcast<{scalar_kind_str}>")?
+                                }
+                                ref other => {
+                                    return Err(Error::Unimplemented(format!(
+                                        "write_expr expression::as result {other:?}"
+                                    )));
+                                }
+                            }
                         }
                     }
                     TypeInner::Scalar(crate::Scalar { width, .. }) => {
-                        let scalar = crate::Scalar {
-                            kind,
-                            width: convert.unwrap_or(width),
+                        let scalar = if convert.is_some() {
+                            crate::Scalar {
+                                kind,
+                                width: convert.unwrap_or(width),
+                            }
+                        } else {
+                            func_ctx.resolve_type(expr, &module.types).scalar().unwrap()
                         };
                         let scalar_kind_str = scalar.to_wgsl_if_implemented()?;
                         if convert.is_some() {
                             write!(self.out, "{scalar_kind_str}")?
                         } else {
-                            write!(self.out, "bitcast<{scalar_kind_str}>")?
+                            match *func_ctx.resolve_type(expr, &module.types) {
+                                TypeInner::Vector { size, .. } => {
+                                    let vector_size_str = common::vector_size_str(size);
+                                    write!(
+                                        self.out,
+                                        "bitcast<vec{vector_size_str}<{scalar_kind_str}>>"
+                                    )?
+                                }
+                                TypeInner::Scalar(_) => {
+                                    write!(self.out, "bitcast<{scalar_kind_str}>")?
+                                }
+                                ref other => {
+                                    return Err(Error::Unimplemented(format!(
+                                        "write_expr expression::as result {other:?}"
+                                    )));
+                                }
+                            }
                         }
                     }
                     _ => {
@@ -1781,7 +1819,7 @@ impl<W: Write> Writer<W> {
                     }
                 };
                 write!(self.out, "(")?;
-                self.write_expr(module, expr, func_ctx)?;
+                self.write_expr(module, source, func_ctx)?;
                 write!(self.out, ")")?;
             }
             Expression::Load { pointer } => {

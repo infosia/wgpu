@@ -140,6 +140,7 @@ impl<'source> super::ExpressionContext<'source, '_, '_> {
                 expr,
                 kind: goal_scalar.kind,
                 convert: Some(goal_scalar.width),
+                bitcast_width: None,
             };
             self.append_expression(cast, expr_span)
         }
@@ -221,6 +222,7 @@ impl<'source> super::ExpressionContext<'source, '_, '_> {
                 expr: *expr,
                 kind: goal.kind,
                 convert: Some(goal.width),
+                bitcast_width: None,
             };
             let expr_span = self.get_expression_span(*expr);
             *expr = self.append_expression(cast, expr_span)?;

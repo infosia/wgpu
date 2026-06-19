@@ -195,6 +195,7 @@ impl<'source> Lowerer<'source, '_> {
                     expr: component,
                     kind: scalar.kind,
                     convert: Some(scalar.width),
+                    bitcast_width: None,
                 };
             }
 
@@ -217,6 +218,7 @@ impl<'source> Lowerer<'source, '_> {
                     expr: component,
                     kind: dst_scalar.kind,
                     convert: Some(dst_scalar.width),
+                    bitcast_width: None,
                 };
             }
 
@@ -260,6 +262,7 @@ impl<'source> Lowerer<'source, '_> {
                     expr: component,
                     kind: dst_scalar.kind,
                     convert: Some(dst_scalar.width),
+                    bitcast_width: None,
                 };
             }
 

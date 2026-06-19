@@ -1777,6 +1777,7 @@ impl MacroCall {
                         expr,
                         kind: Sk::Sint,
                         convert: Some(4),
+                        bitcast_width: None,
                     },
                     Span::default(),
                 )?
@@ -1795,6 +1796,7 @@ impl MacroCall {
                         expr,
                         kind: Sk::Sint,
                         convert: Some(4),
+                        bitcast_width: None,
                     },
                     Span::default(),
                 )?
@@ -1862,6 +1864,7 @@ impl MacroCall {
                         expr: res,
                         kind: Sk::Sint,
                         convert: Some(4),
+                        bitcast_width: None,
                     },
                     Span::default(),
                 )?
@@ -1872,6 +1875,7 @@ impl MacroCall {
                         expr: args[2],
                         kind: Sk::Uint,
                         convert: Some(4),
+                        bitcast_width: None,
                     },
                     Span::default(),
                 )?;
@@ -1880,6 +1884,7 @@ impl MacroCall {
                         expr: args[3],
                         kind: Sk::Uint,
                         convert: Some(4),
+                        bitcast_width: None,
                     },
                     Span::default(),
                 )?;
@@ -1900,6 +1905,7 @@ impl MacroCall {
                         expr: args[1],
                         kind: Sk::Uint,
                         convert: Some(4),
+                        bitcast_width: None,
                     },
                     Span::default(),
                 )?;
@@ -1908,6 +1914,7 @@ impl MacroCall {
                         expr: args[2],
                         kind: Sk::Uint,
                         convert: Some(4),
+                        bitcast_width: None,
                     },
                     Span::default(),
                 )?;
@@ -2022,6 +2029,7 @@ impl MacroCall {
                     expr: args[0],
                     kind,
                     convert: None,
+                    bitcast_width: None,
                 },
                 Span::default(),
             )?,

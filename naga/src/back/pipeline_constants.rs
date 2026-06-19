@@ -653,6 +653,7 @@ fn adjust_expr(new_pos: &HandleVec<Expression, Handle<Expression>>, expr: &mut E
             ref mut expr,
             kind: _,
             convert: _,
+            ..
         } => {
             adjust(expr);
         }

@@ -2978,6 +2978,7 @@ impl<W: Write> Writer<W> {
                 expr,
                 kind,
                 convert,
+                ..
             } => match *context.resolve_type(expr) {
                 crate::TypeInner::Scalar(src) | crate::TypeInner::Vector { scalar: src, .. } => {
                     if src.kind == crate::ScalarKind::Float
@@ -2998,20 +2999,25 @@ impl<W: Write> Writer<W> {
                         self.put_expression(expr, context, true)?;
                         write!(self.out, ")")?;
                     } else {
-                        let target_scalar = crate::Scalar {
-                            kind,
-                            width: convert.unwrap_or(src.width),
-                        };
                         let op = match convert {
                             Some(_) => "static_cast",
                             None => "as_type",
                         };
                         write!(self.out, "{op}<")?;
-                        match *context.resolve_type(expr) {
-                            crate::TypeInner::Vector { size, .. } => {
-                                put_numeric_type(&mut self.out, target_scalar, &[size])?
+                        match *context.resolve_type(expr_handle) {
+                            crate::TypeInner::Vector { size, .. } => put_numeric_type(
+                                &mut self.out,
+                                context.resolve_type(expr_handle).scalar().unwrap(),
+                                &[size],
+                            )?,
+                            crate::TypeInner::Scalar(scalar) => {
+                                put_numeric_type(&mut self.out, scalar, &[])?
                             }
-                            _ => put_numeric_type(&mut self.out, target_scalar, &[])?,
+                            ref other => {
+                                return Err(Error::GenericValidation(format!(
+                                    "write_expr expression::as result {other:?}"
+                                )));
+                            }
                         };
                         write!(self.out, ">(")?;
                         self.put_expression(expr, context, true)?;
@@ -6956,6 +6962,7 @@ template <typename A>
                     expr,
                     kind,
                     convert,
+                    ..
                 } => {
                     self.write_wrapped_cast(module, func_ctx, expr, kind, convert)?;
                 }

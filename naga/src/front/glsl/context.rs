@@ -1423,6 +1423,7 @@ impl<'a> Context<'a> {
                 expr: *expr,
                 kind: scalar.kind,
                 convert: Some(scalar.width),
+                bitcast_width: None,
             },
             meta,
         )?;

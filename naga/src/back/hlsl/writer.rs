@@ -3664,6 +3664,7 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                 expr,
                 kind,
                 convert,
+                ..
             } => {
                 let inner = func_ctx.resolve_type(expr, &module.types);
                 if inner.scalar_kind() == Some(ScalarKind::Float)

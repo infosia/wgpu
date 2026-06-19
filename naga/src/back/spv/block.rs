@@ -2157,6 +2157,7 @@ impl BlockContext<'_> {
                 expr,
                 kind,
                 convert,
+                ..
             } => self.write_as_expression(expr, convert, kind, block, result_type_id)?,
             crate::Expression::ImageLoad {
                 image,
