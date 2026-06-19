@@ -2020,7 +2020,14 @@ impl super::Validator {
 
         for (index, argument) in fun.arguments.iter().enumerate() {
             match module.types[argument.ty].inner.pointer_space() {
-                Some(crate::AddressSpace::Private | crate::AddressSpace::Function) | None => {}
+                Some(
+                    crate::AddressSpace::Private
+                    | crate::AddressSpace::Function
+                    | crate::AddressSpace::WorkGroup
+                    | crate::AddressSpace::Storage { .. }
+                    | crate::AddressSpace::Uniform,
+                )
+                | None => {}
                 Some(other) => {
                     return Err(FunctionError::InvalidArgumentPointerSpace {
                         index,

@@ -508,13 +508,38 @@ var<workgroup> v: atomic<i32>;
 fn decl_override_array_size_rejected_outside_workgroup_address_space() {
     // An override-expression array size is only permitted in the workgroup
     // address space; in any other space (here a `private` pointer parameter) it
-    // must be rejected. (Accepting `ptr<workgroup, ...>` parameters themselves
-    // needs the `unrestricted_pointer_parameters` extension, which naga does not
-    // yet support, so that case is deferred — not asserted here.)
+    // must be rejected.
     check_parse_or_validate_error(
         r#"
 override size = 1;
 fn f(a: ptr<private, array<u32, size>>) {}
+"#,
+    );
+}
+
+#[test]
+fn decl_override_array_size_accepted_in_workgroup_pointer_parameter() {
+    check_parse_and_validate_success(
+        r#"
+override size = 1;
+fn f(a: ptr<workgroup, array<u32, size>>) {}
+"#,
+    );
+
+    check_parse_and_validate_success(
+        r#"
+const size = 1;
+fn f(a: ptr<workgroup, array<u32, size>>) {}
+"#,
+    );
+}
+
+#[test]
+fn unrestricted_pointer_parameters_requires_directive_is_accepted() {
+    check_parse_and_validate_success(
+        r#"
+requires unrestricted_pointer_parameters;
+fn f(a: ptr<workgroup, u32>) {}
 "#,
     );
 }
@@ -2268,46 +2293,10 @@ fn invalid_functions() {
         })
     }
 
-    // Pointers of these address spaces cannot be passed as arguments.
-    check_validation! {
-        "fn unacceptable_ptr_space(arg: ptr<storage, array<f32>>) { }":
-        Err(naga::valid::ValidationError::Function {
-            name: function_name,
-            source: naga::valid::FunctionError::InvalidArgumentPointerSpace {
-                index: 0,
-                name: argument_name,
-                space: naga::AddressSpace::Storage { .. },
-            },
-            ..
-        })
-        if function_name == "unacceptable_ptr_space" && argument_name == "arg"
-    }
-    check_validation! {
-        "fn unacceptable_ptr_space(arg: ptr<uniform, f32>) { }":
-        Err(naga::valid::ValidationError::Function {
-            name: function_name,
-            source: naga::valid::FunctionError::InvalidArgumentPointerSpace {
-                index: 0,
-                name: argument_name,
-                space: naga::AddressSpace::Uniform,
-            },
-            ..
-        })
-        if function_name == "unacceptable_ptr_space" && argument_name == "arg"
-    }
-    check_validation! {
-        "fn unacceptable_ptr_space(arg: ptr<workgroup, f32>) { }":
-        Err(naga::valid::ValidationError::Function {
-            name: function_name,
-            source: naga::valid::FunctionError::InvalidArgumentPointerSpace {
-                index: 0,
-                name: argument_name,
-                space: naga::AddressSpace::WorkGroup,
-            },
-            ..
-        })
-        if function_name == "unacceptable_ptr_space" && argument_name == "arg"
-    }
+    check_parse_and_validate_success("fn acceptable_ptr_space(arg: ptr<storage, array<f32>>) { }");
+    check_parse_and_validate_success("fn acceptable_ptr_space(arg: ptr<uniform, f32>) { }");
+    check_parse_and_validate_success("fn acceptable_ptr_space(arg: ptr<workgroup, f32>) { }");
+
     check_validation! {
         "
         struct AFloat {

@@ -253,18 +253,19 @@ fn type_contains_atomic(
 /// user-defined function, return `TypeFlags::ARGUMENT`. Otherwise, return
 /// `TypeFlags::empty()`.
 ///
-/// Pointers passed as arguments to user-defined functions must be in the
-/// `Function` or `Private` address space.
+/// Pointers passed as arguments to user-defined functions must be in a
+/// parameter-capable address space.
 const fn ptr_space_argument_flag(space: crate::AddressSpace) -> TypeFlags {
     use crate::AddressSpace as As;
     match space {
-        As::Function | As::Private | As::RayPayload | As::IncomingRayPayload => TypeFlags::ARGUMENT,
-        As::Uniform
+        As::Function
+        | As::Private
+        | As::Uniform
         | As::Storage { .. }
-        | As::Handle
-        | As::Immediate
         | As::WorkGroup
-        | As::TaskPayload => TypeFlags::empty(),
+        | As::RayPayload
+        | As::IncomingRayPayload => TypeFlags::ARGUMENT,
+        As::Handle | As::Immediate | As::TaskPayload => TypeFlags::empty(),
     }
 }
 
