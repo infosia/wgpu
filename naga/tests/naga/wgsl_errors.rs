@@ -140,6 +140,26 @@ fn main() {{
 }
 
 #[test]
+fn pointer_storage_write_access_mode_errors() {
+    check_parse_and_validate_success("alias T = ptr<storage, u32, read>;");
+    check_parse_and_validate_success("alias T = ptr<storage, u32, read_write>;");
+    check_parse_and_validate_success("alias T = ptr<storage, u32, read_write,>;");
+
+    check_parse_or_validate_error("alias T = ptr<storage, u32, write>;");
+    check_parse_or_validate_error("alias T = ptr<storage, u32, write,>;");
+}
+
+#[test]
+fn pointer_atomic_store_type_requires_instantiable_address_space() {
+    check_parse_and_validate_success("alias p = ptr<workgroup, atomic<u32>>;");
+    check_parse_and_validate_success("alias p = ptr<storage, atomic<u32>, read_write>;");
+
+    check_parse_or_validate_error("alias p = ptr<function, atomic<u32>>;");
+    check_parse_or_validate_error("alias p = ptr<private, atomic<u32>>;");
+    check_parse_or_validate_error("alias p = ptr<uniform, atomic<u32>>;");
+}
+
+#[test]
 fn pointer_aliasing_two_arguments_write_errors() {
     check_parse_or_validate_error(
         r#"

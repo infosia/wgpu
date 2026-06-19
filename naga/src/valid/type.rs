@@ -1,5 +1,7 @@
 use alloc::string::String;
 
+use bit_set::BitSet;
+
 use super::Capabilities;
 use crate::{arena::Handle, ir, proc::Alignment};
 
@@ -113,6 +115,13 @@ pub enum TypeError {
     InvalidAtomicWidth(crate::ScalarKind, crate::Bytes),
     #[error("Invalid type for pointer target {0:?}")]
     InvalidPointerBase(Handle<crate::Type>),
+    #[error("Invalid access mode {access:?} for pointer type")]
+    InvalidPointerAccess { access: crate::StorageAccess },
+    #[error("Atomic store type {base:?} is not instantiable in `{space:?}` pointer address space")]
+    InvalidPointerAtomicSpace {
+        base: Handle<crate::Type>,
+        space: crate::AddressSpace,
+    },
     #[error("Unsized types like {base:?} must be in the `Storage` address space, not `{space:?}`")]
     InvalidPointerToUnsized {
         base: Handle<crate::Type>,
@@ -215,6 +224,27 @@ fn check_member_layout(
         }
         (Err(e), _) | (_, Err(e)) => Err(e),
     };
+}
+
+fn type_contains_atomic(
+    ty: Handle<crate::Type>,
+    types: &crate::UniqueArena<crate::Type>,
+    visited: &mut BitSet,
+) -> bool {
+    if !visited.insert(ty.index()) {
+        return false;
+    }
+
+    match types[ty].inner {
+        crate::TypeInner::Atomic(_) => true,
+        crate::TypeInner::Array { base, .. }
+        | crate::TypeInner::BindingArray { base, .. }
+        | crate::TypeInner::Pointer { base, .. } => type_contains_atomic(base, types, visited),
+        crate::TypeInner::Struct { ref members, .. } => members
+            .iter()
+            .any(|member| type_contains_atomic(member.ty, types, visited)),
+        _ => false,
+    }
 }
 
 /// Determine whether a pointer in `space` can be passed as an argument.
@@ -494,6 +524,20 @@ impl super::Validator {
                 let base_info = &self.types[base.index()];
                 if !base_info.flags.contains(TypeFlags::DATA) {
                     return Err(TypeError::InvalidPointerBase(base));
+                }
+
+                let base_contains_atomic =
+                    type_contains_atomic(base, &gctx.types, &mut BitSet::new());
+                match space {
+                    As::Storage { access } if access == crate::StorageAccess::STORE => {
+                        return Err(TypeError::InvalidPointerAccess { access });
+                    }
+                    As::WorkGroup => {}
+                    As::Storage { access } if access.contains(crate::StorageAccess::STORE) => {}
+                    _ if base_contains_atomic => {
+                        return Err(TypeError::InvalidPointerAtomicSpace { base, space });
+                    }
+                    _ => {}
                 }
 
                 // Runtime-sized values can only live in the `Storage` address
