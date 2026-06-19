@@ -2,6 +2,6 @@
 var gbuffer_uint: subpass_input<u32>;
 
 @fragment
-fn main() -> @location(0) vec4<u32> {
+fn main() -> @location(0) @interpolate(flat) vec4<u32> {
     return subpassLoad(gbuffer_uint);
 }

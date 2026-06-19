@@ -9,11 +9,11 @@ var<storage, read> storage_array: binding_array<Foo, 1>;
 var<uniform> uni: UniformIndex;
 
 struct FragmentIn {
-    @location(0) index: u32,
+    @location(0) @interpolate(flat) index: u32,
 }
 
 @fragment
-fn main(fragment_in: FragmentIn) -> @location(0) u32 {
+fn main(fragment_in: FragmentIn) -> @location(0) @interpolate(flat) u32 {
     let uniform_index = uni.index;
     let non_uniform_index = fragment_in.index;
 

@@ -9,7 +9,7 @@ struct VertexOutput {
 fn vertex(
     @builtin(vertex_index) vertex_index: u32,
     @builtin(instance_index) instance_index: u32,
-    @location(10) color: u32,
+    @location(10) @interpolate(flat) color: u32,
 ) -> VertexOutput {
     let tmp = vertex_index + instance_index + color;
     return VertexOutput(vec4<f32>(1.0), f32(tmp));

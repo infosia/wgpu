@@ -7291,8 +7291,7 @@ struct GenData {
 var<uniform> gen_data: GenData;
 
 struct GenVertexOutput {
-    @location(0)
-    index: u32,
+    @location(0) @interpolate(flat) index: u32,
     @builtin(position)
     position: vec4<f32>,
     @location(1)
@@ -7315,8 +7314,8 @@ fn gen_terrain_vertex(@builtin(vertex_index) vindex: u32) -> GenVertexOutput {
 
 
 struct GenFragmentOutput {
-    @location(0) vert_component: u32,
-    @location(1) index: u32,
+    @location(0) @interpolate(flat) vert_component: u32,
+    @location(1) @interpolate(flat) index: u32,
 }
 
 @fragment

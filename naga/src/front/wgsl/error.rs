@@ -229,7 +229,9 @@ pub(crate) enum Error<'a> {
     UnknownDiagnosticRuleName(Span),
     SizeAttributeTooLow(Span, u32),
     AlignAttributeTooLow(Span, Alignment),
+    AlignAttributeTooHigh(Span),
     NonPowerOfTwoAlignAttribute(Span),
+    SizeAttributeOnNonCreationFixedFootprint(Span),
     InconsistentBinding(Span),
     TypeNotConstructible(Span),
     TypeNotInferable(Span),
@@ -372,6 +374,7 @@ pub(crate) enum Error<'a> {
     InvalidWorkGroupUniformLoad(Span),
     Internal(&'static str),
     ExpectedConstExprConcreteIntegerScalar(Span),
+    WorkgroupSizeMixedConcreteTypes(Span),
     ExpectedNonNegative(Span),
     ExpectedPositiveArrayLength(Span),
     MissingWorkgroupSize(Span),
@@ -794,9 +797,24 @@ impl<'a> Error<'a> {
                 labels: vec![(bad_span, format!("must be at least {min_align}").into())],
                 notes: vec![],
             },
+            Error::AlignAttributeTooHigh(bad_span) => ParseError {
+                message: "struct member alignment must be at most 2147483647".to_string(),
+                labels: vec![(bad_span, "must be at most 2147483647".into())],
+                notes: vec![],
+            },
             Error::NonPowerOfTwoAlignAttribute(bad_span) => ParseError {
                 message: "struct member alignment must be a power of 2".to_string(),
                 labels: vec![(bad_span, "must be a power of 2".into())],
+                notes: vec![],
+            },
+            Error::SizeAttributeOnNonCreationFixedFootprint(bad_span) => ParseError {
+                message:
+                    "struct member size attribute requires a creation-fixed footprint type"
+                        .to_string(),
+                labels: vec![(
+                    bad_span,
+                    "member type does not have a creation-fixed footprint".into(),
+                )],
                 notes: vec![],
             },
             Error::InconsistentBinding(span) => ParseError {
@@ -1117,6 +1135,15 @@ impl<'a> Error<'a> {
                 )
                 .to_string(),
                 labels: vec![(span, "must resolve to `u32` or `i32`".into())],
+                notes: vec![],
+            },
+            Error::WorkgroupSizeMixedConcreteTypes(span) => ParseError {
+                message: "workgroup size operands must have matching concrete integer types"
+                    .to_string(),
+                labels: vec![(
+                    span,
+                    "concrete type does not match prior workgroup size operand".into(),
+                )],
                 notes: vec![],
             },
             Error::ExpectedNonNegative(span) => ParseError {

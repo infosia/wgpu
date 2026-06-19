@@ -140,11 +140,15 @@ enum Rule {
 
 struct ParsedAttribute<T> {
     value: Option<T>,
+    name_span: Option<Span>,
 }
 
 impl<T> Default for ParsedAttribute<T> {
     fn default() -> Self {
-        Self { value: None }
+        Self {
+            value: None,
+            name_span: None,
+        }
     }
 }
 
@@ -154,6 +158,7 @@ impl<T> ParsedAttribute<T> {
             return Err(Box::new(Error::RepeatedAttribute(name_span)));
         }
         self.value = Some(value);
+        self.name_span = Some(name_span);
         Ok(())
     }
 }
@@ -219,9 +224,11 @@ impl<'a> BindingParser<'a> {
                 self.interpolation
                     .set(conv::map_interpolation(raw, span)?, name_span)?;
                 if lexer.next_if(Token::Separator(',')) {
-                    let (raw, span) = lexer.next_ident_with_span()?;
-                    self.sampling
-                        .set(conv::map_sampling(raw, span)?, name_span)?;
+                    if !matches!(lexer.peek().0, Token::Paren(')')) {
+                        let (raw, span) = lexer.next_ident_with_span()?;
+                        self.sampling
+                            .set(conv::map_sampling(raw, span)?, name_span)?;
+                    }
                 }
                 lexer.next_if(Token::Separator(','));
                 lexer.expect(Token::Paren(')'))?;
@@ -2156,6 +2163,12 @@ impl Parser {
             }
             (Token::Word("const"), _) => {
                 ensure_no_diag_attrs("`const`s".into(), diagnostic_filters)?;
+                if let Some(span) = id.name_span {
+                    return Err(Box::new(Error::UnknownAttribute(span)));
+                }
+                if let Some(span) = workgroup_size.name_span {
+                    return Err(Box::new(Error::UnknownAttribute(span)));
+                }
 
                 let (name, ty) = self.optionally_typed_ident(lexer, &mut ctx)?;
 
@@ -2172,6 +2185,9 @@ impl Parser {
             }
             (Token::Word("override"), _) => {
                 ensure_no_diag_attrs("`override`s".into(), diagnostic_filters)?;
+                if let Some(span) = workgroup_size.name_span {
+                    return Err(Box::new(Error::UnknownAttribute(span)));
+                }
 
                 let (name, ty) = self.optionally_typed_ident(lexer, &mut ctx)?;
 
@@ -2192,6 +2208,15 @@ impl Parser {
             }
             (Token::Word("var"), _) => {
                 ensure_no_diag_attrs("`var`s".into(), diagnostic_filters)?;
+                if let Some(span) = stage.name_span {
+                    return Err(Box::new(Error::UnknownAttribute(span)));
+                }
+                if let Some(span) = id.name_span {
+                    return Err(Box::new(Error::UnknownAttribute(span)));
+                }
+                if let Some(span) = workgroup_size.name_span {
+                    return Err(Box::new(Error::UnknownAttribute(span)));
+                }
 
                 let mut var = self.variable_decl(lexer, &mut ctx)?;
                 var.binding = binding.take();
@@ -2200,6 +2225,16 @@ impl Parser {
                 Some(ast::GlobalDeclKind::Var(var))
             }
             (Token::Word("fn"), _) => {
+                if stage.value.is_none() {
+                    if let Some(span) = workgroup_size.name_span {
+                        return Err(Box::new(Error::UnknownAttribute(span)));
+                    }
+                } else if !stage.value.is_some_and(ShaderStage::compute_like) {
+                    if let Some(span) = workgroup_size.name_span {
+                        return Err(Box::new(Error::UnknownAttribute(span)));
+                    }
+                }
+
                 let diagnostic_filter_leaf = Self::write_diagnostic_filters(
                     &mut out.diagnostic_filters,
                     diagnostic_filters,

@@ -20,7 +20,7 @@ use crate::{
 };
 use crate::{common::ForDebugWithTypes, proc::LayoutErrorInner};
 use crate::{ir, proc};
-use crate::{Arena, FastHashMap, FastIndexMap, Handle, Span};
+use crate::{Arena, FastHashMap, FastIndexMap, Handle, Span, UniqueArena};
 
 use construction::Constructor;
 use template_list::TemplateListIter;
@@ -1293,6 +1293,19 @@ impl From<bool> for MustUse {
     }
 }
 
+fn has_creation_fixed_footprint(types: &UniqueArena<ir::Type>, ty: Handle<ir::Type>) -> bool {
+    match types[ty].inner {
+        ir::TypeInner::Array { base, size, .. } => match size {
+            ir::ArraySize::Constant(_) => has_creation_fixed_footprint(types, base),
+            ir::ArraySize::Dynamic | ir::ArraySize::Pending(_) => false,
+        },
+        ir::TypeInner::Struct { ref members, .. } => members
+            .iter()
+            .all(|member| has_creation_fixed_footprint(types, member.ty)),
+        _ => true,
+    }
+}
+
 pub struct Lowerer<'source, 'temp> {
     index: &'temp Index<'source>,
 }
@@ -1676,8 +1689,31 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                     // TODO: replace with try_map once stabilized
                     let mut workgroup_size_out = [1; 3];
                     let mut workgroup_size_overrides_out = [None; 3];
+                    let mut concrete_scalar_kind = None;
                     for (i, size) in workgroup_size.into_iter().enumerate() {
                         if let Some(size_expr) = size {
+                            let span = ctx.ast_expressions.get_span(size_expr);
+                            let kind = match ctx.ast_expressions[size_expr] {
+                                ast::Expression::Literal(ast::Literal::Number(Number::I32(_))) => {
+                                    Some(ir::ScalarKind::Sint)
+                                }
+                                ast::Expression::Literal(ast::Literal::Number(Number::U32(_))) => {
+                                    Some(ir::ScalarKind::Uint)
+                                }
+                                _ => None,
+                            };
+                            match kind {
+                                Some(kind) => {
+                                    if concrete_scalar_kind.is_some_and(|prior| prior != kind) {
+                                        return Err(Box::new(
+                                            Error::WorkgroupSizeMixedConcreteTypes(span),
+                                        ));
+                                    }
+                                    concrete_scalar_kind = Some(kind);
+                                }
+                                None => {}
+                            }
+
                             match self.const_u32(size_expr, &mut ctx.as_const()) {
                                 Ok(value) => {
                                     workgroup_size_out[i] = value.0;
@@ -4700,24 +4736,30 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
             let ty = self.resolve_ast_type(&member.ty, &mut ctx.as_const())?;
 
             ctx.layouter.update(ctx.module.to_ctx()).map_err(|err| {
-                let LayoutErrorInner::TooLarge = err.inner else {
-                    unreachable!("unexpected layout error: {err:?}");
-                };
-                // Since anonymous types of struct members don't get a span,
-                // associate the error with the member. The layouter could have
-                // failed on any type that was pending layout, but if it wasn't
-                // the current struct member, it wasn't a struct member at all,
-                // because we resolve struct members one-by-one.
-                if ty == err.ty {
-                    Box::new(Error::StructMemberTooLarge {
-                        member_name_span: member.name.span,
-                    })
-                } else {
-                    // Lots of type definitions don't get spans, so this error
-                    // message may not be very useful.
-                    Box::new(Error::TypeTooLarge {
-                        span: ctx.module.types.get_span(err.ty),
-                    })
+                match err.inner {
+                    LayoutErrorInner::TooLarge => {
+                        // Since anonymous types of struct members don't get a span,
+                        // associate the error with the member. The layouter could have
+                        // failed on any type that was pending layout, but if it wasn't
+                        // the current struct member, it wasn't a struct member at all,
+                        // because we resolve struct members one-by-one.
+                        if ty == err.ty {
+                            Box::new(Error::StructMemberTooLarge {
+                                member_name_span: member.name.span,
+                            })
+                        } else {
+                            // Lots of type definitions don't get spans, so this error
+                            // message may not be very useful.
+                            Box::new(Error::TypeTooLarge {
+                                span: ctx.module.types.get_span(err.ty),
+                            })
+                        }
+                    }
+                    LayoutErrorInner::InvalidArrayElementType(_)
+                    | LayoutErrorInner::InvalidStructMemberType(_, _)
+                    | LayoutErrorInner::NonPowerOfTwoWidth => {
+                        unreachable!("unexpected layout error: {err:?}")
+                    }
                 }
             })?;
 
@@ -4726,6 +4768,11 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
 
             let member_size = if let Some(size_expr) = member.size {
                 let (size, span) = self.const_u32(size_expr, &mut ctx.as_const())?;
+                if !has_creation_fixed_footprint(&ctx.module.types, ty) {
+                    return Err(Box::new(Error::SizeAttributeOnNonCreationFixedFootprint(
+                        span,
+                    )));
+                }
                 if size < member_min_size {
                     return Err(Box::new(Error::SizeAttributeTooLow(span, member_min_size)));
                 } else {
@@ -4737,6 +4784,9 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
 
             let member_alignment = if let Some(align_expr) = member.align {
                 let (align, span) = self.const_u32(align_expr, &mut ctx.as_const())?;
+                if align > i32::MAX as u32 {
+                    return Err(Box::new(Error::AlignAttributeTooHigh(span)));
+                }
                 if let Some(alignment) = proc::Alignment::new(align) {
                     if alignment < member_min_alignment {
                         return Err(Box::new(Error::AlignAttributeTooLow(
@@ -4771,7 +4821,7 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
             });
 
             offset += member_size;
-            if offset > crate::valid::MAX_TYPE_SIZE {
+            if offset > u32::MAX / 2 {
                 return Err(Box::new(Error::TypeTooLarge { span }));
             }
         }
@@ -4954,7 +5004,12 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                     blend_src,
                     per_primitive,
                 };
-                binding.apply_default_interpolation(&ctx.module.types[ty].inner);
+                if matches!(
+                    ctx.module.types[ty].inner.scalar_kind(),
+                    Some(ir::ScalarKind::Float)
+                ) {
+                    binding.apply_default_interpolation(&ctx.module.types[ty].inner);
+                }
                 Some(binding)
             }
             None => None,

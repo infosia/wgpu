@@ -56,6 +56,181 @@ fn check_success(input: &str) {
     }
 }
 
+#[track_caller]
+fn check_parse_and_validate_success(input: &str) {
+    let module = naga::front::wgsl::parse_str(input)
+        .unwrap_or_else(|err| panic!("{}", err.emit_to_string(input)));
+    valid::Validator::new(valid::ValidationFlags::all(), Capabilities::all())
+        .validate(&module)
+        .unwrap_or_else(|err| panic!("{}", err.emit_to_string(input)));
+}
+
+#[track_caller]
+fn check_parse_or_validate_error(input: &str) {
+    if let Ok(module) = naga::front::wgsl::parse_str(input) {
+        valid::Validator::new(valid::ValidationFlags::all(), Capabilities::all())
+            .validate(&module)
+            .expect_err("expected validation to fail");
+    }
+}
+
+#[test]
+fn shader_io_integral_location_requires_explicit_flat_interpolation() {
+    check_parse_or_validate_error(
+        r#"
+@fragment
+fn fs(@location(0) value: i32) {}
+"#,
+    );
+    check_parse_and_validate_success(
+        r#"
+@fragment
+fn fs(@location(0) @interpolate(flat) value: i32) {}
+"#,
+    );
+    check_parse_and_validate_success(
+        r#"
+@fragment
+fn fs(@location(0) value: f32) {}
+"#,
+    );
+}
+
+#[test]
+fn shader_io_stage_attributes_are_only_entry_point_attributes() {
+    for attr in ["@compute", "@fragment", "@vertex"] {
+        check_parse_or_validate_error(&format!("{attr} var<private> priv_var: i32;"));
+        check_parse_or_validate_error(&format!(
+            "{attr} @group(0) @binding(0) var<storage> stor_var: i32;"
+        ));
+    }
+}
+
+#[test]
+fn shader_io_workgroup_size_is_only_compute_entry_point_attribute() {
+    check_parse_and_validate_success("@compute @workgroup_size(1) fn main() {}");
+    for source in [
+        "@workgroup_size(1) @fragment fn main() {}",
+        "@workgroup_size(1) @vertex fn main() -> @builtin(position) vec4f { return vec4f(1); }",
+        "@workgroup_size(1) fn helper() {}",
+        "@workgroup_size(1) const a: i32 = 4;",
+        "@workgroup_size(1) @group(0) @binding(0) var<storage> a: i32;",
+    ] {
+        check_parse_or_validate_error(source);
+    }
+}
+
+#[test]
+fn shader_io_workgroup_size_rejects_mixed_concrete_operand_types() {
+    for source in [
+        "@compute @workgroup_size(1, 1, 1) fn main() {}",
+        "@compute @workgroup_size(1i, 1i, 1i) fn main() {}",
+        "@compute @workgroup_size(1u, 1u, 1u) fn main() {}",
+    ] {
+        check_parse_and_validate_success(source);
+    }
+
+    for source in [
+        "@compute @workgroup_size(8i, 8i, 8u) fn main() {}",
+        "@compute @workgroup_size(1u, 1i, 1i) fn main() {}",
+        "@compute @workgroup_size(1i, 1u, 1i) fn main() {}",
+        "@compute @workgroup_size(1i, 1i, 1u) fn main() {}",
+    ] {
+        check_parse_or_validate_error(source);
+    }
+}
+
+#[test]
+fn shader_io_location_is_not_compute_entry_io() {
+    for source in [
+        r#"
+@compute @workgroup_size(1)
+fn main(@location(0) input: f32) {}
+"#,
+        r#"
+struct Output {
+    @location(0) value: f32,
+}
+@compute @workgroup_size(1)
+fn main() -> Output { return Output(0.0); }
+"#,
+    ] {
+        check_parse_or_validate_error(source);
+    }
+}
+
+#[test]
+fn shader_io_id_is_only_override_attribute() {
+    check_parse_and_validate_success(
+        r#"
+@id(1) override a = 4;
+@compute @workgroup_size(1) fn main() {}
+"#,
+    );
+    for decl in ["@id(1) const a = 4;", "@id(1) var<private> a = 4;"] {
+        check_parse_or_validate_error(&format!(
+            "{decl}\n@compute @workgroup_size(1) fn main() {{}}"
+        ));
+    }
+}
+
+#[test]
+fn shader_io_align_rejects_values_larger_than_max_i32() {
+    check_parse_and_validate_success(
+        r#"
+struct S { @align(1073741824) a: i32 }
+@group(0) @binding(0) var<storage> a: S;
+@compute @workgroup_size(1) fn main() { _ = a; }
+"#,
+    );
+    check_parse_or_validate_error(
+        r#"
+struct S { @align(2147483648) a: i32 }
+@group(0) @binding(0) var<storage> a: S;
+@compute @workgroup_size(1) fn main() { _ = a; }
+"#,
+    );
+}
+
+#[test]
+fn shader_io_size_requires_creation_fixed_footprint() {
+    check_parse_and_validate_success(
+        r#"
+struct S { @size(64) a: array<f32, 4> }
+@group(0) @binding(0) var<storage> a: S;
+@compute @workgroup_size(1) fn main() { _ = a.a[0]; }
+"#,
+    );
+    check_parse_or_validate_error(
+        r#"
+struct S { @size(64) a: array<f32> }
+@group(0) @binding(0) var<storage> a: S;
+@compute @workgroup_size(1) fn main() { _ = a.a[0]; }
+"#,
+    );
+}
+
+#[test]
+fn shader_io_large_size_attribute_is_valid() {
+    check_parse_and_validate_success(
+        r#"
+struct S { @size(2147483647) a: f32 }
+@group(0) @binding(0) var<storage> a: S;
+@compute @workgroup_size(1) fn main() { _ = a; }
+"#,
+    );
+}
+
+#[test]
+fn shader_io_interpolate_accepts_trailing_comma_after_one_argument() {
+    check_parse_and_validate_success(
+        r#"
+@fragment
+fn fs(@location(0) @interpolate(flat,) value: i32) {}
+"#,
+    );
+}
+
 #[test]
 fn very_negative_integers() {
     // wgpu#4492
@@ -590,13 +765,13 @@ fn struct_member_size_too_low() {
     check(
         r#"
             struct Bar {
-                @size(0) data: array<f32>
+                @size(0) data: f32
             }
         "#,
         r#"error: struct member size must be at least 4
   ┌─ wgsl:3:23
   │
-3 │                 @size(0) data: array<f32>
+3 │                 @size(0) data: f32
   │                       ^ must be at least 4
 
 "#,
@@ -4463,7 +4638,7 @@ fn max_type_size_large_array() {
     // The total size of an array is not resolved until validation. Type aliases
     // don't get spans so the error isn't very helpful.
     check_validation! {
-        "alias LargeArray = array<u32, (1 << 28) + 1>;":
+        "alias LargeArray = array<u32, (1 << 29) + 1>;":
         Err(naga::valid::ValidationError::Layouter(
                 naga::proc::LayoutError {
                     inner: naga::proc::LayoutErrorInner::TooLarge,
@@ -4479,9 +4654,9 @@ fn max_type_size_array_of_arrays() {
     // during lowering. Anonymous types don't get spans so this error isn't very
     // helpful.
     check(
-        "alias ArrayOfArrays = array<array<u32, (1 << 28) + 1>, 22>;",
+        "alias ArrayOfArrays = array<array<u32, (1 << 29) + 1>, 22>;",
         r#"error: type is too large
- = note: the maximum size is 1073741824 bytes
+ = note: the maximum size is 2147483648 bytes
 
 "#,
     );
@@ -4508,7 +4683,7 @@ fn max_type_size_override_array() {
         .validate(&module)
         .expect("module should validate");
 
-    let overrides = hashbrown::HashMap::from([(String::from("SIZE"), f64::from((1 << 28) + 1))]);
+    let overrides = hashbrown::HashMap::from([(String::from("SIZE"), f64::from((1 << 29) + 1))]);
     let err = naga::back::pipeline_constants::process_overrides(&module, &info, None, &overrides)
         .unwrap_err();
     let naga::back::pipeline_constants::PipelineConstantError::ValidationError(err) = err else {
@@ -4530,16 +4705,16 @@ fn max_type_size_array_in_struct() {
     check(
         r#"
             struct ContainsLargeArray {
-                arr: array<u32, (1 << 28) + 1>,
+                arr: array<u32, (1 << 29) + 1>,
             }
         "#,
         r#"error: struct member is too large
   ┌─ wgsl:3:17
   │
-3 │                 arr: array<u32, (1 << 28) + 1>,
+3 │                 arr: array<u32, (1 << 29) + 1>,
   │                 ^^^ this member exceeds the maximum size
   │
-  = note: the maximum size is 1073741824 bytes
+  = note: the maximum size is 2147483648 bytes
 
 "#,
     );
@@ -4552,20 +4727,20 @@ fn max_type_size_two_arrays_in_struct() {
     check(
         r#"
             struct TwoArrays {
-                arr1: array<u32, 1 << 27>,
-                arr2: array<u32, (1 << 27) + 1>,
+                arr1: array<u32, 1 << 28>,
+                arr2: array<u32, (1 << 28) + 1>,
             }
         "#,
         "error: type is too large
   ┌─ wgsl:2:13
   │\x20\x20
 2 │ ╭             struct TwoArrays {
-3 │ │                 arr1: array<u32, 1 << 27>,
-4 │ │                 arr2: array<u32, (1 << 27) + 1>,
+3 │ │                 arr1: array<u32, 1 << 28>,
+4 │ │                 arr2: array<u32, (1 << 28) + 1>,
 5 │ │             }
   │ ╰─────────────^ this type exceeds the maximum size
   │\x20\x20
-  = note: the maximum size is 1073741824 bytes
+  = note: the maximum size is 2147483648 bytes
 
 ",
     );
@@ -4580,7 +4755,7 @@ fn max_type_size_array_of_structs() {
             struct NotVeryBigStruct {
                 data: u32,
             }
-            alias BigArrayOfStructs = array<NotVeryBigStruct, (1 << 28) + 1>;
+            alias BigArrayOfStructs = array<NotVeryBigStruct, (1 << 29) + 1>;
         "#:
         Err(naga::valid::ValidationError::Layouter(
                 naga::proc::LayoutError {

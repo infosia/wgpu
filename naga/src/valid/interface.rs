@@ -76,6 +76,8 @@ pub enum VaryingError {
     },
     #[error("Interpolation must be specified on vertex shader outputs and fragment shader inputs")]
     MissingInterpolation,
+    #[error("Location {location} interpolation of an integer has to be flat")]
+    InvalidIntegerInterpolation { location: u32 },
     #[error("Built-in {0:?} is not available at this stage")]
     InvalidBuiltInStage(crate::BuiltIn),
     #[error("Built-in type for {0:?} is invalid. Found {1:?}")]
@@ -676,6 +678,20 @@ impl VaryingContext<'_> {
                 blend_src,
                 per_primitive,
             } => {
+                if matches!(
+                    self.stage,
+                    crate::ShaderStage::Compute
+                        | crate::ShaderStage::Task
+                        | crate::ShaderStage::RayGeneration
+                        | crate::ShaderStage::AnyHit
+                        | crate::ShaderStage::ClosestHit
+                        | crate::ShaderStage::Miss
+                ) {
+                    return Err(VaryingError::InvalidAttributeInStage(
+                        "location", self.stage,
+                    ));
+                }
+
                 if per_primitive && !self.capabilities.contains(Capabilities::MESH_SHADER) {
                     return Err(VaryingError::UnsupportedCapability(
                         Capabilities::MESH_SHADER,
@@ -798,10 +814,16 @@ impl VaryingContext<'_> {
                             }
                         }
                         Some(_) => {
-                            if needs_interpolation
-                                && interpolation != Some(crate::Interpolation::Flat)
-                            {
-                                return Err(VaryingError::InvalidInterpolation);
+                            if needs_interpolation {
+                                match interpolation {
+                                    Some(crate::Interpolation::Flat) => {}
+                                    Some(_) => return Err(VaryingError::InvalidInterpolation),
+                                    None => {
+                                        return Err(VaryingError::InvalidIntegerInterpolation {
+                                            location,
+                                        })
+                                    }
+                                }
                             }
                         }
                         None => return Err(VaryingError::InvalidType(ty)),
