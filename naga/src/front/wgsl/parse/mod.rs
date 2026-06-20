@@ -92,7 +92,16 @@ impl<'a> ExpressionContext<'a, '_, '_> {
         let start = lexer.start_byte_offset();
         let mut accumulator = parser(lexer, self)?;
         while let Some(op) = classifier(lexer.peek().0) {
-            let _ = lexer.next();
+            let token = lexer.next();
+            match (token.0, op) {
+                (Token::DecrementOperation, crate::BinaryOperator::Subtract) => {
+                    lexer.push_synthetic((Token::Operation('-'), token.1));
+                }
+                (Token::IncrementOperation, crate::BinaryOperator::Add) => {
+                    lexer.push_synthetic((Token::Operation('+'), token.1));
+                }
+                _ => {}
+            }
             let left = accumulator;
             let right = parser(lexer, self)?;
             accumulator = self.expressions.append(
@@ -797,7 +806,13 @@ impl Parser {
                                     lexer,
                                     |token| match token {
                                         Token::Operation('+') => Some(crate::BinaryOperator::Add),
+                                        Token::IncrementOperation => {
+                                            Some(crate::BinaryOperator::Add)
+                                        }
                                         Token::Operation('-') => {
+                                            Some(crate::BinaryOperator::Subtract)
+                                        }
+                                        Token::DecrementOperation => {
                                             Some(crate::BinaryOperator::Subtract)
                                         }
                                         _ => None,

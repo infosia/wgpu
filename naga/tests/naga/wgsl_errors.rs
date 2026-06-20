@@ -5256,6 +5256,27 @@ fn const_eval_value_errors() {
     assert!(variant("f32(abs(1))").is_ok());
     assert!(variant("f32(abs(-9223372036854775807))").is_ok());
     assert!(variant("f32(abs(-9223372036854775807 - 1))").is_ok());
+
+    assert!(variant("atanh(0.99999988f) > 8.3f").is_ok());
+    assert!(variant("atanh(0.99999988f) < 8.4f").is_ok());
+}
+
+#[test]
+fn decrement_token_in_expression_context() {
+    check_parse_and_validate_success(
+        r#"
+const a = 7;
+const b = 3;
+const r = a--b;
+const_assert r == 10;
+
+fn decrement_and_increment_statements() {
+    var x = 1;
+    x--;
+    x++;
+}
+"#,
+    );
 }
 
 #[test]
@@ -6284,6 +6305,28 @@ fn enable_without_capability() {
 
 #[test]
 fn bitwise_shift_errors() {
+    check_parse_and_validate_success(
+        r#"
+const zero_shift_64 = 0 << 64u;
+const zero_shift_256 = 0 << 256u;
+const nonzero_shift = 1 << 16u;
+const_assert zero_shift_64 == 0;
+const_assert zero_shift_256 == 0;
+const_assert nonzero_shift == 65536;
+const negative_shift_right_64 = -8 >> 64u;
+const negative_shift_right_256 = -8 >> 256u;
+const positive_shift_right_64 = 8 >> 64u;
+const positive_shift_right_256 = 8 >> 256u;
+const negative_shift_right_in_range = -8 >> 2u;
+const_assert negative_shift_right_64 == -1;
+const_assert negative_shift_right_256 == -1;
+const_assert positive_shift_right_64 == 0;
+const_assert positive_shift_right_256 == 0;
+const_assert negative_shift_right_in_range == -2;
+"#,
+    );
+    check_error_matches("const N = 1 << 64u;", "overflowed");
+
     // 32-bit const by const >= bitwidth
     check_error_matches(
         "const N: u32 = 1u >> 32;",

@@ -639,6 +639,10 @@ impl<'a> Lexer<'a> {
         token
     }
 
+    pub(in crate::front::wgsl) fn push_synthetic(&mut self, token: TokenSpan<'a>) {
+        self.tokens.push((token, self.input));
+    }
+
     /// If the next token matches it's consumed and true is returned
     pub(in crate::front::wgsl) fn next_if(&mut self, what: Token<'_>) -> bool {
         let input = self.input;

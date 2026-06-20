@@ -1578,15 +1578,14 @@ impl<'a> ConstantEvaluator<'a> {
             crate::MathFunction::Acosh => {
                 component_wise_float!(self, span, [arg], |e| { Ok([e.acosh()]) })
             }
-            crate::MathFunction::Atanh => {
-                component_wise_float!(self, span, [arg], |e| {
-                    if e.abs() < One::one() {
-                        Ok([e.atanh()])
-                    } else {
-                        Err(ConstantEvaluatorError::InvalidMathArgValue("atanh".into()))
-                    }
-                })
-            }
+            crate::MathFunction::Atanh => component_wise_float(self, span, [arg], |e| match e {
+                Float::Abstract([e]) if e.abs() < 1.0 => Ok(Float::Abstract([libm::atanh(e)])),
+                Float::F32([e]) if e.abs() < 1.0 => Ok(Float::F32([(e as f64).atanh() as f32])),
+                Float::F16([e]) if e.abs() < f16::one() => {
+                    Ok(Float::F16([f16::from_f64(f64::from(e).atanh())]))
+                }
+                _ => Err(ConstantEvaluatorError::InvalidMathArgValue("atanh".into())),
+            }),
             crate::MathFunction::Radians => {
                 component_wise_float!(self, span, [arg], |e1| { Ok([e1.to_radians()]) })
             }
@@ -2911,14 +2910,21 @@ impl<'a> ConstantEvaluator<'a> {
                         (Literal::AbstractInt(a), Literal::U32(b)) => {
                             Literal::AbstractInt(match op {
                                 BinaryOperator::ShiftLeft => {
-                                    if (if a.is_negative() { !a } else { a }).leading_zeros() <= b {
+                                    if a == 0 {
+                                        0
+                                    } else if (if a.is_negative() { !a } else { a }).leading_zeros()
+                                        <= b
+                                    {
                                         return Err(ConstantEvaluatorError::Overflow(
                                             "<<".to_string(),
                                         ));
+                                    } else {
+                                        a.checked_shl(b).unwrap_or(0)
                                     }
-                                    a.checked_shl(b).unwrap_or(0)
                                 }
-                                BinaryOperator::ShiftRight => a.checked_shr(b).unwrap_or(0),
+                                BinaryOperator::ShiftRight => {
+                                    a.checked_shr(b).unwrap_or(if a < 0 { -1 } else { 0 })
+                                }
                                 _ => return Err(ConstantEvaluatorError::InvalidBinaryOpArgs),
                             })
                         }
