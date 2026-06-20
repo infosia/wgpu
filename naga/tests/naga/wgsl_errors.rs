@@ -641,6 +641,56 @@ fn main() {
 }
 
 #[test]
+fn graph_uniformity_derivative_result_is_nonuniform() {
+    check_parse_or_validate_error(
+        r#"
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+@fragment
+fn main() {
+    let call = dpdx(1);
+    if call > 0.0 {
+        let t = textureSample(tex, samp, vec2f(0.0));
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_pointer_param_output_depends_on_other_pointer_contents() {
+    check_parse_or_validate_error(
+        r#"
+struct U {
+    values: array<u32, 4>,
+}
+
+@group(0) @binding(0) var<storage, read_write> nonuniform_values: array<u32, 4>;
+@group(0) @binding(1) var<uniform> uniform_values: U;
+
+fn foo(p: ptr<function, u32>, q: ptr<function, u32>) {
+    if *p > 0u {
+        *p = *q;
+    } else {
+        *q = *q + 1u;
+    }
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    var x = nonuniform_values[0];
+    var y = uniform_values.values[1];
+    foo(&x, &y);
+    if y > 0u {
+        workgroupBarrier();
+    }
+}
+"#,
+    );
+}
+
+#[test]
 fn function_call_pointer_arguments_must_match_parameter_pointer_type() {
     check_parse_or_validate_error(
         r#"

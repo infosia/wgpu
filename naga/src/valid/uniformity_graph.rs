@@ -329,7 +329,7 @@ impl<'a> Builder<'a> {
                 next(cf)
             }
             S::Store { pointer, value } => {
-                self.process_store(pointer, value);
+                self.process_store(pointer, value, cf);
                 next(cf)
             }
             S::ImageStore {
@@ -851,6 +851,7 @@ impl<'a> Builder<'a> {
         &mut self,
         pointer: Handle<crate::Expression>,
         value: Handle<crate::Expression>,
+        cf: NodeId,
     ) {
         let value_node = self.value_node(value);
         let pointer_node = self.pointer_value_node(pointer);
@@ -863,6 +864,7 @@ impl<'a> Builder<'a> {
                 let new_node = self.fresh(None);
                 self.edge(new_node, value_node);
                 self.edge(new_node, pointer_node);
+                self.edge(new_node, cf);
                 if partial {
                     if let Some(previous) = self.variables.get(&local).copied() {
                         self.edge(new_node, previous);
@@ -875,6 +877,7 @@ impl<'a> Builder<'a> {
                 let new_node = self.fresh(None);
                 self.edge(new_node, value_node);
                 self.edge(new_node, pointer_node);
+                self.edge(new_node, cf);
                 if partial {
                     if let Some(previous) = self
                         .pointer_parameter_contents
@@ -1152,6 +1155,7 @@ impl<'a> Builder<'a> {
                 }
                 if level.implicit_derivatives() {
                     self.add_derivative_requirement(cf);
+                    self.edge(node, self.may_be_non_uniform);
                 }
                 node
             }
@@ -1198,6 +1202,7 @@ impl<'a> Builder<'a> {
             E::Derivative { expr, .. } => {
                 let node = self.unary_node(handle, expr);
                 self.add_derivative_requirement(cf);
+                self.edge(node, self.may_be_non_uniform);
                 node
             }
             E::Relational { argument, .. } => self.unary_node(handle, argument),
