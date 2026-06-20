@@ -9,6 +9,7 @@ mod function;
 mod handles;
 mod interface;
 mod r#type;
+mod uniformity_graph;
 
 use alloc::{boxed::Box, string::String, vec, vec::Vec};
 use core::ops;

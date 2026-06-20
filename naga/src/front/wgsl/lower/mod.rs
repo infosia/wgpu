@@ -3126,8 +3126,14 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
             }
         } else if let Some((axis, ctrl)) = conv::map_derivative(function_name) {
             let mut args = ctx.prepare_args(arguments, 1, function_span);
-            let expr = self.expression(args.next()?, ctx)?;
+            let expr_ast = args.next()?;
+            let expr = self.expression_for_abstract(expr_ast, ctx)?;
             args.finish()?;
+            let expr = ctx.try_automatic_conversion_for_leaf_scalar(
+                expr,
+                ir::Scalar::F32,
+                ctx.ast_expressions.get_span(expr_ast),
+            )?;
 
             (
                 ir::Expression::Derivative { axis, ctrl, expr },

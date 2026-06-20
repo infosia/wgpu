@@ -75,6 +75,572 @@ fn check_parse_or_validate_error(input: &str) {
 }
 
 #[test]
+fn graph_uniformity_accepts_uniform_local_if_around_texture_sample() {
+    check_parse_and_validate_success(
+        r#"
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+@fragment
+fn m() {
+    var x: u32;
+    if x > 0u {
+        let t = textureSample(tex, samp, vec2f(0.0));
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_accepts_uniform_buffer_if_around_dpdx() {
+    check_parse_and_validate_success(
+        r#"
+struct U {
+    x: u32,
+}
+
+@group(0) @binding(0) var<uniform> u: U;
+
+@fragment
+fn m() {
+    if u.x > 0u {
+        let d = dpdx(1.0);
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_rejects_storage_if_around_texture_sample() {
+    check_parse_or_validate_error(
+        r#"
+@group(0) @binding(0) var<storage, read_write> s: u32;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+
+@fragment
+fn m() {
+    if s > 0u {
+        let t = textureSample(tex, samp, vec2f(0.0));
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_rejects_storage_if_around_dpdx() {
+    check_parse_or_validate_error(
+        r#"
+@group(0) @binding(0) var<storage, read_write> s: u32;
+
+@fragment
+fn m() {
+    if s > 0u {
+        let d = dpdx(1.0);
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_rejects_storage_if_around_workgroup_barrier() {
+    check_parse_or_validate_error(
+        r#"
+@group(0) @binding(0) var<storage, read_write> s: u32;
+
+@compute @workgroup_size(1)
+fn m() {
+    if s > 0u {
+        workgroupBarrier();
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_diagnostic_off_suppresses_fragment_derivative_cases() {
+    check_parse_and_validate_success(
+        r#"
+diagnostic(off, derivative_uniformity);
+
+@group(0) @binding(0) var<storage, read_write> s: u32;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+
+@fragment
+fn texture_case() {
+    if s > 0u {
+        let t = textureSample(tex, samp, vec2f(0.0));
+    }
+}
+
+@fragment
+fn derivative_case() {
+    if s > 0u {
+        let d = dpdx(1.0);
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_accepts_read_only_storage_texture_if_around_barrier() {
+    check_parse_and_validate_success(
+        r#"
+@group(0) @binding(0) var ro_storage_texture: texture_storage_2d<rgba8unorm, read>;
+
+@compute @workgroup_size(16)
+fn main() {
+    if textureLoad(ro_storage_texture, vec2u()).x == 0.0 {
+        storageBarrier();
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_accepts_read_only_storage_buffer_if_around_barrier() {
+    check_parse_and_validate_success(
+        r#"
+struct B {
+    values: array<u32, 4>,
+}
+
+@group(0) @binding(0) var<storage, read> ro_buffer: B;
+
+@compute @workgroup_size(16)
+fn main() {
+    if ro_buffer.values[0u] == 0u {
+        storageBarrier();
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_rejects_read_write_storage_texture_if_around_barrier() {
+    check_parse_or_validate_error(
+        r#"
+@group(0) @binding(0) var rw_storage_texture: texture_storage_2d<rgba8unorm, read_write>;
+
+@compute @workgroup_size(16)
+fn main() {
+    if textureLoad(rw_storage_texture, vec2u()).x == 0.0 {
+        storageBarrier();
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn derivatives_accept_abstract_int_literals() {
+    check_parse_and_validate_success(
+        r#"
+@fragment
+fn m() {
+    let x = dpdx(0);
+    let y = dpdy(0);
+    let z = fwidth(0);
+    let v = dpdx(vec2(0));
+}
+"#,
+    );
+}
+
+#[test]
+fn derivatives_reject_non_float_literals() {
+    check_parse_or_validate_error(
+        r#"
+@fragment
+fn m() {
+    let x = dpdx(0u);
+}
+"#,
+    );
+    check_parse_or_validate_error(
+        r#"
+@fragment
+fn m() {
+    let x = dpdx(true);
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_loop_dead_code_after_break_does_not_taint_local() {
+    check_parse_and_validate_success(
+        r#"
+@group(0) @binding(0) var<storage, read_write> nonuniform_value: array<u32, 1>;
+
+@fragment
+fn main() {
+    var x: u32;
+    loop {
+        break;
+        x = nonuniform_value[0];
+    }
+    if x > 0u {
+        let d = dpdx(1.0);
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_accepts_uniform_for_and_while_around_barrier() {
+    check_parse_and_validate_success(
+        r#"
+@compute @workgroup_size(1)
+fn main() {
+    for (var i = 0u; i < 2u; i = i + 1u) {
+        workgroupBarrier();
+    }
+
+    var j = 0u;
+    while (j < 2u) {
+        workgroupBarrier();
+        j = j + 1u;
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_accepts_uniform_switch_around_barrier() {
+    check_parse_and_validate_success(
+        r#"
+@compute @workgroup_size(1)
+fn main() {
+    var selector = 1u;
+    switch selector {
+        case 1u: {
+            workgroupBarrier();
+        }
+        default: {
+        }
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_rejects_loop_carried_nonuniformity_around_barrier() {
+    check_parse_or_validate_error(
+        r#"
+@group(0) @binding(0) var<storage, read_write> nonuniform_value: array<u32, 1>;
+
+@compute @workgroup_size(1)
+fn main() {
+    var x: u32;
+    for (var i = 0u; i < 2u; i = i + 1u) {
+        if x > 0u {
+            workgroupBarrier();
+        }
+        x = nonuniform_value[0];
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_rejects_nonuniform_switch_selector_around_barrier() {
+    check_parse_or_validate_error(
+        r#"
+@group(0) @binding(0) var<storage, read_write> selector: u32;
+
+@compute @workgroup_size(1)
+fn main() {
+    switch selector {
+        case 1u: {
+            workgroupBarrier();
+        }
+        default: {
+        }
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_accepts_nonuniform_conditional_break_before_barrier() {
+    check_parse_and_validate_success(
+        r#"
+@group(0) @binding(0) var<storage, read_write> nonuniform_value: u32;
+
+@compute @workgroup_size(1)
+fn main() {
+    loop {
+        if nonuniform_value > 0u {
+            break;
+        }
+    }
+    workgroupBarrier();
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_reconverges_after_nonuniform_loops_and_switch() {
+    check_parse_and_validate_success(
+        r#"
+@group(0) @binding(0) var<storage, read_write> rw: array<u32, 1>;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+
+@compute @workgroup_size(1)
+fn while_case() {
+    var i = 0u;
+    while (rw[0] == 0u && i < 1u) {
+        i = i + 1u;
+    }
+    workgroupBarrier();
+}
+
+@compute @workgroup_size(1)
+fn for_case() {
+    for (var i = 0u; rw[0] == 0u && i < 1u; i = i + 1u) {
+    }
+    workgroupBarrier();
+}
+
+@compute @workgroup_size(1)
+fn loop_case() {
+    loop {
+        if rw[0] == 0u {
+            break;
+        }
+    }
+    workgroupBarrier();
+}
+
+@compute @workgroup_size(1)
+fn switch_case() {
+    switch rw[0] {
+        default: {
+        }
+    }
+    workgroupBarrier();
+}
+
+@fragment
+fn texture_after_while(@builtin(position) position: vec4f) {
+    var i = 0u;
+    while (position.x > 0.0 && i < 1u) {
+        i = i + 1u;
+    }
+    let t = textureSample(tex, samp, vec2f(0.0));
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_loop_value_nonuniformity_survives_reconverged_cf() {
+    check_parse_or_validate_error(
+        r#"
+@group(0) @binding(0) var<storage, read_write> rw: array<u32, 1>;
+
+@compute @workgroup_size(1)
+fn main() {
+    var x = 0u;
+    loop {
+        x = rw[0];
+        break;
+    }
+    if x > 0u {
+        workgroupBarrier();
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_loop_return_taints_following_control_flow() {
+    check_parse_or_validate_error(
+        r#"
+@group(0) @binding(0) var<storage, read_write> rw: array<u32, 1>;
+
+@compute @workgroup_size(1)
+fn main() {
+    loop {
+        if rw[0] > 0u {
+            return;
+        }
+        break;
+    }
+    workgroupBarrier();
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_nonuniform_break_if_taints_loop_live_out_value() {
+    check_parse_or_validate_error(
+        r#"
+@group(0) @binding(0) var<storage, read_write> rw: array<u32, 1>;
+
+@compute @workgroup_size(1)
+fn main() {
+    var x = 0u;
+    loop {
+        x = 1u;
+
+        continuing {
+            break if rw[0] > 0u;
+        }
+    }
+    if x > 0u {
+        workgroupBarrier();
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_pointer_param_store_local_keeps_uniform() {
+    check_parse_and_validate_success(
+        r#"
+fn write_local(p: ptr<function, u32>) {
+    *p = 1u;
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    var x = 0u;
+    write_local(&x);
+    if x > 0u {
+        workgroupBarrier();
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_value_param_summary_uniform_and_nonuniform_calls() {
+    check_parse_and_validate_success(
+        r#"
+fn needs_uniform(v: u32) {
+    if v == 0u {
+        workgroupBarrier();
+    }
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    var x = 0u;
+    needs_uniform(x);
+}
+"#,
+    );
+
+    check_parse_or_validate_error(
+        r#"
+@group(0) @binding(0) var<storage, read_write> rw: u32;
+
+fn needs_uniform(v: u32) {
+    if v == 0u {
+        workgroupBarrier();
+    }
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    needs_uniform(rw);
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_pointer_contents_summary_rejects_nonuniform_pointee() {
+    check_parse_or_validate_error(
+        r#"
+@group(0) @binding(0) var<storage, read_write> rw: u32;
+
+fn needs_uniform_ptr(p: ptr<storage, u32, read_write>) {
+    if *p == 0u {
+        workgroupBarrier();
+    }
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    needs_uniform_ptr(&rw);
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_workgroup_uniform_load_result_is_uniform() {
+    check_parse_and_validate_success(
+        r#"
+var<workgroup> wg: u32;
+
+@compute @workgroup_size(1)
+fn main() {
+    let x = workgroupUniformLoad(&wg);
+    if x == 0u {
+        workgroupBarrier();
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_workgroup_uniform_load_rejects_nonuniform_pointer_value() {
+    check_parse_or_validate_error(
+        r#"
+var<workgroup> wg_array: array<u32, 16>;
+@group(0) @binding(0) var<storage, read_write> nonuniform_value: u32;
+
+@compute @workgroup_size(16)
+fn main() {
+    let ptr = &wg_array[nonuniform_value];
+    let tmp = workgroupUniformLoad(ptr);
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_workgroup_uniform_load_accepts_uniform_pointer_value() {
+    check_parse_and_validate_success(
+        r#"
+var<workgroup> wg_array: array<u32, 16>;
+
+@compute @workgroup_size(16)
+fn main() {
+    var uniform_value = 0u;
+    let ptr = &wg_array[uniform_value];
+    let tmp = workgroupUniformLoad(ptr);
+}
+"#,
+    );
+}
+
+#[test]
 fn function_call_pointer_arguments_must_match_parameter_pointer_type() {
     check_parse_or_validate_error(
         r#"
