@@ -31,6 +31,52 @@ fn check(input: &str, snapshot: &str) {
     }
 }
 
+#[test]
+fn const_eval_frexp() {
+    check_parse_and_validate_success(
+        r#"
+const_assert frexp(2.5).fract == 0.625;
+const_assert frexp(2.5).exp == 2;
+
+const_assert all(frexp(vec2(2.5, 0.0)).fract == vec2(0.625, 0.0));
+const_assert all(frexp(vec2(2.5, 0.0)).exp == vec2(2, 0));
+
+const f = frexp(2.5f);
+const_assert f.fract == 0.625f;
+const_assert f.exp == 2i;
+
+const fv = frexp(vec2f(2.5, 0.0));
+const_assert all(fv.fract == vec2f(0.625, 0.0));
+const_assert all(fv.exp == vec2i(2, 0));
+
+const_assert frexp(0x1.0p+1000).fract == 0.5;
+const_assert frexp(0x1.0p+1000).exp == 1001;
+"#,
+    );
+}
+
+#[test]
+fn const_eval_ldexp() {
+    check_parse_and_validate_success(
+        r#"
+const a = ldexp(0.75, 3);
+const_assert a == 6.0;
+
+const av = ldexp(vec2(0.75, 0.5), vec2(3, -1));
+const_assert all(av == vec2(6.0, 0.25));
+
+const f = ldexp(0.75f, 3i);
+const_assert f == 6.0f;
+
+const fv = ldexp(vec2f(0.75, 0.5), vec2i(3, -1));
+const_assert all(fv == vec2f(6.0, 0.25));
+
+const huge_a = ldexp(0.5, 1001);
+const_assert huge_a == 0x1.0p+1000;
+"#,
+    );
+}
+
 #[track_caller]
 fn check_error_matches(input: &str, expected_substring: &str) {
     let result = naga::front::wgsl::parse_str(input);

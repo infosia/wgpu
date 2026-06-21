@@ -1648,6 +1648,11 @@ impl<'a> ConstantEvaluator<'a> {
             crate::MathFunction::Trunc => {
                 component_wise_float!(self, span, [arg], |e| { Ok([e.trunc()]) })
             }
+            crate::MathFunction::Modf => Err(ConstantEvaluatorError::NotImplemented(format!(
+                "{fun:?} built-in function"
+            ))),
+            crate::MathFunction::Frexp => self.frexp(arg, span),
+            crate::MathFunction::Ldexp => self.ldexp(arg, arg1.unwrap(), span),
 
             // exponent
             crate::MathFunction::Exp => {
@@ -1928,10 +1933,7 @@ impl<'a> ConstantEvaluator<'a> {
             }
 
             // unimplemented
-            crate::MathFunction::Modf
-            | crate::MathFunction::Frexp
-            | crate::MathFunction::Ldexp
-            | crate::MathFunction::Outer
+            crate::MathFunction::Outer
             | crate::MathFunction::FaceForward
             | crate::MathFunction::Reflect
             | crate::MathFunction::Refract
@@ -1961,6 +1963,142 @@ impl<'a> ConstantEvaluator<'a> {
                 format!("{fun:?} built-in function"),
             )),
         }
+    }
+
+    fn vector_size_from_len(len: usize) -> Result<crate::VectorSize, ConstantEvaluatorError> {
+        match len {
+            2 => Ok(crate::VectorSize::Bi),
+            3 => Ok(crate::VectorSize::Tri),
+            4 => Ok(crate::VectorSize::Quad),
+            _ => Err(ConstantEvaluatorError::InvalidMathArg),
+        }
+    }
+
+    fn ldexp(
+        &mut self,
+        mantissa: Handle<Expression>,
+        exponent: Handle<Expression>,
+        span: Span,
+    ) -> Result<Handle<Expression>, ConstantEvaluatorError> {
+        let mantissa = self.extract_vec(mantissa, true)?;
+        let exponent = self.extract_vec(exponent, true)?;
+        if mantissa.len() != exponent.len() {
+            return Err(ConstantEvaluatorError::InvalidMathArg);
+        }
+
+        let result = match (mantissa, exponent) {
+            (LiteralVector::AbstractFloat(mantissa), LiteralVector::AbstractInt(exponent)) => {
+                LiteralVector::AbstractFloat(
+                    mantissa
+                        .iter()
+                        .zip(exponent.iter())
+                        .map(|(&mantissa, &exponent)| libm::ldexp(mantissa, exponent as i32))
+                        .collect(),
+                )
+            }
+            (LiteralVector::F32(mantissa), LiteralVector::I32(exponent)) => LiteralVector::F32(
+                mantissa
+                    .iter()
+                    .zip(exponent.iter())
+                    .map(|(&mantissa, &exponent)| libm::ldexpf(mantissa, exponent))
+                    .collect(),
+            ),
+            (LiteralVector::F16(mantissa), LiteralVector::I32(exponent)) => LiteralVector::F16(
+                mantissa
+                    .iter()
+                    .zip(exponent.iter())
+                    .map(|(&mantissa, &exponent)| {
+                        f16::from_f32(libm::ldexpf(f32::from(mantissa), exponent))
+                    })
+                    .collect(),
+            ),
+            _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+        };
+        result.register_as_evaluated_expr(self, span)
+    }
+
+    fn frexp(
+        &mut self,
+        arg: Handle<Expression>,
+        span: Span,
+    ) -> Result<Handle<Expression>, ConstantEvaluatorError> {
+        let arg = self.extract_vec(arg, true)?;
+        let len = arg.len();
+
+        let (scalar, fract, exp) = match arg {
+            LiteralVector::AbstractFloat(arg) => {
+                let mut fract = ArrayVec::new();
+                let mut exp = ArrayVec::new();
+                for value in arg {
+                    let (fract_value, exp_value) = libm::frexp(value);
+                    fract.push(fract_value);
+                    exp.push(exp_value as i64);
+                }
+                (
+                    crate::Scalar::ABSTRACT_FLOAT,
+                    LiteralVector::AbstractFloat(fract),
+                    LiteralVector::AbstractInt(exp),
+                )
+            }
+            LiteralVector::F32(arg) => {
+                let mut fract = ArrayVec::new();
+                let mut exp = ArrayVec::new();
+                for value in arg {
+                    let (fract_value, exp_value) = libm::frexpf(value);
+                    fract.push(fract_value);
+                    exp.push(exp_value);
+                }
+                (
+                    crate::Scalar::F32,
+                    LiteralVector::F32(fract),
+                    LiteralVector::I32(exp),
+                )
+            }
+            LiteralVector::F16(arg) => {
+                let mut fract = ArrayVec::new();
+                let mut exp = ArrayVec::new();
+                for value in arg {
+                    let (fract_value, exp_value) = libm::frexpf(f32::from(value));
+                    fract.push(f16::from_f32(fract_value));
+                    exp.push(exp_value);
+                }
+                (
+                    crate::Scalar::F16,
+                    LiteralVector::F16(fract),
+                    LiteralVector::I32(exp),
+                )
+            }
+            _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+        };
+
+        let size = if len == 1 {
+            None
+        } else {
+            Some(Self::vector_size_from_len(len)?)
+        };
+        let struct_scalar = if scalar.kind == ScalarKind::AbstractFloat {
+            crate::Scalar::F32
+        } else {
+            scalar
+        };
+        let special_type = crate::PredeclaredType::FrexpResult {
+            size,
+            scalar: struct_scalar,
+        };
+        let name = special_type.struct_name();
+        let struct_type =
+            crate::common::predeclared::frexp_result_type(self.types, name, size, struct_scalar);
+        let struct_ty = self.types.insert(struct_type, Span::UNDEFINED);
+
+        let fract = fract.register_as_evaluated_expr(self, span)?;
+        let exp = exp.register_as_evaluated_expr(self, span)?;
+        self.register_evaluated_expr(
+            Expression::Compose {
+                ty: struct_ty,
+                components: vec![fract, exp],
+            },
+            span,
+        )
     }
 
     /// Dot product of two packed vectors (`dot4I8Packed` and `dot4U8Packed`)
@@ -2502,17 +2640,19 @@ impl<'a> ConstantEvaluator<'a> {
 
         let expr = self.eval_zero_value(expr, span)?;
 
-        let make_error = || -> Result<_, ConstantEvaluatorError> {
-            let from = format!("{:?} {:?}", expr, self.expressions[expr]);
+        macro_rules! make_error {
+            () => {{
+                let from = format!("{:?} {:?}", expr, self.expressions[expr]);
 
-            #[cfg(feature = "wgsl-in")]
-            let to = target.to_wgsl_for_diagnostics();
+                #[cfg(feature = "wgsl-in")]
+                let to = target.to_wgsl_for_diagnostics();
 
-            #[cfg(not(feature = "wgsl-in"))]
-            let to = format!("{target:?}");
+                #[cfg(not(feature = "wgsl-in"))]
+                let to = format!("{target:?}");
 
-            Err(ConstantEvaluatorError::InvalidCastArg { from, to })
-        };
+                Err(ConstantEvaluatorError::InvalidCastArg { from, to })
+            }};
+        }
 
         use crate::proc::type_methods::IntFloatLimits;
 
@@ -2526,7 +2666,7 @@ impl<'a> ConstantEvaluator<'a> {
                         Literal::F16(v) => f16::to_i32(&v).unwrap(), //Only None on NaN or Inf
                         Literal::Bool(v) => v as i32,
                         Literal::F64(_) | Literal::I64(_) | Literal::U64(_) => {
-                            return make_error();
+                            return make_error!();
                         }
                         Literal::AbstractInt(v) => i32::try_from_abstract(v)?,
                         Literal::AbstractFloat(v) => i32::try_from_abstract(v)?,
@@ -2539,7 +2679,7 @@ impl<'a> ConstantEvaluator<'a> {
                         Literal::F16(v) => f16::to_u32(&v.max(f16::ZERO)).unwrap(),
                         Literal::Bool(v) => v as u32,
                         Literal::F64(_) | Literal::I64(_) | Literal::U64(_) => {
-                            return make_error();
+                            return make_error!();
                         }
                         Literal::AbstractInt(v) => u32::try_from_abstract(v)?,
                         Literal::AbstractFloat(v) => u32::try_from_abstract(v)?,
@@ -2587,7 +2727,7 @@ impl<'a> ConstantEvaluator<'a> {
                         Literal::F32(v) => v,
                         Literal::Bool(v) => v as u32 as f32,
                         Literal::F64(_) | Literal::I64(_) | Literal::U64(_) => {
-                            return make_error();
+                            return make_error!();
                         }
                         Literal::F16(v) => f16::to_f32(v),
                         Literal::AbstractInt(v) => f32::try_from_abstract(v)?,
@@ -2600,7 +2740,7 @@ impl<'a> ConstantEvaluator<'a> {
                         Literal::F32(v) => v as f64,
                         Literal::F64(v) => v,
                         Literal::Bool(v) => v as u32 as f64,
-                        Literal::I64(_) | Literal::U64(_) => return make_error(),
+                        Literal::I64(_) | Literal::U64(_) => return make_error!(),
                         Literal::AbstractInt(v) => f64::try_from_abstract(v)?,
                         Literal::AbstractFloat(v) => f64::try_from_abstract(v)?,
                     }),
@@ -2613,7 +2753,7 @@ impl<'a> ConstantEvaluator<'a> {
                         Literal::AbstractInt(v) => v != 0,
                         Literal::AbstractFloat(v) => v != 0.0,
                         Literal::F64(_) | Literal::I64(_) | Literal::U64(_) => {
-                            return make_error();
+                            return make_error!();
                         }
                     }),
                     Sc::ABSTRACT_FLOAT => Literal::AbstractFloat(match literal {
@@ -2625,15 +2765,15 @@ impl<'a> ConstantEvaluator<'a> {
                             v as f64
                         }
                         Literal::AbstractFloat(v) => v,
-                        _ => return make_error(),
+                        _ => return make_error!(),
                     }),
                     Sc::ABSTRACT_INT => Literal::AbstractInt(match literal {
                         Literal::AbstractInt(v) => v,
-                        _ => return make_error(),
+                        _ => return make_error!(),
                     }),
                     _ => {
                         log::debug!("Constant evaluator refused to convert value to {target:?}");
-                        return make_error();
+                        return make_error!();
                     }
                 };
                 Expression::Literal(literal)
@@ -2642,6 +2782,13 @@ impl<'a> ConstantEvaluator<'a> {
                 ty,
                 components: ref src_components,
             } => {
+                let src_components = src_components.clone();
+                if let Some(expr) =
+                    self.cast_decomposition_struct(ty, &src_components, target, span)?
+                {
+                    return self.register_evaluated_expr(expr, span);
+                }
+
                 let ty_inner = match self.types[ty].inner {
                     TypeInner::Vector { size, .. } => TypeInner::Vector {
                         size,
@@ -2652,10 +2799,10 @@ impl<'a> ConstantEvaluator<'a> {
                         rows,
                         scalar: target,
                     },
-                    _ => return make_error(),
+                    _ => return make_error!(),
                 };
 
-                let mut components = src_components.clone();
+                let mut components = src_components;
                 for component in &mut components {
                     *component = self.cast(*component, target, span)?;
                 }
@@ -2678,10 +2825,177 @@ impl<'a> ConstantEvaluator<'a> {
                     value: cast_value,
                 }
             }
-            _ => return make_error(),
+            _ => return make_error!(),
         };
 
         self.register_evaluated_expr(expr, span)
+    }
+
+    fn cast_decomposition_struct(
+        &mut self,
+        ty: Handle<Type>,
+        src_components: &[Handle<Expression>],
+        target: crate::Scalar,
+        span: Span,
+    ) -> Result<Option<Expression>, ConstantEvaluatorError> {
+        if target.kind != ScalarKind::Float || src_components.len() != 2 {
+            return Ok(None);
+        }
+
+        let TypeInner::Struct { ref members, .. } = self.types[ty].inner else {
+            return Ok(None);
+        };
+        let [fract_member, other_member] = members.as_slice() else {
+            return Ok(None);
+        };
+        let fract_member_name = fract_member.name.clone();
+        let fract_member_ty = fract_member.ty;
+        let other_member_name = other_member.name.clone();
+        let other_member_ty = other_member.ty;
+
+        if fract_member_name.as_deref() != Some("fract") {
+            return Ok(None);
+        }
+
+        fn member_shape(
+            types: &UniqueArena<Type>,
+            ty: Handle<Type>,
+        ) -> Option<(Option<crate::VectorSize>, crate::Scalar)> {
+            match types[ty].inner {
+                TypeInner::Scalar(scalar) => Some((None, scalar)),
+                TypeInner::Vector { size, scalar } => Some((Some(size), scalar)),
+                _ => None,
+            }
+        }
+
+        let (size, fract_scalar) = match member_shape(self.types, fract_member_ty) {
+            Some(value) => value,
+            None => return Ok(None),
+        };
+        if fract_scalar.kind != ScalarKind::AbstractFloat && fract_scalar.kind != ScalarKind::Float
+        {
+            return Ok(None);
+        }
+
+        let fract = self.cast(src_components[0], target, span)?;
+        let (predeclared, components) = match other_member_name.as_deref() {
+            Some("exp") => {
+                let (exp_size, exp_scalar) = match member_shape(self.types, other_member_ty) {
+                    Some(value) => value,
+                    None => return Ok(None),
+                };
+                if exp_size != size
+                    || (exp_scalar.kind != ScalarKind::AbstractInt
+                        && exp_scalar.kind != ScalarKind::Sint)
+                {
+                    return Ok(None);
+                }
+                let exp = self.cast(src_components[1], crate::Scalar::I32, span)?;
+                (
+                    crate::PredeclaredType::FrexpResult {
+                        size,
+                        scalar: target,
+                    },
+                    vec![fract, exp],
+                )
+            }
+            Some("whole") => {
+                let (whole_size, whole_scalar) = match member_shape(self.types, other_member_ty) {
+                    Some(value) => value,
+                    None => return Ok(None),
+                };
+                if whole_size != size
+                    || (whole_scalar.kind != ScalarKind::AbstractFloat
+                        && whole_scalar.kind != ScalarKind::Float)
+                {
+                    return Ok(None);
+                }
+                let whole = self.cast(src_components[1], target, span)?;
+                (
+                    crate::PredeclaredType::ModfResult {
+                        size,
+                        scalar: target,
+                    },
+                    vec![fract, whole],
+                )
+            }
+            _ => return Ok(None),
+        };
+
+        let ty = match predeclared {
+            crate::PredeclaredType::FrexpResult { size, scalar } => {
+                let name = predeclared.struct_name();
+                let ty =
+                    crate::common::predeclared::frexp_result_type(self.types, name, size, scalar);
+                self.types.insert(ty, span)
+            }
+            crate::PredeclaredType::ModfResult { size, scalar } => {
+                let name = predeclared.struct_name();
+                self.modf_result_type(name, size, scalar, span)
+            }
+            crate::PredeclaredType::AtomicCompareExchangeWeakResult(_) => unreachable!(),
+        };
+
+        Ok(Some(Expression::Compose { ty, components }))
+    }
+
+    fn modf_result_type(
+        &mut self,
+        name: String,
+        size: Option<crate::VectorSize>,
+        scalar: crate::Scalar,
+        span: Span,
+    ) -> Handle<Type> {
+        let float_ty = self.types.insert(
+            Type {
+                name: None,
+                inner: TypeInner::Scalar(scalar),
+            },
+            Span::UNDEFINED,
+        );
+
+        let (member_ty, second_offset) = if let Some(size) = size {
+            let vec_ty = self.types.insert(
+                Type {
+                    name: None,
+                    inner: TypeInner::Vector { size, scalar },
+                },
+                Span::UNDEFINED,
+            );
+            (vec_ty, size as u32 * scalar.width as u32)
+        } else {
+            (float_ty, scalar.width as u32)
+        };
+        let alignment = if let Some(size) = size {
+            crate::proc::Alignment::from(size) * crate::proc::Alignment::from_width(scalar.width)
+        } else {
+            crate::proc::Alignment::from_width(scalar.width)
+        };
+
+        self.types.insert(
+            Type {
+                name: Some(name),
+                inner: TypeInner::Struct {
+                    members: vec![
+                        crate::StructMember {
+                            name: Some("fract".to_string()),
+                            ty: member_ty,
+                            binding: None,
+                            offset: 0,
+                        },
+                        crate::StructMember {
+                            name: Some("whole".to_string()),
+                            ty: member_ty,
+                            binding: None,
+                            offset: second_offset,
+                        },
+                    ],
+                    alignment,
+                    span: second_offset * 2,
+                },
+            },
+            span,
+        )
     }
 
     /// Convert the scalar leaves of  `expr` to `target`, handling arrays.

@@ -19,10 +19,6 @@ struct _frexp_result_f32_ {
     float fract_;
     int exp_;
 };
-struct _frexp_result_vec4_f32_ {
-    vec4 fract_;
-    ivec4 exp_;
-};
 
 _modf_result_f32_ naga_modf(float arg) {
     float other;
@@ -40,18 +36,6 @@ _modf_result_vec4_f32_ naga_modf(vec4 arg) {
     vec4 other;
     vec4 fract = modf(arg, other);
     return _modf_result_vec4_f32_(fract, other);
-}
-
-_frexp_result_f32_ naga_frexp(float arg) {
-    int other;
-    float fract = frexp(arg, other);
-    return _frexp_result_f32_(fract, other);
-}
-
-_frexp_result_vec4_f32_ naga_frexp(vec4 arg) {
-    ivec4 other;
-    vec4 fract = frexp(arg, other);
-    return _frexp_result_vec4_f32_(fract, other);
 }
 
 void main() {
@@ -75,25 +59,21 @@ void main() {
     ivec2 ctz_h = ivec2(0, 0);
     ivec2 clz_c = ivec2(0, 0);
     uvec2 clz_d = uvec2(31u, 31u);
-    float lde_a = ldexp(1.0, 2);
-    vec2 lde_b = ldexp(vec2(1.0, 2.0), ivec2(3, 4));
+    vec2 lde_b = vec2(8.0, 32.0);
     _modf_result_f32_ modf_a = naga_modf(1.5);
     float modf_b = naga_modf(1.5).fract_;
     float modf_c = naga_modf(1.5).whole;
     _modf_result_vec2_f32_ modf_d = naga_modf(vec2(1.5, 1.5));
     float modf_e = naga_modf(vec4(1.5, 1.5, 1.5, 1.5)).whole.x;
     float modf_f = naga_modf(vec2(1.5, 1.5)).fract_.y;
-    _frexp_result_f32_ frexp_a = naga_frexp(1.5);
-    float frexp_b = naga_frexp(1.5).fract_;
-    int frexp_c = naga_frexp(1.5).exp_;
-    int frexp_d = naga_frexp(vec4(1.5, 1.5, 1.5, 1.5)).exp_.x;
+    _frexp_result_f32_ frexp_a = _frexp_result_f32_(0.75, 1);
     float quantizeToF16_a = unpackHalf2x16(packHalf2x16(vec2(1.0))).x;
-    vec2 _e123 = vec2(1.0, 1.0);
-    vec2 quantizeToF16_b = unpackHalf2x16(packHalf2x16(_e123));
-    vec3 _e128 = vec3(1.0, 1.0, 1.0);
-    vec3 quantizeToF16_c = vec3(unpackHalf2x16(packHalf2x16(_e128.xy)), unpackHalf2x16(packHalf2x16(_e128.zz)).x);
-    vec4 _e134 = vec4(1.0, 1.0, 1.0, 1.0);
-    vec4 quantizeToF16_d = vec4(unpackHalf2x16(packHalf2x16(_e134.xy)), unpackHalf2x16(packHalf2x16(_e134.zw)));
+    vec2 _e107 = vec2(1.0, 1.0);
+    vec2 quantizeToF16_b = unpackHalf2x16(packHalf2x16(_e107));
+    vec3 _e112 = vec3(1.0, 1.0, 1.0);
+    vec3 quantizeToF16_c = vec3(unpackHalf2x16(packHalf2x16(_e112.xy)), unpackHalf2x16(packHalf2x16(_e112.zz)).x);
+    vec4 _e118 = vec4(1.0, 1.0, 1.0, 1.0);
+    vec4 quantizeToF16_d = vec4(unpackHalf2x16(packHalf2x16(_e118.xy)), unpackHalf2x16(packHalf2x16(_e118.zw)));
     return;
 }
 

@@ -4196,7 +4196,18 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
         // in `Module::special_types`. The typifier will expect to
         // be able to find it there.
         if let proc::Conclusion::Predeclared(predeclared) = rule.conclusion {
-            ctx.module.generate_predeclared_type(predeclared);
+            if !matches!(
+                predeclared,
+                ir::PredeclaredType::FrexpResult {
+                    scalar: ir::Scalar {
+                        kind: ir::ScalarKind::AbstractFloat,
+                        ..
+                    },
+                    ..
+                }
+            ) {
+                ctx.module.generate_predeclared_type(predeclared);
+            }
         }
 
         Ok(ir::Expression::Math {

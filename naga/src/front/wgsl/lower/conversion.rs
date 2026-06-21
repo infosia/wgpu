@@ -263,9 +263,20 @@ impl<'source> super::ExpressionContext<'source, '_, '_> {
         let inner = super::resolve_inner!(self, expr);
         if let Some(scalar) = inner.automatically_convertible_scalar(&self.module.types) {
             use crate::ScalarKind as Sk;
+            let force_conversion = inner
+                .decomposition_result_scalar(&self.module.types)
+                .is_some_and(|s| matches!(s.kind, Sk::AbstractInt | Sk::AbstractFloat))
+                || (inner
+                    .decomposition_result_scalar(&self.module.types)
+                    .is_some()
+                    && self.is_const(expr)
+                    && self.expression_contains_abstract_literal(expr));
             let concretization_preferences = match scalar.kind {
                 // already concrete
-                Sk::Sint | Sk::Uint | Sk::Float | Sk::Bool => return Ok(expr),
+                Sk::Sint | Sk::Uint | Sk::Float | Sk::Bool if !force_conversion => {
+                    return Ok(expr);
+                }
+                Sk::Sint | Sk::Uint | Sk::Float | Sk::Bool => core::slice::from_ref(&scalar),
                 Sk::AbstractInt => {
                     [crate::Scalar::I32, crate::Scalar::U32, crate::Scalar::F32].as_slice()
                 }
@@ -300,6 +311,21 @@ impl<'source> super::ExpressionContext<'source, '_, '_> {
         }
 
         Ok(expr)
+    }
+
+    fn expression_contains_abstract_literal(&self, expr: Handle<crate::Expression>) -> bool {
+        match *self.get(expr) {
+            crate::Expression::Literal(
+                crate::Literal::AbstractFloat(_) | crate::Literal::AbstractInt(_),
+            ) => true,
+            crate::Expression::Compose { ref components, .. } => components
+                .iter()
+                .any(|&component| self.expression_contains_abstract_literal(component)),
+            crate::Expression::Splat { value, .. } => {
+                self.expression_contains_abstract_literal(value)
+            }
+            _ => false,
+        }
     }
 
     /// Find the consensus scalar of `components` under WGSL's automatic
@@ -362,6 +388,32 @@ impl<'source> super::ExpressionContext<'source, '_, '_> {
 }
 
 impl crate::TypeInner {
+    fn decomposition_result_scalar(
+        &self,
+        types: &crate::UniqueArena<crate::Type>,
+    ) -> Option<crate::Scalar> {
+        use crate::TypeInner as Ti;
+        let Ti::Struct { ref members, .. } = *self else {
+            return None;
+        };
+        match members.as_slice() {
+            [crate::StructMember {
+                name: Some(fract_name),
+                ty,
+                ..
+            }, crate::StructMember {
+                name: Some(other_name),
+                ..
+            }] if fract_name == "fract" && (other_name == "exp" || other_name == "whole") => {
+                match types[*ty].inner {
+                    Ti::Scalar(scalar) | Ti::Vector { scalar, .. } => Some(scalar),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn automatically_convertible_scalar(
         &self,
         types: &crate::UniqueArena<crate::Type>,
@@ -373,10 +425,10 @@ impl crate::TypeInner {
             }
             Ti::CooperativeMatrix { .. } => None,
             Ti::Array { base, .. } => types[base].inner.automatically_convertible_scalar(types),
+            Ti::Struct { .. } => self.decomposition_result_scalar(types),
             Ti::Atomic(_)
             | Ti::Pointer { .. }
             | Ti::ValuePointer { .. }
-            | Ti::Struct { .. }
             | Ti::Image { .. }
             | Ti::Sampler { .. }
             | Ti::AccelerationStructure { .. }

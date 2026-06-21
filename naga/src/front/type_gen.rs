@@ -554,77 +554,7 @@ impl crate::Module {
                 }
             }
             crate::PredeclaredType::FrexpResult { size, scalar } => {
-                let float_ty = self.types.insert(
-                    crate::Type {
-                        name: None,
-                        inner: crate::TypeInner::Scalar(scalar),
-                    },
-                    Span::UNDEFINED,
-                );
-
-                let int_ty = self.types.insert(
-                    crate::Type {
-                        name: None,
-                        inner: crate::TypeInner::Scalar(crate::Scalar {
-                            kind: crate::ScalarKind::Sint,
-                            width: scalar.width,
-                        }),
-                    },
-                    Span::UNDEFINED,
-                );
-
-                let (fract_member_ty, exp_member_ty, second_offset) = if let Some(size) = size {
-                    let vec_float_ty = self.types.insert(
-                        crate::Type {
-                            name: None,
-                            inner: crate::TypeInner::Vector { size, scalar },
-                        },
-                        Span::UNDEFINED,
-                    );
-                    let vec_int_ty = self.types.insert(
-                        crate::Type {
-                            name: None,
-                            inner: crate::TypeInner::Vector {
-                                size,
-                                scalar: crate::Scalar {
-                                    kind: crate::ScalarKind::Sint,
-                                    width: scalar.width,
-                                },
-                            },
-                        },
-                        Span::UNDEFINED,
-                    );
-                    (vec_float_ty, vec_int_ty, size as u32 * scalar.width as u32)
-                } else {
-                    (float_ty, int_ty, scalar.width as u32)
-                };
-                let alignment = if let Some(size) = size {
-                    Alignment::from(size) * Alignment::from_width(scalar.width)
-                } else {
-                    Alignment::from_width(scalar.width)
-                };
-
-                crate::Type {
-                    name: Some(name),
-                    inner: crate::TypeInner::Struct {
-                        members: vec![
-                            crate::StructMember {
-                                name: Some("fract".to_string()),
-                                ty: fract_member_ty,
-                                binding: None,
-                                offset: 0,
-                            },
-                            crate::StructMember {
-                                name: Some("exp".to_string()),
-                                ty: exp_member_ty,
-                                binding: None,
-                                offset: second_offset,
-                            },
-                        ],
-                        alignment,
-                        span: second_offset * 2,
-                    },
-                }
+                crate::common::predeclared::frexp_result_type(&mut self.types, name, size, scalar)
             }
         };
 

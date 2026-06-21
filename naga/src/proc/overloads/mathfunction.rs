@@ -90,7 +90,7 @@ impl ir::MathFunction {
             // One-off operations
             Mf::Dot => regular!(2, VECN of NUMERIC -> Scalar).into(),
             Mf::Modf => regular!(1, SCALAR|VECN of FLOAT_ABSTRACT_UNIMPLEMENTED -> Modf).into(),
-            Mf::Frexp => regular!(1, SCALAR|VECN of FLOAT_ABSTRACT_UNIMPLEMENTED -> Frexp).into(),
+            Mf::Frexp => regular!(1, SCALAR|VECN of FLOAT -> Frexp).into(),
             Mf::Ldexp => ldexp().into(),
             Mf::Outer => outer().into(),
             Mf::Cross => regular!(2, VEC3 of FLOAT).into(),
@@ -127,7 +127,7 @@ fn ldexp() -> List {
 
     list(
         // The ldexp mantissa argument can be any floating-point type.
-        float_scalars_unimplemented_abstract().flat_map(|mantissa_scalar| {
+        float_scalars().flat_map(|mantissa_scalar| {
             // The exponent type is the integer counterpart of the mantissa type.
             let exponent_scalar = exponent_from_mantissa(mantissa_scalar);
             // There are scalar and vector component-wise overloads.
