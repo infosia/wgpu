@@ -208,6 +208,42 @@ const_assert fv == 1.0f;
     );
 }
 
+#[test]
+fn const_eval_bit_pack_unpack() {
+    check_parse_and_validate_success(
+        r#"
+const extracted = extractBits(0xF0u, 4u, 4u);
+const_assert extracted == 15u;
+
+const extracted_signed = extractBits(-16i, 4u, 4u);
+const_assert extracted_signed == -1i;
+
+const quantized = quantizeToF16(1.0001f);
+const_assert quantized == 1.0f;
+const quantized_vec = quantizeToF16(vec2f(1.0001, 2.0));
+const_assert all(quantized_vec == vec2f(1.0, 2.0));
+
+const unorm4 = pack4x8unorm(vec4f(0.0, 1.0, 0.0, 1.0));
+const_assert unorm4 == 0xFF00FF00u;
+
+const round_even = pack4x8unorm(vec4f(0.5 / 255.0, 0.0, 0.0, 0.0));
+const_assert round_even == 0u;
+
+const snorm2 = pack2x16snorm(vec2f(-1.0, 1.0));
+const_assert all(unpack2x16snorm(snorm2) == vec2f(-1.0, 1.0));
+
+const float2 = pack2x16float(vec2f(1.0, 2.0));
+const_assert all(unpack2x16float(float2) == vec2f(1.0, 2.0));
+
+const i8 = pack4xI8Clamp(vec4i(-200, -1, 127, 200));
+const_assert all(unpack4xI8(i8) == vec4i(-128, -1, 127, 127));
+
+const u8 = pack4xU8Clamp(vec4u(0, 255, 256, 1024));
+const_assert all(unpack4xU8(u8) == vec4u(0, 255, 255, 255));
+"#,
+    );
+}
+
 #[track_caller]
 fn check_error_matches(input: &str, expected_substring: &str) {
     let result = naga::front::wgsl::parse_str(input);
@@ -2676,9 +2712,9 @@ fn float16_capability_and_enable() {
 
     // Functions that operate on `f16`-precision values stored in `f32`s.
     check_validation! {
-        "fn foo() -> f32 { return quantizeToF16(1.0f); }",
-        "fn foo() -> u32 { return pack2x16float(vec2(1.0f, 2.0f)); }",
-        "fn foo() -> vec2<f32> { return unpack2x16float(0x7c007c00); }":
+        "fn foo(x: f32) -> f32 { return quantizeToF16(x); }",
+        "fn foo(x: vec2f) -> u32 { return pack2x16float(x); }",
+        "fn foo(x: u32) -> vec2<f32> { return unpack2x16float(x); }":
         Err(naga::valid::ValidationError::Function {
             source: naga::valid::FunctionError::Expression {
                 source: naga::valid::ExpressionError::MissingCapabilities(Capabilities::SHADER_FLOAT16_IN_FLOAT32),

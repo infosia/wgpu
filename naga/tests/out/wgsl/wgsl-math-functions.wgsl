@@ -33,9 +33,8 @@ fn main() {
     let modf_e = modf(vec4<f32>(1.5f, 1.5f, 1.5f, 1.5f)).whole.x;
     let modf_f = modf(vec2<f32>(1.5f, 1.5f)).fract.y;
     let frexp_a = _frexp_result_f32_(0.75f, 1i);
-    let quantizeToF16_a = quantizeToF16(1f);
-    let quantizeToF16_b = quantizeToF16(vec2<f32>(1f, 1f));
-    let quantizeToF16_c = quantizeToF16(vec3<f32>(1f, 1f, 1f));
-    let quantizeToF16_d = quantizeToF16(vec4<f32>(1f, 1f, 1f, 1f));
+    let quantizeToF16_b = vec2<f32>(1f, 1f);
+    let quantizeToF16_c = vec3<f32>(1f, 1f, 1f);
+    let quantizeToF16_d = vec4<f32>(1f, 1f, 1f, 1f);
     return;
 }

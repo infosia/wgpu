@@ -69,9 +69,8 @@ fragment void main_(
     float modf_e = naga_modf(metal::float4(1.5, 1.5, 1.5, 1.5)).whole.x;
     float modf_f = naga_modf(metal::float2(1.5, 1.5)).fract.y;
     _frexp_result_f32_ frexp_a = _frexp_result_f32_ {0.75, 1};
-    float quantizeToF16_a = float(half(1.0));
-    metal::float2 quantizeToF16_b = metal::float2(metal::half2(metal::float2(1.0, 1.0)));
-    metal::float3 quantizeToF16_c = metal::float3(metal::half3(metal::float3(1.0, 1.0, 1.0)));
-    metal::float4 quantizeToF16_d = metal::float4(metal::half4(metal::float4(1.0, 1.0, 1.0, 1.0)));
+    metal::float2 quantizeToF16_b = metal::float2(1.0, 1.0);
+    metal::float3 quantizeToF16_c = metal::float3(1.0, 1.0, 1.0);
+    metal::float4 quantizeToF16_d = metal::float4(1.0, 1.0, 1.0, 1.0);
     return;
 }

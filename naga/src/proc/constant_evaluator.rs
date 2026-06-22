@@ -1946,13 +1946,11 @@ impl<'a> ConstantEvaluator<'a> {
             }
             crate::MathFunction::Transpose => self.transpose(arg, span),
             crate::MathFunction::Determinant => self.determinant(arg, span),
-
-            // unimplemented
-            crate::MathFunction::Outer
-            | crate::MathFunction::Inverse
-            | crate::MathFunction::QuantizeToF16
-            | crate::MathFunction::ExtractBits
-            | crate::MathFunction::Pack4x8snorm
+            crate::MathFunction::QuantizeToF16 => self.quantize_to_f16(arg, span),
+            crate::MathFunction::ExtractBits => {
+                self.extract_bits(arg, arg1.unwrap(), arg2.unwrap(), span)
+            }
+            crate::MathFunction::Pack4x8snorm
             | crate::MathFunction::Pack4x8unorm
             | crate::MathFunction::Pack2x16snorm
             | crate::MathFunction::Pack2x16unorm
@@ -1960,16 +1958,19 @@ impl<'a> ConstantEvaluator<'a> {
             | crate::MathFunction::Pack4xI8
             | crate::MathFunction::Pack4xU8
             | crate::MathFunction::Pack4xI8Clamp
-            | crate::MathFunction::Pack4xU8Clamp
-            | crate::MathFunction::Unpack4x8snorm
+            | crate::MathFunction::Pack4xU8Clamp => self.pack(arg, fun, span),
+            crate::MathFunction::Unpack4x8snorm
             | crate::MathFunction::Unpack4x8unorm
             | crate::MathFunction::Unpack2x16snorm
             | crate::MathFunction::Unpack2x16unorm
             | crate::MathFunction::Unpack2x16float
             | crate::MathFunction::Unpack4xI8
-            | crate::MathFunction::Unpack4xU8 => Err(ConstantEvaluatorError::NotImplemented(
-                format!("{fun:?} built-in function"),
-            )),
+            | crate::MathFunction::Unpack4xU8 => self.unpack(arg, fun, span),
+
+            // unimplemented
+            crate::MathFunction::Outer | crate::MathFunction::Inverse => Err(
+                ConstantEvaluatorError::NotImplemented(format!("{fun:?} built-in function")),
+            ),
         }
     }
 
@@ -2794,6 +2795,339 @@ impl<'a> ConstantEvaluator<'a> {
                     "bitcast to this scalar type".into(),
                 ))
             }
+        };
+
+        result.register_as_evaluated_expr(self, span)
+    }
+
+    fn quantize_to_f16(
+        &mut self,
+        arg: Handle<Expression>,
+        span: Span,
+    ) -> Result<Handle<Expression>, ConstantEvaluatorError> {
+        let arg = self.extract_vec(arg, true)?;
+        let result = match arg {
+            LiteralVector::F32(arg) => {
+                let mut out = ArrayVec::new();
+                for value in arg {
+                    out.push(f32::from(f16::from_f32(value)));
+                }
+                LiteralVector::F32(out)
+            }
+            LiteralVector::AbstractFloat(arg) => {
+                let mut out = ArrayVec::new();
+                for value in arg {
+                    out.push(f32::from(f16::from_f32(f32::try_from_abstract(value)?)));
+                }
+                LiteralVector::F32(out)
+            }
+            _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+        };
+        result.register_as_evaluated_expr(self, span)
+    }
+
+    fn extract_bits(
+        &mut self,
+        e: Handle<Expression>,
+        offset: Handle<Expression>,
+        count: Handle<Expression>,
+        span: Span,
+    ) -> Result<Handle<Expression>, ConstantEvaluatorError> {
+        let e = self.extract_vec(e, true)?;
+        let offset = self.extract_vec(offset, true)?;
+        let count = self.extract_vec(count, true)?;
+
+        let LiteralVector::U32(offset) = offset else {
+            return Err(ConstantEvaluatorError::InvalidMathArg);
+        };
+        let LiteralVector::U32(count) = count else {
+            return Err(ConstantEvaluatorError::InvalidMathArg);
+        };
+        let (&[offset], &[count]) = (offset.as_slice(), count.as_slice()) else {
+            return Err(ConstantEvaluatorError::InvalidMathArg);
+        };
+
+        fn extract_bits_u32(e: u32, offset: u32, count: u32) -> u32 {
+            let offset = offset.min(32);
+            let count = count.min(32 - offset);
+            if count == 0 {
+                0
+            } else if count == 32 {
+                e
+            } else {
+                (e >> offset) & ((1u32 << count) - 1)
+            }
+        }
+
+        fn extract_bits_i32(e: i32, offset: u32, count: u32) -> i32 {
+            let offset = offset.min(32);
+            let count = count.min(32 - offset);
+            if count == 0 {
+                0
+            } else if count == 32 {
+                e
+            } else {
+                let field = extract_bits_u32(e as u32, offset, count);
+                let sign_bit = 1u32 << (count - 1);
+                if field & sign_bit == 0 {
+                    field as i32
+                } else {
+                    (field | (!0u32 << count)) as i32
+                }
+            }
+        }
+
+        let result = match e {
+            LiteralVector::U32(e) => {
+                let mut out = ArrayVec::new();
+                for value in e {
+                    out.push(extract_bits_u32(value, offset, count));
+                }
+                LiteralVector::U32(out)
+            }
+            LiteralVector::I32(e) => {
+                let mut out = ArrayVec::new();
+                for value in e {
+                    out.push(extract_bits_i32(value, offset, count));
+                }
+                LiteralVector::I32(out)
+            }
+            LiteralVector::AbstractInt(e) => {
+                let mut out = ArrayVec::new();
+                for value in e {
+                    out.push(extract_bits_i32(
+                        i32::try_from_abstract(value)?,
+                        offset,
+                        count,
+                    ));
+                }
+                LiteralVector::I32(out)
+            }
+            _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+        };
+
+        result.register_as_evaluated_expr(self, span)
+    }
+
+    fn pack(
+        &mut self,
+        arg: Handle<Expression>,
+        fun: crate::MathFunction,
+        span: Span,
+    ) -> Result<Handle<Expression>, ConstantEvaluatorError> {
+        let arg = self.extract_vec(arg, false)?;
+
+        fn round_ties_even_f32(value: f32) -> f32 {
+            libm::rintf(value)
+        }
+
+        fn pack_snorm(value: f32, scale: f32) -> i32 {
+            round_ties_even_f32(value.clamp(-1.0, 1.0) * scale) as i32
+        }
+
+        fn pack_unorm(value: f32, scale: f32) -> u32 {
+            round_ties_even_f32(value.clamp(0.0, 1.0) * scale) as u32
+        }
+
+        let result = match fun {
+            crate::MathFunction::Pack2x16float => {
+                let values = match arg {
+                    LiteralVector::F32(values) if values.len() == 2 => values,
+                    LiteralVector::AbstractFloat(values) if values.len() == 2 => {
+                        let mut out = ArrayVec::new();
+                        for value in values {
+                            out.push(f32::try_from_abstract(value)?);
+                        }
+                        out
+                    }
+                    _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+                };
+                u32::from(f16::from_f32(values[0]).to_bits())
+                    | (u32::from(f16::from_f32(values[1]).to_bits()) << 16)
+            }
+            crate::MathFunction::Pack2x16snorm => {
+                let values = match arg {
+                    LiteralVector::F32(values) if values.len() == 2 => values,
+                    LiteralVector::AbstractFloat(values) if values.len() == 2 => {
+                        let mut out = ArrayVec::new();
+                        for value in values {
+                            out.push(f32::try_from_abstract(value)?);
+                        }
+                        out
+                    }
+                    _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+                };
+                (pack_snorm(values[0], 32767.0) as i16 as u16 as u32)
+                    | ((pack_snorm(values[1], 32767.0) as i16 as u16 as u32) << 16)
+            }
+            crate::MathFunction::Pack2x16unorm => {
+                let values = match arg {
+                    LiteralVector::F32(values) if values.len() == 2 => values,
+                    LiteralVector::AbstractFloat(values) if values.len() == 2 => {
+                        let mut out = ArrayVec::new();
+                        for value in values {
+                            out.push(f32::try_from_abstract(value)?);
+                        }
+                        out
+                    }
+                    _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+                };
+                pack_unorm(values[0], 65535.0) | (pack_unorm(values[1], 65535.0) << 16)
+            }
+            crate::MathFunction::Pack4x8snorm => {
+                let values = match arg {
+                    LiteralVector::F32(values) if values.len() == 4 => values,
+                    LiteralVector::AbstractFloat(values) if values.len() == 4 => {
+                        let mut out = ArrayVec::new();
+                        for value in values {
+                            out.push(f32::try_from_abstract(value)?);
+                        }
+                        out
+                    }
+                    _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+                };
+                let mut result = 0u32;
+                for (i, value) in values.into_iter().enumerate() {
+                    result |= u32::from(pack_snorm(value, 127.0) as i8 as u8) << (8 * i);
+                }
+                result
+            }
+            crate::MathFunction::Pack4x8unorm => {
+                let values = match arg {
+                    LiteralVector::F32(values) if values.len() == 4 => values,
+                    LiteralVector::AbstractFloat(values) if values.len() == 4 => {
+                        let mut out = ArrayVec::new();
+                        for value in values {
+                            out.push(f32::try_from_abstract(value)?);
+                        }
+                        out
+                    }
+                    _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+                };
+                let mut result = 0u32;
+                for (i, value) in values.into_iter().enumerate() {
+                    result |= (pack_unorm(value, 255.0) & 0xFF) << (8 * i);
+                }
+                result
+            }
+            crate::MathFunction::Pack4xI8 | crate::MathFunction::Pack4xI8Clamp => {
+                let values = match arg {
+                    LiteralVector::I32(values) if values.len() == 4 => values,
+                    LiteralVector::AbstractInt(values) if values.len() == 4 => {
+                        let mut out = ArrayVec::new();
+                        for value in values {
+                            out.push(i32::try_from_abstract(value)?);
+                        }
+                        out
+                    }
+                    _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+                };
+                let mut result = 0u32;
+                for (i, value) in values.into_iter().enumerate() {
+                    let value = if fun == crate::MathFunction::Pack4xI8Clamp {
+                        value.clamp(-128, 127)
+                    } else {
+                        value
+                    };
+                    result |= ((value as u32) & 0xFF) << (8 * i);
+                }
+                result
+            }
+            crate::MathFunction::Pack4xU8 | crate::MathFunction::Pack4xU8Clamp => {
+                let values = match arg {
+                    LiteralVector::U32(values) if values.len() == 4 => values,
+                    _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+                };
+                let mut result = 0u32;
+                for (i, value) in values.into_iter().enumerate() {
+                    let value = if fun == crate::MathFunction::Pack4xU8Clamp {
+                        value.min(255)
+                    } else {
+                        value
+                    };
+                    result |= (value & 0xFF) << (8 * i);
+                }
+                result
+            }
+            _ => unreachable!(),
+        };
+
+        self.register_evaluated_expr(Expression::Literal(Literal::U32(result)), span)
+    }
+
+    fn unpack(
+        &mut self,
+        arg: Handle<Expression>,
+        fun: crate::MathFunction,
+        span: Span,
+    ) -> Result<Handle<Expression>, ConstantEvaluatorError> {
+        let arg = self.extract_vec(arg, true)?;
+        let arg = match arg {
+            LiteralVector::U32(arg) => {
+                let &[value] = arg.as_slice() else {
+                    return Err(ConstantEvaluatorError::InvalidMathArg);
+                };
+                value
+            }
+            _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+        };
+
+        fn unpack_snorm_i16(value: u16) -> f32 {
+            f32::max((value as i16) as f32 / 32767.0, -1.0)
+        }
+
+        fn unpack_snorm_i8(value: u8) -> f32 {
+            f32::max((value as i8) as f32 / 127.0, -1.0)
+        }
+
+        let result = match fun {
+            crate::MathFunction::Unpack2x16float => {
+                let mut out = ArrayVec::new();
+                out.push(f32::from(f16::from_bits(arg as u16)));
+                out.push(f32::from(f16::from_bits((arg >> 16) as u16)));
+                LiteralVector::F32(out)
+            }
+            crate::MathFunction::Unpack2x16snorm => {
+                let mut out = ArrayVec::new();
+                out.push(unpack_snorm_i16(arg as u16));
+                out.push(unpack_snorm_i16((arg >> 16) as u16));
+                LiteralVector::F32(out)
+            }
+            crate::MathFunction::Unpack2x16unorm => {
+                let mut out = ArrayVec::new();
+                out.push((arg as u16) as f32 / 65535.0);
+                out.push(((arg >> 16) as u16) as f32 / 65535.0);
+                LiteralVector::F32(out)
+            }
+            crate::MathFunction::Unpack4x8snorm => {
+                let mut out = ArrayVec::new();
+                for i in 0..4 {
+                    out.push(unpack_snorm_i8((arg >> (8 * i)) as u8));
+                }
+                LiteralVector::F32(out)
+            }
+            crate::MathFunction::Unpack4x8unorm => {
+                let mut out = ArrayVec::new();
+                for i in 0..4 {
+                    out.push(((arg >> (8 * i)) as u8) as f32 / 255.0);
+                }
+                LiteralVector::F32(out)
+            }
+            crate::MathFunction::Unpack4xI8 => {
+                let mut out = ArrayVec::new();
+                for i in 0..4 {
+                    out.push(((arg >> (8 * i)) as u8) as i8 as i32);
+                }
+                LiteralVector::I32(out)
+            }
+            crate::MathFunction::Unpack4xU8 => {
+                let mut out = ArrayVec::new();
+                for i in 0..4 {
+                    out.push((arg >> (8 * i)) & 0xFF);
+                }
+                LiteralVector::U32(out)
+            }
+            _ => unreachable!(),
         };
 
         result.register_as_evaluated_expr(self, span)

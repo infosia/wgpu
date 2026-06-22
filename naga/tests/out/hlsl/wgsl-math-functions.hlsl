@@ -79,9 +79,8 @@ void main()
     float modf_e = naga_modf(float4(1.5, 1.5, 1.5, 1.5)).whole.x;
     float modf_f = naga_modf(float2(1.5, 1.5)).fract.y;
     _frexp_result_f32_ frexp_a = Construct_frexp_result_f32_(0.75, int(1));
-    float quantizeToF16_a = f16tof32(f32tof16(1.0));
-    float2 quantizeToF16_b = f16tof32(f32tof16(float2(1.0, 1.0)));
-    float3 quantizeToF16_c = f16tof32(f32tof16(float3(1.0, 1.0, 1.0)));
-    float4 quantizeToF16_d = f16tof32(f32tof16(float4(1.0, 1.0, 1.0, 1.0)));
+    float2 quantizeToF16_b = float2(1.0, 1.0);
+    float3 quantizeToF16_c = float3(1.0, 1.0, 1.0);
+    float4 quantizeToF16_d = float4(1.0, 1.0, 1.0, 1.0);
     return;
 }

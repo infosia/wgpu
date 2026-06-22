@@ -67,13 +67,9 @@ void main() {
     float modf_e = naga_modf(vec4(1.5, 1.5, 1.5, 1.5)).whole.x;
     float modf_f = naga_modf(vec2(1.5, 1.5)).fract_.y;
     _frexp_result_f32_ frexp_a = _frexp_result_f32_(0.75, 1);
-    float quantizeToF16_a = unpackHalf2x16(packHalf2x16(vec2(1.0))).x;
-    vec2 _e107 = vec2(1.0, 1.0);
-    vec2 quantizeToF16_b = unpackHalf2x16(packHalf2x16(_e107));
-    vec3 _e112 = vec3(1.0, 1.0, 1.0);
-    vec3 quantizeToF16_c = vec3(unpackHalf2x16(packHalf2x16(_e112.xy)), unpackHalf2x16(packHalf2x16(_e112.zz)).x);
-    vec4 _e118 = vec4(1.0, 1.0, 1.0, 1.0);
-    vec4 quantizeToF16_d = vec4(unpackHalf2x16(packHalf2x16(_e118.xy)), unpackHalf2x16(packHalf2x16(_e118.zw)));
+    vec2 quantizeToF16_b = vec2(1.0, 1.0);
+    vec3 quantizeToF16_c = vec3(1.0, 1.0, 1.0);
+    vec4 quantizeToF16_d = vec4(1.0, 1.0, 1.0, 1.0);
     return;
 }
 
