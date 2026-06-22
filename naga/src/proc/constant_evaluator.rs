@@ -2081,6 +2081,10 @@ impl<'a> ConstantEvaluator<'a> {
     where
         F: num_traits::Float,
     {
+        if let [value] = e {
+            return Ok(value.abs());
+        }
+
         let mut sum = F::zero();
         for &value in e {
             let product = Self::checked_float_mul(value, value, fun)?;
@@ -2093,6 +2097,10 @@ impl<'a> ConstantEvaluator<'a> {
     where
         F: num_traits::Float,
     {
+        if let ([aa], [bb]) = (a, b) {
+            return Ok(Self::checked_float_sub(*aa, *bb, fun)?.abs());
+        }
+
         let mut diff = ArrayVec::<F, { crate::VectorSize::MAX }>::new();
         for (&aa, &bb) in a.iter().zip(b) {
             diff.push(Self::checked_float_sub(aa, bb, fun)?);
@@ -2141,6 +2149,10 @@ impl<'a> ConstantEvaluator<'a> {
     }
 
     fn checked_f16_length(e: &[f16], fun: &str) -> Result<f32, ConstantEvaluatorError> {
+        if let [value] = e {
+            return Ok(f32::from(*value).abs());
+        }
+
         let mut sum = 0.0f32;
         for &value in e {
             let value = f32::from(value);
@@ -2155,6 +2167,10 @@ impl<'a> ConstantEvaluator<'a> {
         b: &[f16],
         fun: &str,
     ) -> Result<f32, ConstantEvaluatorError> {
+        if let ([aa], [bb]) = (a, b) {
+            return Ok(Self::checked_f16_sub(f32::from(*aa), f32::from(*bb), fun)?.abs());
+        }
+
         let mut diff = ArrayVec::<f16, { crate::VectorSize::MAX }>::new();
         for (&aa, &bb) in a.iter().zip(b) {
             diff.push(f16::from_f32(Self::checked_f16_sub(

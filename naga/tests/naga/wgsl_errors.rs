@@ -218,6 +218,12 @@ const_assert len_small == 5.0;
 const norm_small = normalize(vec2(3.0, 4.0));
 const_assert all(norm_small == vec2(0.6, 0.8));
 
+const len_scalar_large = length(1.0e300);
+const_assert len_scalar_large == 1.0e300;
+
+const dist_scalar_large = distance(1.0e300, -1.0e300);
+const_assert dist_scalar_large == 2.0e300;
+
 const len_large = length(vec2(1.0e150, 2.0e150));
 const_assert len_large > 2.23e150;
 const_assert len_large < 2.24e150;
@@ -266,6 +272,18 @@ fn const_eval_geometric_overflow() {
         "enable f16; const r = length(vec2<f16>(60000.0h, 60000.0h));",
         "overflowed",
     );
+    check_error_matches(
+        "const r = smoothstep(vec3<f32>(-3.402823e38f), vec3<f32>(3.402823e38f), vec3<f32>(0.0f));",
+        "overflowed",
+    );
+    check_error_matches(
+        "const r = smoothstep(vec4<f32>(0.0f), vec4<f32>(1.0e-45f), vec4<f32>(1.0f));",
+        "overflowed",
+    );
+    check_error_matches(
+        "enable f16; const r = smoothstep(vec3<f16>(-65504.0h), vec3<f16>(65504.0h), vec3<f16>(0.0h));",
+        "overflowed",
+    );
 
     check_parse_and_validate_success(
         r#"
@@ -282,6 +300,18 @@ const_assert mix_f16 == 1.5h;
 
 const len_small = length(vec2(3.0, 4.0));
 const_assert len_small == 5.0;
+
+const len_scalar_f32 = length(3.402823e38f);
+const_assert len_scalar_f32 == 3.402823e38f;
+
+const dist_scalar_f32 = distance(1.0e38f, -1.0e38f);
+const_assert dist_scalar_f32 == 2.0e38f;
+
+const len_scalar_f16 = length(60000.0h);
+const_assert len_scalar_f16 == 60000.0h;
+
+const smooth_finite = smoothstep(vec3<f32>(0.0f), vec3<f32>(1.0f), vec3<f32>(0.5f));
+const_assert all(smooth_finite == vec3<f32>(0.5f));
 "#,
     );
 }
