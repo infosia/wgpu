@@ -156,6 +156,15 @@ pub enum ExpressionError {
         lhs_type: crate::TypeInner,
         rhs_expr: Handle<crate::Expression>,
     },
+    #[error("Division by zero")]
+    DivisionByZero { rhs_expr: Handle<crate::Expression> },
+    #[error("Remainder by zero")]
+    RemainderByZero { rhs_expr: Handle<crate::Expression> },
+    #[error("Integer division overflow")]
+    IntegerDivisionOverflow {
+        lhs_expr: Handle<crate::Expression>,
+        rhs_expr: Handle<crate::Expression>,
+    },
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -317,6 +326,136 @@ impl super::Validator {
         } else {
             Ok(())
         }
+    }
+
+    fn validate_constant_div_rem_operands(
+        op: crate::BinaryOperator,
+        left_ty: &crate::TypeInner,
+        left: Handle<crate::Expression>,
+        right: Handle<crate::Expression>,
+        module: &crate::Module,
+        function: &crate::Function,
+    ) -> Result<(), ExpressionError> {
+        fn literal(
+            expr: Handle<crate::Expression>,
+            module: &crate::Module,
+            function: &crate::Function,
+        ) -> Option<crate::Literal> {
+            match function.expressions[expr] {
+                crate::Expression::Literal(literal) => Some(literal),
+                crate::Expression::ZeroValue(ty) => match module.types[ty].inner {
+                    crate::TypeInner::Scalar(scalar) => crate::Literal::zero(scalar),
+                    _ => None,
+                },
+                crate::Expression::Constant(constant) => {
+                    let init = module.constants[constant].init;
+                    match module.global_expressions[init] {
+                        crate::Expression::Literal(literal) => Some(literal),
+                        crate::Expression::ZeroValue(ty) => match module.types[ty].inner {
+                            crate::TypeInner::Scalar(scalar) => crate::Literal::zero(scalar),
+                            _ => None,
+                        },
+                        _ => None,
+                    }
+                }
+                crate::Expression::Override(r#override) => {
+                    let init = module.overrides[r#override].init?;
+                    match module.global_expressions[init] {
+                        crate::Expression::Literal(literal) => Some(literal),
+                        crate::Expression::ZeroValue(ty) => match module.types[ty].inner {
+                            crate::TypeInner::Scalar(scalar) => crate::Literal::zero(scalar),
+                            _ => None,
+                        },
+                        _ => None,
+                    }
+                }
+                _ => None,
+            }
+        }
+
+        fn any_literal(
+            expr: Handle<crate::Expression>,
+            module: &crate::Module,
+            function: &crate::Function,
+            predicate: impl Fn(crate::Literal) -> bool + Copy,
+        ) -> bool {
+            if let Some(literal) = literal(expr, module, function) {
+                return predicate(literal);
+            }
+
+            match function.expressions[expr] {
+                crate::Expression::Splat { value, .. } => {
+                    any_literal(value, module, function, predicate)
+                }
+                crate::Expression::Compose { ref components, .. } => components
+                    .iter()
+                    .any(|&component| any_literal(component, module, function, predicate)),
+                _ => false,
+            }
+        }
+
+        fn is_zero(literal: crate::Literal) -> bool {
+            matches!(
+                literal,
+                crate::Literal::I32(0)
+                    | crate::Literal::U32(0)
+                    | crate::Literal::I64(0)
+                    | crate::Literal::U64(0)
+                    | crate::Literal::AbstractInt(0)
+            )
+        }
+
+        fn is_negative_one(literal: crate::Literal) -> bool {
+            matches!(
+                literal,
+                crate::Literal::I32(-1) | crate::Literal::I64(-1) | crate::Literal::AbstractInt(-1)
+            )
+        }
+
+        fn is_signed_min(literal: crate::Literal) -> bool {
+            matches!(
+                literal,
+                crate::Literal::I32(i32::MIN)
+                    | crate::Literal::I64(i64::MIN)
+                    | crate::Literal::AbstractInt(i64::MIN)
+            )
+        }
+
+        let Some((_, scalar)) = left_ty.vector_size_and_scalar() else {
+            return Ok(());
+        };
+        if !matches!(
+            scalar.kind,
+            crate::ScalarKind::Sint | crate::ScalarKind::Uint | crate::ScalarKind::AbstractInt
+        ) {
+            return Ok(());
+        }
+
+        if any_literal(right, module, function, is_zero) {
+            return Err(match op {
+                crate::BinaryOperator::Divide => {
+                    ExpressionError::DivisionByZero { rhs_expr: right }
+                }
+                crate::BinaryOperator::Modulo => {
+                    ExpressionError::RemainderByZero { rhs_expr: right }
+                }
+                _ => return Ok(()),
+            });
+        }
+
+        if matches!(
+            scalar.kind,
+            crate::ScalarKind::Sint | crate::ScalarKind::AbstractInt
+        ) && any_literal(right, module, function, is_negative_one)
+            && any_literal(left, module, function, is_signed_min)
+        {
+            return Err(ExpressionError::IntegerDivisionOverflow {
+                lhs_expr: left,
+                rhs_expr: right,
+            });
+        }
+
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -971,11 +1110,7 @@ impl super::Validator {
                         }
                     }
                     Bo::LogicalAnd | Bo::LogicalOr => match *left_inner {
-                        Ti::Scalar(Sc { kind: Sk::Bool, .. })
-                        | Ti::Vector {
-                            scalar: Sc { kind: Sk::Bool, .. },
-                            ..
-                        } => left_inner == right_inner,
+                        Ti::Scalar(Sc { kind: Sk::Bool, .. }) => left_inner == right_inner,
                         ref other => {
                             log::debug!("Op {op:?} left type {other:?}");
                             false
@@ -1049,6 +1184,11 @@ impl super::Validator {
                 // For shift operations, check if the constant shift amount exceeds the bit width
                 if matches!(op, Bo::ShiftLeft | Bo::ShiftRight) {
                     Self::validate_constant_shift_amounts(left_inner, right, module, function)?;
+                }
+                if matches!(op, Bo::Divide | Bo::Modulo) {
+                    Self::validate_constant_div_rem_operands(
+                        op, left_inner, left, right, module, function,
+                    )?;
                 }
                 ShaderStages::all()
             }

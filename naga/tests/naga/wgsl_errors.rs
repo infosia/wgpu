@@ -387,6 +387,21 @@ fn check_parse_and_validate_success(input: &str) {
 }
 
 #[track_caller]
+fn check_validation_error_matches(input: &str, expected_substring: &str) {
+    let module = naga::front::wgsl::parse_str(input)
+        .unwrap_or_else(|err| panic!("{}", err.emit_to_string(input)));
+    let result =
+        valid::Validator::new(valid::ValidationFlags::all(), Capabilities::all()).validate(&module);
+    let Err(err) = result else {
+        panic!("expected validation error");
+    };
+    let message = err.emit_to_string(input);
+    if !message.contains(expected_substring) {
+        panic!("expected error containing '{expected_substring}', got '{message}'",);
+    }
+}
+
+#[track_caller]
 fn check_parse_or_validate_error(input: &str) {
     if let Ok(module) = naga::front::wgsl::parse_str(input) {
         valid::Validator::new(valid::ValidationFlags::all(), Capabilities::all())
@@ -5448,6 +5463,126 @@ fn vector_logical_ops() {
         r#"error: Incompatible operands: LogicalOr(vec2<bool>, _)
 
 "#,
+    );
+}
+
+#[test]
+fn binary_validation_div_rem_const_invalid_rhs() {
+    check_validation_error_matches(
+        "@compute @workgroup_size(1)
+fn main() { var x = 1; x /= 0; }",
+        "Division by zero",
+    );
+    check_validation_error_matches(
+        "@compute @workgroup_size(1)
+fn main() { var x = 1; x %= 0; }",
+        "Remainder by zero",
+    );
+    check_validation_error_matches(
+        "@compute @workgroup_size(1)
+fn main() { let v = vec4<u32>(1u); let r = v / 0u; }",
+        "Division by zero",
+    );
+    check_validation_error_matches(
+        "@compute @workgroup_size(1)
+fn main() { let v = vec4<u32>(1u); let r = v % 0u; }",
+        "Remainder by zero",
+    );
+    check_validation_error_matches(
+        "@compute @workgroup_size(1)
+fn main() {
+    let a = vec4<u32>(1u, 2u, 3u, 4u);
+    let b = vec4<u32>(1u, 0u, 2u, 3u);
+    let r = a % b;
+}",
+        "Remainder by zero",
+    );
+    check_validation_error_matches(
+        "override z: u32 = 0u;
+@compute @workgroup_size(1)
+fn main() { let v = vec4<u32>(1u); let r = v % z; }",
+        "Remainder by zero",
+    );
+    check_validation_error_matches(
+        "@compute @workgroup_size(1)
+fn main() {
+    let min = -2147483647i - 1i;
+    let v = vec4<i32>(min);
+    let r = v / -1i;
+}",
+        "Integer division overflow",
+    );
+    check_error_matches(
+        "const min = -2147483647i - 1i;
+const a = vec4<i32>(min);
+const b = vec4<i32>(-1i);
+const r = a % b;",
+        "operation overflowed",
+    );
+
+    check_parse_and_validate_success(
+        "@compute @workgroup_size(1)
+fn main() {
+    let v = vec4<u32>(4u);
+    let d = v / 2u;
+    let r = v % 3u;
+}",
+    );
+}
+
+#[test]
+fn binary_validation_bool_operators() {
+    check_error_matches(
+        "@compute @workgroup_size(1)
+fn main() { let r = true && vec2<u32>(1u); }",
+        "Incompatible operands: LogicalAnd",
+    );
+    check_error_matches(
+        "@compute @workgroup_size(1)
+fn main() { let r = false && vec2<u32>(1u); }",
+        "Incompatible operands: LogicalAnd",
+    );
+    check_error_matches(
+        "@compute @workgroup_size(1)
+fn main() { let r = true || vec2<u32>(1u); }",
+        "Incompatible operands: LogicalOr",
+    );
+    check_error_matches(
+        "@compute @workgroup_size(1)
+fn main() { let r = vec2<bool>(true) && vec2<bool>(false); }",
+        "Incompatible operands: LogicalAnd",
+    );
+    check_validation_error_matches(
+        "@compute @workgroup_size(1)
+fn main() { let r = true < false; }",
+        "Operation Less can't work",
+    );
+    check_validation_error_matches(
+        "@compute @workgroup_size(1)
+fn main() { let r = vec2<bool>(true) < vec2<bool>(false); }",
+        "Operation Less can't work",
+    );
+    check_validation_error_matches(
+        "@compute @workgroup_size(1)
+fn main() { let r = true ^ false; }",
+        "Operation ExclusiveOr can't work",
+    );
+    check_validation_error_matches(
+        "@compute @workgroup_size(1)
+fn main() { let r = vec2<bool>(true, false) ^ vec2<bool>(false, true); }",
+        "Operation ExclusiveOr can't work",
+    );
+
+    check_parse_and_validate_success(
+        "@compute @workgroup_size(1)
+fn main() {
+    let a = vec2<bool>(true, false);
+    let b = vec2<bool>(false, true);
+    let c = a & b;
+    let d = a | b;
+    let e = true & false;
+    let f = true | false;
+}",
     );
 }
 

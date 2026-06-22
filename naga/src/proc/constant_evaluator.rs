@@ -4256,6 +4256,16 @@ impl<'a> ConstantEvaluator<'a> {
                 {
                     return Err(ConstantEvaluatorError::InvalidBinaryOpArgs);
                 }
+                if matches!(
+                    op,
+                    BinaryOperator::Less
+                        | BinaryOperator::LessEqual
+                        | BinaryOperator::Greater
+                        | BinaryOperator::GreaterEqual
+                ) && matches!(left_value, Literal::Bool(_))
+                {
+                    return Err(ConstantEvaluatorError::InvalidBinaryOpArgs);
+                }
 
                 let literal = match op {
                     BinaryOperator::Equal => Literal::Bool(left_value == right_value),
@@ -4273,6 +4283,10 @@ impl<'a> ConstantEvaluator<'a> {
                             BinaryOperator::Divide => {
                                 if b == 0 {
                                     return Err(ConstantEvaluatorError::DivisionByZero);
+                                } else if a == i32::MIN && b == -1 {
+                                    return Err(ConstantEvaluatorError::Overflow(
+                                        "division".into(),
+                                    ));
                                 } else {
                                     a.wrapping_div(b)
                                 }
@@ -4280,6 +4294,10 @@ impl<'a> ConstantEvaluator<'a> {
                             BinaryOperator::Modulo => {
                                 if b == 0 {
                                     return Err(ConstantEvaluatorError::RemainderByZero);
+                                } else if a == i32::MIN && b == -1 {
+                                    return Err(ConstantEvaluatorError::Overflow(
+                                        "remainder".into(),
+                                    ));
                                 } else {
                                     a.wrapping_rem(b)
                                 }
@@ -4415,8 +4433,8 @@ impl<'a> ConstantEvaluator<'a> {
                             Literal::AbstractFloat(result)
                         }
                         (Literal::Bool(a), Literal::Bool(b)) => Literal::Bool(match op {
-                            BinaryOperator::LogicalAnd => a && b,
-                            BinaryOperator::LogicalOr => a || b,
+                            BinaryOperator::LogicalAnd | BinaryOperator::And => a && b,
+                            BinaryOperator::LogicalOr | BinaryOperator::InclusiveOr => a || b,
                             _ => return Err(ConstantEvaluatorError::InvalidBinaryOpArgs),
                         }),
                         _ => return Err(ConstantEvaluatorError::InvalidBinaryOpArgs),
