@@ -1169,6 +1169,14 @@ impl<'a> ConstantEvaluator<'a> {
         }
     }
 
+    pub fn append_unevaluated_runtime(
+        &mut self,
+        expr: Expression,
+        span: Span,
+    ) -> Handle<Expression> {
+        self.append_expr(expr, span, ExpressionKind::Runtime)
+    }
+
     /// Is the [`Self::expressions`] arena the global module expression arena?
     const fn is_global_arena(&self) -> bool {
         matches!(

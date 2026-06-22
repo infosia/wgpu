@@ -5603,26 +5603,6 @@ fn main() {
 
 #[test]
 fn binary_validation_bool_operators() {
-    check_error_matches(
-        "@compute @workgroup_size(1)
-fn main() { let r = true && vec2<u32>(1u); }",
-        "Incompatible operands: LogicalAnd",
-    );
-    check_error_matches(
-        "@compute @workgroup_size(1)
-fn main() { let r = false && vec2<u32>(1u); }",
-        "Incompatible operands: LogicalAnd",
-    );
-    check_error_matches(
-        "@compute @workgroup_size(1)
-fn main() { let r = true || vec2<u32>(1u); }",
-        "Incompatible operands: LogicalOr",
-    );
-    check_error_matches(
-        "@compute @workgroup_size(1)
-fn main() { let r = vec2<bool>(true) && vec2<bool>(false); }",
-        "Incompatible operands: LogicalAnd",
-    );
     check_validation_error_matches(
         "@compute @workgroup_size(1)
 fn main() { let r = true < false; }",

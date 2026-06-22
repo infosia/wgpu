@@ -119,6 +119,7 @@ impl<'source> GlobalContext<'source, '_, '_> {
             layouter: self.layouter,
             expr_type: ExpressionContextType::Constant(None),
             global_expression_kind_tracker: self.global_expression_kind_tracker,
+            suppress_runtime_rhs_const_eval: false,
         }
     }
 
@@ -132,6 +133,7 @@ impl<'source> GlobalContext<'source, '_, '_> {
             layouter: self.layouter,
             expr_type: ExpressionContextType::Override,
             global_expression_kind_tracker: self.global_expression_kind_tracker,
+            suppress_runtime_rhs_const_eval: false,
         }
     }
 
@@ -226,6 +228,7 @@ impl<'a, 'temp> StatementContext<'a, 'temp, '_> {
                 typifier: self.typifier,
                 local_expression_kind_tracker: self.local_expression_kind_tracker,
             })),
+            suppress_runtime_rhs_const_eval: false,
         }
     }
 
@@ -253,6 +256,7 @@ impl<'a, 'temp> StatementContext<'a, 'temp, '_> {
                 typifier: self.typifier,
                 local_expression_kind_tracker: self.local_expression_kind_tracker,
             }),
+            suppress_runtime_rhs_const_eval: false,
         }
     }
 
@@ -392,6 +396,8 @@ pub struct ExpressionContext<'source, 'temp, 'out> {
     /// Whether we are lowering a constant expression or a general
     /// runtime expression, and the data needed in each case.
     expr_type: ExpressionContextType<'temp, 'out>,
+
+    suppress_runtime_rhs_const_eval: bool,
 }
 
 impl TypeContext for ExpressionContext<'_, '_, '_> {
@@ -459,6 +465,7 @@ impl<'source, 'temp, 'out> ExpressionContext<'source, 'temp, 'out> {
                 ExpressionContextType::Constant(None) | ExpressionContextType::Override => None,
             }),
             global_expression_kind_tracker: self.global_expression_kind_tracker,
+            suppress_runtime_rhs_const_eval: self.suppress_runtime_rhs_const_eval,
         }
     }
 
@@ -531,9 +538,36 @@ impl<'source, 'temp, 'out> ExpressionContext<'source, 'temp, 'out> {
         expr: ir::Expression,
         span: Span,
     ) -> Result<'source, Handle<ir::Expression>> {
+        if self.suppress_runtime_rhs_const_eval
+            && matches!(self.expr_type, ExpressionContextType::Runtime(_))
+        {
+            let expr = match expr {
+                ir::Expression::Literal(ir::Literal::AbstractInt(value)) => {
+                    ir::Expression::Literal(ir::Literal::F32(value as f32))
+                }
+                ir::Expression::Literal(ir::Literal::AbstractFloat(value)) => {
+                    ir::Expression::Literal(ir::Literal::F32(value as f32))
+                }
+                expr => expr,
+            };
+            let mut eval = self.as_const_evaluator();
+            return Ok(eval.append_unevaluated_runtime(expr, span));
+        }
+
         let mut eval = self.as_const_evaluator();
         eval.try_eval_and_append(expr, span)
             .map_err(|e| Box::new(Error::ConstantEvaluatorError(e.into(), span)))
+    }
+
+    fn with_suppressed_runtime_rhs_const_eval<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<'source, T>,
+    ) -> Result<'source, T> {
+        let old = self.suppress_runtime_rhs_const_eval;
+        self.suppress_runtime_rhs_const_eval = true;
+        let result = f(self);
+        self.suppress_runtime_rhs_const_eval = old;
+        result
     }
 
     fn get_const_val<T: TryFrom<crate::Literal, Error = proc::ConstValueError>>(
@@ -604,131 +638,6 @@ impl<'source, 'temp, 'out> ExpressionContext<'source, 'temp, 'out> {
             }
             ast::Expression::Member { base, .. } => self.ast_expression_uses_runtime_local(base),
             ast::Expression::Literal(_) | ast::Expression::Ident(_) => false,
-        }
-    }
-
-    fn ast_expression_is_scalar_bool_without_eval(
-        &self,
-        handle: Handle<ast::Expression<'source>>,
-    ) -> Option<bool> {
-        fn unresolved_name<'a>(ident: &ast::TemplateElaboratedIdent<'a>) -> Option<&'a str> {
-            match ident.ident {
-                ast::IdentExpr::Unresolved(name) => Some(name),
-                ast::IdentExpr::Local(_) => None,
-            }
-        }
-
-        fn is_vector_constructor(name: &str) -> bool {
-            matches!(name, "vec2" | "vec3" | "vec4")
-        }
-
-        fn vector_like<'a, 't, 'o>(
-            ctx: &ExpressionContext<'a, 't, 'o>,
-            handle: Handle<ast::Expression<'a>>,
-        ) -> Option<bool> {
-            match ctx.ast_expressions[handle] {
-                ast::Expression::Literal(_) => Some(false),
-                ast::Expression::Unary { expr, .. } => vector_like(ctx, expr),
-                ast::Expression::Binary { left, right, .. } => {
-                    match (vector_like(ctx, left), vector_like(ctx, right)) {
-                        (Some(left), Some(right)) => Some(left || right),
-                        _ => None,
-                    }
-                }
-                ast::Expression::Call(ref call) => {
-                    let name = unresolved_name(&call.function)?;
-                    if is_vector_constructor(name) {
-                        Some(true)
-                    } else if matches!(name, "bool" | "i32" | "u32" | "f16" | "f32" | "f64") {
-                        Some(false)
-                    } else if matches!(
-                        name,
-                        "abs"
-                            | "acos"
-                            | "asin"
-                            | "atan"
-                            | "ceil"
-                            | "cos"
-                            | "cosh"
-                            | "degrees"
-                            | "exp"
-                            | "exp2"
-                            | "floor"
-                            | "fract"
-                            | "inverseSqrt"
-                            | "log"
-                            | "log2"
-                            | "radians"
-                            | "round"
-                            | "sign"
-                            | "sin"
-                            | "sinh"
-                            | "sqrt"
-                            | "tan"
-                            | "tanh"
-                            | "trunc"
-                    ) && call.arguments.len() == 1
-                    {
-                        vector_like(ctx, call.arguments[0])
-                    } else {
-                        None
-                    }
-                }
-                ast::Expression::AddrOf(_)
-                | ast::Expression::Deref(_)
-                | ast::Expression::Ident(_)
-                | ast::Expression::Index { .. }
-                | ast::Expression::Member { .. } => None,
-            }
-        }
-
-        match self.ast_expressions[handle] {
-            ast::Expression::Literal(ast::Literal::Bool(_)) => Some(true),
-            ast::Expression::Literal(ast::Literal::Number(_)) => Some(false),
-            ast::Expression::Unary {
-                op: crate::UnaryOperator::LogicalNot,
-                expr,
-            } => self.ast_expression_is_scalar_bool_without_eval(expr),
-            ast::Expression::Unary { .. } => Some(false),
-            ast::Expression::Binary { op, left, right } => match op {
-                crate::BinaryOperator::LogicalAnd | crate::BinaryOperator::LogicalOr => {
-                    match (
-                        self.ast_expression_is_scalar_bool_without_eval(left),
-                        self.ast_expression_is_scalar_bool_without_eval(right),
-                    ) {
-                        (Some(true), Some(true)) => Some(true),
-                        (Some(false), _) | (_, Some(false)) => Some(false),
-                        _ => None,
-                    }
-                }
-                crate::BinaryOperator::Equal
-                | crate::BinaryOperator::NotEqual
-                | crate::BinaryOperator::Less
-                | crate::BinaryOperator::LessEqual
-                | crate::BinaryOperator::Greater
-                | crate::BinaryOperator::GreaterEqual => {
-                    match (vector_like(self, left), vector_like(self, right)) {
-                        (Some(left), Some(right)) => Some(!left && !right),
-                        _ => None,
-                    }
-                }
-                _ => Some(false),
-            },
-            ast::Expression::Call(ref call) => {
-                let name = unresolved_name(&call.function)?;
-                if name == "bool" && call.arguments.len() == 1 {
-                    Some(true)
-                } else if is_vector_constructor(name) {
-                    Some(false)
-                } else {
-                    None
-                }
-            }
-            ast::Expression::AddrOf(_)
-            | ast::Expression::Deref(_)
-            | ast::Expression::Ident(_)
-            | ast::Expression::Index { .. }
-            | ast::Expression::Member { .. } => None,
         }
     }
 
@@ -833,6 +742,7 @@ impl<'source, 'temp, 'out> ExpressionContext<'source, 'temp, 'out> {
             const_typifier: self.const_typifier,
             layouter: self.layouter,
             global_expression_kind_tracker: self.global_expression_kind_tracker,
+            suppress_runtime_rhs_const_eval: self.suppress_runtime_rhs_const_eval,
         };
         let ret = f(&mut nested_ctx)?;
 
@@ -2829,16 +2739,9 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                 ctx.append_expression(crate::Expression::LocalVariable(result_var), span)?;
 
             let (right, mut accept) = ctx.with_nested_runtime_expression_ctx(span, |ctx| {
-                let right = self.expression_for_abstract(right, ctx)?;
+                let right =
+                    ctx.with_suppressed_runtime_rhs_const_eval(|ctx| self.expression(right, ctx))?;
                 ctx.grow_types(right)?;
-                if !matches!(
-                    resolve_inner!(ctx, right),
-                    &crate::TypeInner::Scalar(crate::Scalar::BOOL)
-                ) {
-                    return Err(Box::new(Error::InvalidResolve(
-                        proc::ResolveError::IncompatibleOperands(format!("{op:?}(bool, _)")),
-                    )));
-                }
                 Ok(right)
             })?;
 
@@ -2879,25 +2782,13 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                 op == crate::BinaryOperator::LogicalAnd && !left_val
                     || op == crate::BinaryOperator::LogicalOr && left_val
             }) {
-                if let Some(is_scalar_bool) = ctx.ast_expression_is_scalar_bool_without_eval(right)
-                {
-                    if !is_scalar_bool {
-                        return Err(Box::new(Error::InvalidResolve(
-                            proc::ResolveError::IncompatibleOperands(format!("{op:?}(bool, _)")),
-                        )));
-                    }
-                } else {
-                    let right = self.expression_for_abstract(right, ctx)?;
-                    ctx.grow_types(right)?;
-                    if !matches!(
-                        resolve_inner!(ctx, right),
-                        &crate::TypeInner::Scalar(crate::Scalar::BOOL)
-                    ) {
-                        return Err(Box::new(Error::InvalidResolve(
-                            proc::ResolveError::IncompatibleOperands(format!("{op:?}(bool, _)")),
-                        )));
-                    }
-                }
+                // Short-circuit behavior: don't evaluate the RHS.
+
+                // TODO(https://github.com/gfx-rs/wgpu/issues/8440): We shouldn't ignore the
+                // RHS completely, it should still be type-checked. Preserving it for type
+                // checking is a bit tricky, because we're trying to produce an expression
+                // for a const context, but the RHS is allowed to have things that aren't
+                // const.
 
                 Ok(Typed::Plain(ctx.get(left).clone()))
             } else {
@@ -2908,14 +2799,6 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                 // and to non-well-formed expressions (rejected by type checking).
                 let right = self.expression_for_abstract(right, ctx)?;
                 ctx.grow_types(right)?;
-                if !matches!(
-                    resolve_inner!(ctx, right),
-                    &crate::TypeInner::Scalar(crate::Scalar::BOOL)
-                ) {
-                    return Err(Box::new(Error::InvalidResolve(
-                        proc::ResolveError::IncompatibleOperands(format!("{op:?}(bool, _)")),
-                    )));
-                }
                 Ok(Typed::Plain(crate::Expression::Binary { op, left, right }))
             }
         }
