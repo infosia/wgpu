@@ -847,6 +847,10 @@ pub enum ConstantEvaluatorError {
     InvalidAccessBase,
     #[error("Cannot access at the index")]
     InvalidAccessIndex,
+    #[error("index must be non-negative (>= 0)")]
+    NegativeIndex,
+    #[error("index {index} is out of bounds for length {length}")]
+    IndexOutOfBounds { index: u32, length: u32 },
     #[error("Cannot access with index of type")]
     InvalidAccessIndexTy,
     #[error("Constants don't support array length expressions")]

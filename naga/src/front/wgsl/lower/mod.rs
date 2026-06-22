@@ -3184,10 +3184,17 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                             }));
                         }
                     };
-                    let source_width = resolve!(ctx, expr)
+                    let Some(source_width) = resolve!(ctx, expr)
                         .inner_with(&ctx.module.types)
                         .scalar_width()
-                        .unwrap();
+                    else {
+                        let ty_resolution = resolve!(ctx, expr);
+                        return Err(Box::new(Error::BadTypeCast {
+                            from_type: ctx.type_resolution_to_string(ty_resolution),
+                            span: function_span,
+                            to_type: ctx.type_to_string(ty),
+                        }));
+                    };
                     let bitcast_width =
                         (element_scalar.width != source_width).then_some(element_scalar.width);
 

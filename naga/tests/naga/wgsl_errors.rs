@@ -2740,6 +2740,128 @@ fn invalid_arrays() {
 }
 
 #[test]
+fn bitcast_rejects_non_numeric_source_type() {
+    check_error_matches(
+        r#"
+            @compute @workgroup_size(1)
+            fn main() {
+                var a = array<i32, 2>(1, 2);
+                let b = bitcast<u32>(a);
+            }
+        "#,
+        "cannot cast a array<i32, 2> to a u32",
+    );
+}
+
+fn check_override_access(
+    source: &str,
+) -> Result<(), naga::back::pipeline_constants::PipelineConstantError> {
+    let module = naga::front::wgsl::parse_str(source).expect("module should parse");
+    let info = valid::Validator::new(valid::ValidationFlags::all(), valid::Capabilities::all())
+        .validate(&module)
+        .expect("module should validate before override resolution");
+
+    naga::back::pipeline_constants::process_overrides(
+        &module,
+        &info,
+        Some((naga::ShaderStage::Compute, "main")),
+        &hashbrown::HashMap::new(),
+    )
+    .map(|_| ())
+}
+
+#[test]
+fn override_array_index_rejects_negative_at_pipeline_creation() {
+    let err = check_override_access(
+        r#"
+            override idx: i32 = -1;
+            var<workgroup> arr: array<i32, 4>;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                let x = arr[idx];
+            }
+        "#,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        naga::back::pipeline_constants::PipelineConstantError::ConstantEvaluatorError(
+            naga::proc::ConstantEvaluatorError::NegativeIndex
+        )
+    ));
+}
+
+#[test]
+fn override_array_index_rejects_fixed_size_oob_at_pipeline_creation() {
+    let err = check_override_access(
+        r#"
+            override idx: i32 = 9;
+            var<workgroup> arr: array<i32, 4>;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                let x = arr[idx];
+            }
+        "#,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        naga::back::pipeline_constants::PipelineConstantError::ConstantEvaluatorError(
+            naga::proc::ConstantEvaluatorError::IndexOutOfBounds {
+                index: 9,
+                length: 4
+            }
+        )
+    ));
+}
+
+#[test]
+fn override_matrix_index_rejects_fixed_size_oob_at_pipeline_creation() {
+    let err = check_override_access(
+        r#"
+            override idx: i32 = 3;
+            var<workgroup> mat: mat3x2<f32>;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                let x = mat[idx];
+            }
+        "#,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        naga::back::pipeline_constants::PipelineConstantError::ConstantEvaluatorError(
+            naga::proc::ConstantEvaluatorError::IndexOutOfBounds {
+                index: 3,
+                length: 3
+            }
+        )
+    ));
+}
+
+#[test]
+fn override_array_index_accepts_in_bounds_at_pipeline_creation() {
+    check_override_access(
+        r#"
+            override idx: i32 = 2;
+            var<workgroup> arr: array<i32, 4>;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                let x = arr[idx];
+            }
+        "#,
+    )
+    .expect("in-bounds override index should resolve");
+}
+
+#[test]
 fn discard_in_wrong_stage() {
     check_validation! {
         "@compute @workgroup_size(1)

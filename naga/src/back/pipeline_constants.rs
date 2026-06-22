@@ -13,7 +13,7 @@ use crate::{
     arena::HandleVec,
     compact::{compact, KeepUnused},
     ir,
-    proc::{ConstantEvaluator, ConstantEvaluatorError, Emitter},
+    proc::{ConstantEvaluator, ConstantEvaluatorError, Emitter, IndexableLength},
     valid::{Capabilities, ModuleInfo, ValidationError, ValidationFlags, Validator},
     Arena, Block, Constant, Expression, Function, Handle, Literal, Module, Override, Range, Scalar,
     Span, Statement, TypeInner, WithSpan,
@@ -436,21 +436,21 @@ fn process_function(
     let mut emitter = Emitter::default();
     let mut block = Block::new();
 
-    let mut evaluator = ConstantEvaluator::for_wgsl_function(
-        module,
-        &mut function.expressions,
-        &mut local_expression_kind_tracker,
-        layouter,
-        &mut emitter,
-        &mut block,
-        false,
-    );
-
     for (old_h, mut expr, span) in expressions.drain() {
         if let Expression::Override(h) = expr {
             expr = Expression::Constant(override_map[h]);
         }
         adjust_expr(&adjusted_local_expressions, &mut expr);
+        validate_resolved_override_access(module, function, &expr)?;
+        let mut evaluator = ConstantEvaluator::for_wgsl_function(
+            module,
+            &mut function.expressions,
+            &mut local_expression_kind_tracker,
+            layouter,
+            &mut emitter,
+            &mut block,
+            false,
+        );
         let h = evaluator.try_eval_and_append(expr, span)?;
         adjusted_local_expressions.insert(old_h, h);
     }
@@ -476,6 +476,60 @@ fn process_function(
     }
 
     Ok(())
+}
+
+fn validate_resolved_override_access(
+    module: &Module,
+    function: &Function,
+    expr: &Expression,
+) -> Result<(), ConstantEvaluatorError> {
+    let &Expression::Access { base, index } = expr else {
+        return Ok(());
+    };
+
+    let index = match module
+        .to_ctx()
+        .get_const_val_from(index, &function.expressions)
+    {
+        Ok(index) => index,
+        Err(crate::proc::ConstValueError::Negative) => {
+            return Err(ConstantEvaluatorError::NegativeIndex);
+        }
+        Err(_) => return Ok(()),
+    };
+
+    let base = resolve_expression_type(module, function, base)?;
+    let length = match base
+        .inner_with(&module.types)
+        .indexable_length_resolved(module)
+    {
+        Ok(IndexableLength::Known(length)) => length,
+        Ok(IndexableLength::Dynamic) => return Ok(()),
+        Err(_) => return Ok(()),
+    };
+
+    if index >= length {
+        Err(ConstantEvaluatorError::IndexOutOfBounds { index, length })
+    } else {
+        Ok(())
+    }
+}
+
+fn resolve_expression_type<'a>(
+    module: &'a Module,
+    function: &'a Function,
+    handle: Handle<Expression>,
+) -> Result<crate::proc::TypeResolution, ConstantEvaluatorError> {
+    let mut typifier = crate::front::Typifier::new();
+    let resolve_ctx = crate::proc::ResolveContext::with_locals(
+        module,
+        &function.local_variables,
+        &function.arguments,
+    );
+    typifier
+        .grow(handle, &function.expressions, &resolve_ctx)
+        .map_err(|_| ConstantEvaluatorError::InvalidAccessBase)?;
+    Ok(typifier[handle].clone())
 }
 
 /// Replace every expression handle in `expr` with its counterpart
