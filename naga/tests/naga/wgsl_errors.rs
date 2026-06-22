@@ -77,6 +77,95 @@ const_assert huge_a == 0x1.0p+1000;
     );
 }
 
+#[test]
+fn const_eval_mix() {
+    check_parse_and_validate_success(
+        r#"
+const a = mix(1.0, 2.0, 0.5);
+const_assert a == 1.5;
+
+const huge = mix(1.0e300, 2.0e300, 0.5);
+const_assert huge == 1.5e300;
+
+const av = mix(vec2(0.0, 0.0), vec2(2.0, 4.0), 0.25);
+const_assert all(av == vec2(0.5, 1.0));
+
+const f = mix(1.0f, 2.0f, 0.5f);
+const_assert f == 1.5f;
+
+const fv = mix(vec2f(0.0, 2.0), vec2f(2.0, 4.0), vec2f(0.25, 0.5));
+const_assert all(fv == vec2f(0.5, 3.0));
+"#,
+    );
+}
+
+#[test]
+fn const_eval_face_forward() {
+    check_parse_and_validate_success(
+        r#"
+const a = faceForward(vec2(1.0, 2.0), vec2(1.0, 0.0), vec2(1.0, 0.0));
+const_assert all(a == vec2(-1.0, -2.0));
+
+const av = faceForward(vec2(1.0, 2.0), vec2(-1.0, 0.0), vec2(1.0, 0.0));
+const_assert all(av == vec2(1.0, 2.0));
+
+const f = faceForward(vec2f(1.0, 2.0), vec2f(1.0, 0.0), vec2f(1.0, 0.0));
+const_assert all(f == vec2f(-1.0, -2.0));
+"#,
+    );
+}
+
+#[test]
+fn const_eval_reflect() {
+    check_parse_and_validate_success(
+        r#"
+const a = reflect(vec2(1.0, -1.0), vec2(0.0, 1.0));
+const_assert all(a == vec2(1.0, 1.0));
+
+const av = reflect(vec3(1.0, -1.0, 2.0), vec3(0.0, 1.0, 0.0));
+const_assert all(av == vec3(1.0, 1.0, 2.0));
+
+const f = reflect(vec2f(1.0, -1.0), vec2f(0.0, 1.0));
+const_assert all(f == vec2f(1.0, 1.0));
+"#,
+    );
+}
+
+#[test]
+fn const_eval_refract() {
+    check_parse_and_validate_success(
+        r#"
+const a = refract(vec2(1.0, 0.0), vec2(0.0, 1.0), 2.0);
+const_assert all(a == vec2(0.0, 0.0));
+
+const av = refract(vec2(1.0, 0.0), vec2(0.0, 1.0), 0.5);
+const_assert all(av == vec2(0.5, -0.8660254037844386));
+
+const f = refract(vec2f(1.0, 0.0), vec2f(0.0, 1.0), 2.0f);
+const_assert all(f == vec2f(0.0, 0.0));
+"#,
+    );
+}
+
+#[test]
+fn const_eval_smooth_step() {
+    check_parse_and_validate_success(
+        r#"
+const a = smoothstep(0.0, 1.0, 0.5);
+const_assert a == 0.5;
+
+const av = smoothstep(vec2(0.0, 0.0), vec2(1.0, 2.0), vec2(0.5, 1.0));
+const_assert all(av == vec2(0.5, 0.5));
+
+const f = smoothstep(0.0f, 1.0f, 0.5f);
+const_assert f == 0.5f;
+
+const fv = smoothstep(vec2f(0.0, 0.0), vec2f(1.0, 2.0), vec2f(0.5, 1.0));
+const_assert all(fv == vec2f(0.5, 0.5));
+"#,
+    );
+}
+
 #[track_caller]
 fn check_error_matches(input: &str, expected_substring: &str) {
     let result = naga::front::wgsl::parse_str(input);

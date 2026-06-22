@@ -1935,14 +1935,18 @@ impl<'a> ConstantEvaluator<'a> {
                 })?;
                 result.register_as_evaluated_expr(self, span)
             }
+            crate::MathFunction::FaceForward => {
+                self.face_forward(arg, arg1.unwrap(), arg2.unwrap(), span)
+            }
+            crate::MathFunction::Reflect => self.reflect(arg, arg1.unwrap(), span),
+            crate::MathFunction::Refract => self.refract(arg, arg1.unwrap(), arg2.unwrap(), span),
+            crate::MathFunction::Mix => self.mix(arg, arg1.unwrap(), arg2.unwrap(), span),
+            crate::MathFunction::SmoothStep => {
+                self.smooth_step(arg, arg1.unwrap(), arg2.unwrap(), span)
+            }
 
             // unimplemented
             crate::MathFunction::Outer
-            | crate::MathFunction::FaceForward
-            | crate::MathFunction::Reflect
-            | crate::MathFunction::Refract
-            | crate::MathFunction::Mix
-            | crate::MathFunction::SmoothStep
             | crate::MathFunction::Inverse
             | crate::MathFunction::Transpose
             | crate::MathFunction::Determinant
@@ -1976,6 +1980,314 @@ impl<'a> ConstantEvaluator<'a> {
             4 => Ok(crate::VectorSize::Quad),
             _ => Err(ConstantEvaluatorError::InvalidMathArg),
         }
+    }
+
+    fn check_same_len(a: &LiteralVector, b: &LiteralVector) -> Result<(), ConstantEvaluatorError> {
+        if a.len() == b.len() {
+            Ok(())
+        } else {
+            Err(ConstantEvaluatorError::InvalidMathArg)
+        }
+    }
+
+    fn mix(
+        &mut self,
+        arg: Handle<Expression>,
+        arg1: Handle<Expression>,
+        arg2: Handle<Expression>,
+        span: Span,
+    ) -> Result<Handle<Expression>, ConstantEvaluatorError> {
+        let e1 = self.extract_vec(arg, true)?;
+        let e2 = self.extract_vec(arg1, true)?;
+        let e3 = self.extract_vec(arg2, true)?;
+        Self::check_same_len(&e1, &e2)?;
+        if e3.len() != 1 && e3.len() != e1.len() {
+            return Err(ConstantEvaluatorError::InvalidMathArg);
+        }
+
+        macro_rules! mix_vec {
+            ($out:ident, $e1:expr, $e2:expr, $e3:expr, $one:expr) => {{
+                let mut out = ArrayVec::new();
+                for i in 0..$e1.len() {
+                    let t = if $e3.len() == 1 { $e3[0] } else { $e3[i] };
+                    out.push($e1[i] * ($one - t) + $e2[i] * t);
+                }
+                LiteralVector::$out(out)
+            }};
+        }
+
+        let result = match (e1, e2, e3) {
+            (
+                LiteralVector::AbstractFloat(e1),
+                LiteralVector::AbstractFloat(e2),
+                LiteralVector::AbstractFloat(e3),
+            ) => mix_vec!(AbstractFloat, e1, e2, e3, 1.0),
+            (LiteralVector::F32(e1), LiteralVector::F32(e2), LiteralVector::F32(e3)) => {
+                mix_vec!(F32, e1, e2, e3, 1.0)
+            }
+            (LiteralVector::F16(e1), LiteralVector::F16(e2), LiteralVector::F16(e3)) => {
+                let mut out = ArrayVec::new();
+                for i in 0..e1.len() {
+                    let t = f32::from(if e3.len() == 1 { e3[0] } else { e3[i] });
+                    out.push(f16::from_f32(
+                        f32::from(e1[i]) * (1.0 - t) + f32::from(e2[i]) * t,
+                    ));
+                }
+                LiteralVector::F16(out)
+            }
+            (LiteralVector::F64(e1), LiteralVector::F64(e2), LiteralVector::F64(e3)) => {
+                mix_vec!(F64, e1, e2, e3, 1.0)
+            }
+            _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+        };
+        result.register_as_evaluated_expr(self, span)
+    }
+
+    fn face_forward(
+        &mut self,
+        arg: Handle<Expression>,
+        arg1: Handle<Expression>,
+        arg2: Handle<Expression>,
+        span: Span,
+    ) -> Result<Handle<Expression>, ConstantEvaluatorError> {
+        let e1 = self.extract_vec(arg, false)?;
+        let e2 = self.extract_vec(arg1, false)?;
+        let e3 = self.extract_vec(arg2, false)?;
+        Self::check_same_len(&e1, &e2)?;
+        Self::check_same_len(&e1, &e3)?;
+
+        macro_rules! face_forward_vec {
+            ($out:ident, $e1:expr, $e2:expr, $e3:expr, $zero:expr) => {{
+                let mut dot = $zero;
+                for i in 0..$e2.len() {
+                    dot = dot + $e2[i] * $e3[i];
+                }
+                let mut out = ArrayVec::new();
+                if dot < $zero {
+                    for &value in &$e1 {
+                        out.push(value);
+                    }
+                } else {
+                    for &value in &$e1 {
+                        out.push(-value);
+                    }
+                }
+                LiteralVector::$out(out)
+            }};
+        }
+
+        let result = match (e1, e2, e3) {
+            (
+                LiteralVector::AbstractFloat(e1),
+                LiteralVector::AbstractFloat(e2),
+                LiteralVector::AbstractFloat(e3),
+            ) => face_forward_vec!(AbstractFloat, e1, e2, e3, 0.0),
+            (LiteralVector::F32(e1), LiteralVector::F32(e2), LiteralVector::F32(e3)) => {
+                face_forward_vec!(F32, e1, e2, e3, 0.0)
+            }
+            (LiteralVector::F16(e1), LiteralVector::F16(e2), LiteralVector::F16(e3)) => {
+                let mut dot = 0.0f32;
+                for i in 0..e2.len() {
+                    dot += f32::from(e2[i]) * f32::from(e3[i]);
+                }
+                let mut out = ArrayVec::new();
+                if dot < 0.0 {
+                    for &value in &e1 {
+                        out.push(value);
+                    }
+                } else {
+                    for &value in &e1 {
+                        out.push(-value);
+                    }
+                }
+                LiteralVector::F16(out)
+            }
+            (LiteralVector::F64(e1), LiteralVector::F64(e2), LiteralVector::F64(e3)) => {
+                face_forward_vec!(F64, e1, e2, e3, 0.0)
+            }
+            _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+        };
+        result.register_as_evaluated_expr(self, span)
+    }
+
+    fn reflect(
+        &mut self,
+        arg: Handle<Expression>,
+        arg1: Handle<Expression>,
+        span: Span,
+    ) -> Result<Handle<Expression>, ConstantEvaluatorError> {
+        let e1 = self.extract_vec(arg, false)?;
+        let e2 = self.extract_vec(arg1, false)?;
+        Self::check_same_len(&e1, &e2)?;
+
+        macro_rules! reflect_vec {
+            ($out:ident, $e1:expr, $e2:expr, $zero:expr, $two:expr) => {{
+                let mut dot = $zero;
+                for i in 0..$e1.len() {
+                    dot = dot + $e2[i] * $e1[i];
+                }
+                let mut out = ArrayVec::new();
+                for i in 0..$e1.len() {
+                    out.push($e1[i] - $two * dot * $e2[i]);
+                }
+                LiteralVector::$out(out)
+            }};
+        }
+
+        let result = match (e1, e2) {
+            (LiteralVector::AbstractFloat(e1), LiteralVector::AbstractFloat(e2)) => {
+                reflect_vec!(AbstractFloat, e1, e2, 0.0, 2.0)
+            }
+            (LiteralVector::F32(e1), LiteralVector::F32(e2)) => {
+                reflect_vec!(F32, e1, e2, 0.0, 2.0)
+            }
+            (LiteralVector::F16(e1), LiteralVector::F16(e2)) => {
+                let mut dot = 0.0f32;
+                for i in 0..e1.len() {
+                    dot += f32::from(e2[i]) * f32::from(e1[i]);
+                }
+                let mut out = ArrayVec::new();
+                for i in 0..e1.len() {
+                    out.push(f16::from_f32(
+                        f32::from(e1[i]) - 2.0 * dot * f32::from(e2[i]),
+                    ));
+                }
+                LiteralVector::F16(out)
+            }
+            (LiteralVector::F64(e1), LiteralVector::F64(e2)) => {
+                reflect_vec!(F64, e1, e2, 0.0, 2.0)
+            }
+            _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+        };
+        result.register_as_evaluated_expr(self, span)
+    }
+
+    fn refract(
+        &mut self,
+        arg: Handle<Expression>,
+        arg1: Handle<Expression>,
+        arg2: Handle<Expression>,
+        span: Span,
+    ) -> Result<Handle<Expression>, ConstantEvaluatorError> {
+        let e1 = self.extract_vec(arg, false)?;
+        let e2 = self.extract_vec(arg1, false)?;
+        let e3 = self.extract_vec(arg2, true)?;
+        Self::check_same_len(&e1, &e2)?;
+        if e3.len() != 1 {
+            return Err(ConstantEvaluatorError::InvalidMathArg);
+        }
+
+        macro_rules! refract_vec {
+            ($out:ident, $e1:expr, $e2:expr, $e3:expr, $zero:expr, $one:expr) => {{
+                let eta = $e3[0];
+                let mut dot = $zero;
+                for i in 0..$e1.len() {
+                    dot = dot + $e2[i] * $e1[i];
+                }
+                let k = $one - eta * eta * ($one - dot * dot);
+                let mut out = ArrayVec::new();
+                if k < $zero {
+                    for _ in 0..$e1.len() {
+                        out.push($zero);
+                    }
+                } else {
+                    let factor = eta * dot + k.sqrt();
+                    for i in 0..$e1.len() {
+                        out.push(eta * $e1[i] - factor * $e2[i]);
+                    }
+                }
+                LiteralVector::$out(out)
+            }};
+        }
+
+        let result = match (e1, e2, e3) {
+            (
+                LiteralVector::AbstractFloat(e1),
+                LiteralVector::AbstractFloat(e2),
+                LiteralVector::AbstractFloat(e3),
+            ) => refract_vec!(AbstractFloat, e1, e2, e3, 0.0, 1.0),
+            (LiteralVector::F32(e1), LiteralVector::F32(e2), LiteralVector::F32(e3)) => {
+                refract_vec!(F32, e1, e2, e3, 0.0, 1.0)
+            }
+            (LiteralVector::F16(e1), LiteralVector::F16(e2), LiteralVector::F16(e3)) => {
+                let eta = f32::from(e3[0]);
+                let mut dot = 0.0f32;
+                for i in 0..e1.len() {
+                    dot += f32::from(e2[i]) * f32::from(e1[i]);
+                }
+                let k = 1.0 - eta * eta * (1.0 - dot * dot);
+                let mut out = ArrayVec::new();
+                if k < 0.0 {
+                    for _ in 0..e1.len() {
+                        out.push(f16::zero());
+                    }
+                } else {
+                    let factor = eta * dot + k.sqrt();
+                    for i in 0..e1.len() {
+                        out.push(f16::from_f32(
+                            eta * f32::from(e1[i]) - factor * f32::from(e2[i]),
+                        ));
+                    }
+                }
+                LiteralVector::F16(out)
+            }
+            (LiteralVector::F64(e1), LiteralVector::F64(e2), LiteralVector::F64(e3)) => {
+                refract_vec!(F64, e1, e2, e3, 0.0, 1.0)
+            }
+            _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+        };
+        result.register_as_evaluated_expr(self, span)
+    }
+
+    fn smooth_step(
+        &mut self,
+        arg: Handle<Expression>,
+        arg1: Handle<Expression>,
+        arg2: Handle<Expression>,
+        span: Span,
+    ) -> Result<Handle<Expression>, ConstantEvaluatorError> {
+        let low = self.extract_vec(arg, true)?;
+        let high = self.extract_vec(arg1, true)?;
+        let x = self.extract_vec(arg2, true)?;
+        Self::check_same_len(&low, &high)?;
+        Self::check_same_len(&low, &x)?;
+
+        macro_rules! smooth_step_vec {
+            ($out:ident, $low:expr, $high:expr, $x:expr, $zero:expr, $one:expr, $two:expr, $three:expr) => {{
+                let mut out = ArrayVec::new();
+                for i in 0..$low.len() {
+                    let t = (($x[i] - $low[i]) / ($high[i] - $low[i])).clamp($zero, $one);
+                    out.push(t * t * ($three - $two * t));
+                }
+                LiteralVector::$out(out)
+            }};
+        }
+
+        let result = match (low, high, x) {
+            (
+                LiteralVector::AbstractFloat(low),
+                LiteralVector::AbstractFloat(high),
+                LiteralVector::AbstractFloat(x),
+            ) => smooth_step_vec!(AbstractFloat, low, high, x, 0.0, 1.0, 2.0, 3.0),
+            (LiteralVector::F32(low), LiteralVector::F32(high), LiteralVector::F32(x)) => {
+                smooth_step_vec!(F32, low, high, x, 0.0, 1.0, 2.0, 3.0)
+            }
+            (LiteralVector::F16(low), LiteralVector::F16(high), LiteralVector::F16(x)) => {
+                let mut out = ArrayVec::new();
+                for i in 0..low.len() {
+                    let t = ((f32::from(x[i]) - f32::from(low[i]))
+                        / (f32::from(high[i]) - f32::from(low[i])))
+                    .clamp(0.0, 1.0);
+                    out.push(f16::from_f32(t * t * (3.0 - 2.0 * t)));
+                }
+                LiteralVector::F16(out)
+            }
+            (LiteralVector::F64(low), LiteralVector::F64(high), LiteralVector::F64(x)) => {
+                smooth_step_vec!(F64, low, high, x, 0.0, 1.0, 2.0, 3.0)
+            }
+            _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+        };
+        result.register_as_evaluated_expr(self, span)
     }
 
     fn ldexp(
