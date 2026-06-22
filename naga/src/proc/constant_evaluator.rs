@@ -1870,11 +1870,18 @@ impl<'a> ConstantEvaluator<'a> {
                     F: core::ops::Mul<F>,
                     F: num_traits::Float + iter::Sum,
                 {
-                    if e.len() == 1 {
-                        // Avoids possible overflow in squaring
-                        e[0].abs()
+                    let scale = e.iter().map(|&ei| ei.abs()).fold(F::zero(), F::max);
+                    if scale.is_zero() {
+                        F::zero()
                     } else {
-                        e.iter().map(|&ei| ei * ei).sum::<F>().sqrt()
+                        scale
+                            * e.iter()
+                                .map(|&ei| {
+                                    let scaled = ei / scale;
+                                    scaled * scaled
+                                })
+                                .sum::<F>()
+                                .sqrt()
                     }
                 }
 
@@ -1896,16 +1903,24 @@ impl<'a> ConstantEvaluator<'a> {
                     F: core::ops::Mul<F>,
                     F: num_traits::Float + iter::Sum + core::ops::Sub,
                 {
-                    if a.len() == 1 {
-                        // Avoids possible overflow in squaring
-                        (a[0] - b[0]).abs()
+                    let scale = a
+                        .iter()
+                        .zip(b.iter())
+                        .map(|(&aa, &bb)| (aa - bb).abs())
+                        .fold(F::zero(), F::max);
+                    if scale.is_zero() {
+                        F::zero()
                     } else {
-                        a.iter()
-                            .zip(b.iter())
-                            .map(|(&aa, &bb)| aa - bb)
-                            .map(|ei| ei * ei)
-                            .sum::<F>()
-                            .sqrt()
+                        scale
+                            * a.iter()
+                                .zip(b.iter())
+                                .map(|(&aa, &bb)| aa - bb)
+                                .map(|ei| {
+                                    let scaled = ei / scale;
+                                    scaled * scaled
+                                })
+                                .sum::<F>()
+                                .sqrt()
                     }
                 }
                 let result = match_literal_vector!(match (e1, e2) => Literal {
@@ -1922,7 +1937,19 @@ impl<'a> ConstantEvaluator<'a> {
                     F: core::ops::Mul<F>,
                     F: num_traits::Float + iter::Sum,
                 {
-                    let len = e.iter().map(|&ei| ei * ei).sum::<F>().sqrt();
+                    let scale = e.iter().map(|&ei| ei.abs()).fold(F::zero(), F::max);
+                    let len = if scale.is_zero() {
+                        F::zero()
+                    } else {
+                        scale
+                            * e.iter()
+                                .map(|&ei| {
+                                    let scaled = ei / scale;
+                                    scaled * scaled
+                                })
+                                .sum::<F>()
+                                .sqrt()
+                    };
                     let mut out = ArrayVec::new();
                     for &ei in e {
                         out.push(ei / len);

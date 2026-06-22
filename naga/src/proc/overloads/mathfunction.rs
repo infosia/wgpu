@@ -94,13 +94,11 @@ impl ir::MathFunction {
             Mf::Ldexp => ldexp().into(),
             Mf::Outer => outer().into(),
             Mf::Cross => regular!(2, VEC3 of FLOAT).into(),
-            Mf::Distance => {
-                regular!(2, SCALAR|VECN of FLOAT_ABSTRACT_UNIMPLEMENTED -> Scalar).into()
-            }
-            Mf::Length => regular!(1, SCALAR|VECN of FLOAT_ABSTRACT_UNIMPLEMENTED -> Scalar).into(),
-            Mf::Normalize => regular!(1, VECN of FLOAT_ABSTRACT_UNIMPLEMENTED).into(),
-            Mf::FaceForward => regular!(3, VECN of FLOAT_ABSTRACT_UNIMPLEMENTED).into(),
-            Mf::Reflect => regular!(2, VECN of FLOAT_ABSTRACT_UNIMPLEMENTED).into(),
+            Mf::Distance => regular!(2, SCALAR|VECN of FLOAT -> Scalar).into(),
+            Mf::Length => regular!(1, SCALAR|VECN of FLOAT -> Scalar).into(),
+            Mf::Normalize => regular!(1, VECN of FLOAT).into(),
+            Mf::FaceForward => regular!(3, VECN of FLOAT).into(),
+            Mf::Reflect => regular!(2, VECN of FLOAT).into(),
             Mf::Refract => refract().into(),
             Mf::Mix => mix().into(),
             Mf::Inverse => regular!(1, MAT2X2|MAT3X3|MAT4X4 of FLOAT).into(),
@@ -163,7 +161,7 @@ fn outer() -> List {
 
 fn refract() -> List {
     list(
-        pairs(vector_sizes(), float_scalars_unimplemented_abstract()).map(|(size, scalar)| {
+        pairs(vector_sizes(), float_scalars()).map(|(size, scalar)| {
             let incident = ir::TypeInner::Vector { size, scalar };
             let normal = incident.clone();
             let ratio = ir::TypeInner::Scalar(scalar);

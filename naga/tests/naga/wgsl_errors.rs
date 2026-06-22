@@ -209,6 +209,44 @@ const_assert fv == 1.0f;
 }
 
 #[test]
+fn const_eval_abstract_float_geometric() {
+    check_parse_and_validate_success(
+        r#"
+const len_small = length(vec2(3.0, 4.0));
+const_assert len_small == 5.0;
+
+const norm_small = normalize(vec2(3.0, 4.0));
+const_assert all(norm_small == vec2(0.6, 0.8));
+
+const len_large = length(vec2(1.0e300, 2.0e300));
+const_assert len_large > 2.23e300;
+const_assert len_large < 2.24e300;
+
+const dist_large = distance(vec2(1.0e300, 2.0e300), vec2(0.0, 0.0));
+const_assert dist_large > 2.23e300;
+const_assert dist_large < 2.24e300;
+
+const norm_large = normalize(vec2(1.0e300, 2.0e300));
+const_assert norm_large[0] > 0.44;
+const_assert norm_large[0] < 0.45;
+const_assert norm_large[1] > 0.89;
+const_assert norm_large[1] < 0.90;
+
+const face = faceForward(vec2(1.0e300, 2.0e300), vec2(1.0, 0.0), vec2(1.0, 0.0));
+const_assert all(face == vec2(-1.0e300, -2.0e300));
+
+const reflected = reflect(vec2(1.0e300, -2.0e300), vec2(0.0, 1.0));
+const_assert all(reflected == vec2(1.0e300, 2.0e300));
+
+const refracted = refract(vec2(1.0e300, 0.0), vec2(0.0, 1.0), 0.5);
+const_assert refracted[0] == 5.0e299;
+const_assert refracted[1] < -0.86;
+const_assert refracted[1] > -0.87;
+"#,
+    );
+}
+
+#[test]
 fn const_eval_bit_pack_unpack() {
     check_parse_and_validate_success(
         r#"
@@ -5423,15 +5461,19 @@ fn too_many_arguments_2() {
   │                    ^^^^^^^^              ^^ argument #2 has type `i32`
   │
   = note: `distance` accepts the following types for argument #2:
+  = note: allowed type: {AbstractFloat}
   = note: allowed type: f32
   = note: allowed type: f16
   = note: allowed type: f64
+  = note: allowed type: vec2<{AbstractFloat}>
   = note: allowed type: vec2<f32>
   = note: allowed type: vec2<f16>
   = note: allowed type: vec2<f64>
+  = note: allowed type: vec3<{AbstractFloat}>
   = note: allowed type: vec3<f32>
   = note: allowed type: vec3<f16>
   = note: allowed type: vec3<f64>
+  = note: allowed type: vec4<{AbstractFloat}>
   = note: allowed type: vec4<f32>
   = note: allowed type: vec4<f16>
   = note: allowed type: vec4<f64>
