@@ -9,8 +9,6 @@ use alloc::{
     vec,
     vec::Vec,
 };
-use core::iter;
-
 use arrayvec::ArrayVec;
 use half::f16;
 use num_traits::{real::Real, FromPrimitive, One, ToPrimitive, Zero};
@@ -1865,29 +1863,23 @@ impl<'a> ConstantEvaluator<'a> {
                 // https://www.w3.org/TR/WGSL/#length-builtin
                 let e1 = self.extract_vec(arg, true)?;
 
-                fn float_length<F>(e: &[F]) -> F
-                where
-                    F: core::ops::Mul<F>,
-                    F: num_traits::Float + iter::Sum,
-                {
-                    let scale = e.iter().map(|&ei| ei.abs()).fold(F::zero(), F::max);
-                    if scale.is_zero() {
-                        F::zero()
-                    } else {
-                        scale
-                            * e.iter()
-                                .map(|&ei| {
-                                    let scaled = ei / scale;
-                                    scaled * scaled
-                                })
-                                .sum::<F>()
-                                .sqrt()
+                let result = match e1 {
+                    LiteralVector::AbstractFloat(e1) => {
+                        Literal::AbstractFloat(Self::checked_float_length(e1.as_slice(), "length")?)
                     }
-                }
-
-                let result = match_literal_vector!(match e1 => Literal {
-                    Float => |e1| { float_length(e1) },
-                })?;
+                    LiteralVector::F32(e1) => {
+                        Literal::F32(Self::checked_float_length(e1.as_slice(), "length")?)
+                    }
+                    LiteralVector::F16(e1) => Literal::F16(Self::check_builtin_f16_result(
+                        Self::checked_f16_length(e1.as_slice(), "length")?,
+                        e1.iter().all(|value| value.is_finite()),
+                        "length",
+                    )?),
+                    LiteralVector::F64(e1) => {
+                        Literal::F64(Self::checked_float_length(e1.as_slice(), "length")?)
+                    }
+                    _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+                };
                 self.register_evaluated_expr(Expression::Literal(result), span)
             }
             crate::MathFunction::Distance => {
@@ -1898,68 +1890,60 @@ impl<'a> ConstantEvaluator<'a> {
                     return Err(ConstantEvaluatorError::InvalidMathArg);
                 }
 
-                fn float_distance<F>(a: &[F], b: &[F]) -> F
-                where
-                    F: core::ops::Mul<F>,
-                    F: num_traits::Float + iter::Sum + core::ops::Sub,
-                {
-                    let scale = a
-                        .iter()
-                        .zip(b.iter())
-                        .map(|(&aa, &bb)| (aa - bb).abs())
-                        .fold(F::zero(), F::max);
-                    if scale.is_zero() {
-                        F::zero()
-                    } else {
-                        scale
-                            * a.iter()
-                                .zip(b.iter())
-                                .map(|(&aa, &bb)| aa - bb)
-                                .map(|ei| {
-                                    let scaled = ei / scale;
-                                    scaled * scaled
-                                })
-                                .sum::<F>()
-                                .sqrt()
+                let result = match (e1, e2) {
+                    (LiteralVector::AbstractFloat(e1), LiteralVector::AbstractFloat(e2)) => {
+                        Literal::AbstractFloat(Self::checked_float_distance(
+                            e1.as_slice(),
+                            e2.as_slice(),
+                            "distance",
+                        )?)
                     }
-                }
-                let result = match_literal_vector!(match (e1, e2) => Literal {
-                    Float => |e1, e2| { float_distance(e1, e2) },
-                })?;
+                    (LiteralVector::F32(e1), LiteralVector::F32(e2)) => Literal::F32(
+                        Self::checked_float_distance(e1.as_slice(), e2.as_slice(), "distance")?,
+                    ),
+                    (LiteralVector::F16(e1), LiteralVector::F16(e2)) => {
+                        Literal::F16(Self::check_builtin_f16_result(
+                            Self::checked_f16_distance(e1.as_slice(), e2.as_slice(), "distance")?,
+                            e1.iter().chain(e2.iter()).all(|value| value.is_finite()),
+                            "distance",
+                        )?)
+                    }
+                    (LiteralVector::F64(e1), LiteralVector::F64(e2)) => Literal::F64(
+                        Self::checked_float_distance(e1.as_slice(), e2.as_slice(), "distance")?,
+                    ),
+                    _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+                };
                 self.register_evaluated_expr(Expression::Literal(result), span)
             }
             crate::MathFunction::Normalize => {
                 // https://www.w3.org/TR/WGSL/#normalize-builtin
                 let e1 = self.extract_vec(arg, true)?;
 
-                fn float_normalize<F>(e: &[F]) -> ArrayVec<F, { crate::VectorSize::MAX }>
-                where
-                    F: core::ops::Mul<F>,
-                    F: num_traits::Float + iter::Sum,
-                {
-                    let scale = e.iter().map(|&ei| ei.abs()).fold(F::zero(), F::max);
-                    let len = if scale.is_zero() {
-                        F::zero()
-                    } else {
-                        scale
-                            * e.iter()
-                                .map(|&ei| {
-                                    let scaled = ei / scale;
-                                    scaled * scaled
-                                })
-                                .sum::<F>()
-                                .sqrt()
+                let result =
+                    match e1 {
+                        LiteralVector::AbstractFloat(e1) => LiteralVector::AbstractFloat(
+                            Self::checked_float_normalize(e1.as_slice(), "normalize")?,
+                        ),
+                        LiteralVector::F32(e1) => LiteralVector::F32(
+                            Self::checked_float_normalize(e1.as_slice(), "normalize")?,
+                        ),
+                        LiteralVector::F16(e1) => {
+                            let result = Self::checked_f16_normalize(e1.as_slice(), "normalize")?;
+                            let mut out = ArrayVec::new();
+                            for value in result {
+                                out.push(Self::check_builtin_f16_result(
+                                    value,
+                                    e1.iter().all(|value| value.is_finite()),
+                                    "normalize",
+                                )?);
+                            }
+                            LiteralVector::F16(out)
+                        }
+                        LiteralVector::F64(e1) => LiteralVector::F64(
+                            Self::checked_float_normalize(e1.as_slice(), "normalize")?,
+                        ),
+                        _ => return Err(ConstantEvaluatorError::InvalidMathArg),
                     };
-                    let mut out = ArrayVec::new();
-                    for &ei in e {
-                        out.push(ei / len);
-                    }
-                    out
-                }
-
-                let result = match_literal_vector!(match e1 => LiteralVector {
-                    Float => |e1| { float_normalize(e1) },
-                })?;
                 result.register_as_evaluated_expr(self, span)
             }
             crate::MathFunction::FaceForward => {
@@ -2018,6 +2002,182 @@ impl<'a> ConstantEvaluator<'a> {
         }
     }
 
+    fn check_builtin_float_result<F>(
+        result: F,
+        finite_inputs: bool,
+        fun: &str,
+    ) -> Result<F, ConstantEvaluatorError>
+    where
+        F: num_traits::Float,
+    {
+        if finite_inputs && !result.is_finite() {
+            Err(ConstantEvaluatorError::Overflow(format!(
+                "in {fun} built-in"
+            )))
+        } else {
+            Ok(result)
+        }
+    }
+
+    fn check_builtin_f16_result(
+        result: f32,
+        finite_inputs: bool,
+        fun: &str,
+    ) -> Result<f16, ConstantEvaluatorError> {
+        let result = f16::from_f32(result);
+        Self::check_builtin_float_result(result, finite_inputs, fun)
+    }
+
+    fn check_builtin_f16_intermediate(
+        result: f32,
+        finite_inputs: bool,
+        fun: &str,
+    ) -> Result<f32, ConstantEvaluatorError> {
+        Self::check_builtin_float_result(f16::from_f32(result), finite_inputs, fun)?;
+        Ok(result)
+    }
+
+    fn checked_float_add<F>(a: F, b: F, fun: &str) -> Result<F, ConstantEvaluatorError>
+    where
+        F: num_traits::Float,
+    {
+        Self::check_builtin_float_result(a + b, a.is_finite() && b.is_finite(), fun)
+    }
+
+    fn checked_float_sub<F>(a: F, b: F, fun: &str) -> Result<F, ConstantEvaluatorError>
+    where
+        F: num_traits::Float,
+    {
+        Self::check_builtin_float_result(a - b, a.is_finite() && b.is_finite(), fun)
+    }
+
+    fn checked_float_mul<F>(a: F, b: F, fun: &str) -> Result<F, ConstantEvaluatorError>
+    where
+        F: num_traits::Float,
+    {
+        Self::check_builtin_float_result(a * b, a.is_finite() && b.is_finite(), fun)
+    }
+
+    fn checked_float_div<F>(a: F, b: F, fun: &str) -> Result<F, ConstantEvaluatorError>
+    where
+        F: num_traits::Float,
+    {
+        Self::check_builtin_float_result(a / b, a.is_finite() && b.is_finite(), fun)
+    }
+
+    fn checked_float_dot<F>(a: &[F], b: &[F], fun: &str) -> Result<F, ConstantEvaluatorError>
+    where
+        F: num_traits::Float,
+    {
+        let mut sum = F::zero();
+        for (&aa, &bb) in a.iter().zip(b) {
+            let product = Self::checked_float_mul(aa, bb, fun)?;
+            sum = Self::checked_float_add(sum, product, fun)?;
+        }
+        Ok(sum)
+    }
+
+    fn checked_float_length<F>(e: &[F], fun: &str) -> Result<F, ConstantEvaluatorError>
+    where
+        F: num_traits::Float,
+    {
+        let mut sum = F::zero();
+        for &value in e {
+            let product = Self::checked_float_mul(value, value, fun)?;
+            sum = Self::checked_float_add(sum, product, fun)?;
+        }
+        Self::check_builtin_float_result(sum.sqrt(), sum.is_finite(), fun)
+    }
+
+    fn checked_float_distance<F>(a: &[F], b: &[F], fun: &str) -> Result<F, ConstantEvaluatorError>
+    where
+        F: num_traits::Float,
+    {
+        let mut diff = ArrayVec::<F, { crate::VectorSize::MAX }>::new();
+        for (&aa, &bb) in a.iter().zip(b) {
+            diff.push(Self::checked_float_sub(aa, bb, fun)?);
+        }
+        Self::checked_float_length(diff.as_slice(), fun)
+    }
+
+    fn checked_float_normalize<F>(
+        e: &[F],
+        fun: &str,
+    ) -> Result<ArrayVec<F, { crate::VectorSize::MAX }>, ConstantEvaluatorError>
+    where
+        F: num_traits::Float,
+    {
+        let len = Self::checked_float_length(e, fun)?;
+        let mut out = ArrayVec::new();
+        for &value in e {
+            out.push(Self::checked_float_div(value, len, fun)?);
+        }
+        Ok(out)
+    }
+
+    fn checked_f16_add(a: f32, b: f32, fun: &str) -> Result<f32, ConstantEvaluatorError> {
+        Self::check_builtin_f16_intermediate(a + b, a.is_finite() && b.is_finite(), fun)
+    }
+
+    fn checked_f16_sub(a: f32, b: f32, fun: &str) -> Result<f32, ConstantEvaluatorError> {
+        Self::check_builtin_f16_intermediate(a - b, a.is_finite() && b.is_finite(), fun)
+    }
+
+    fn checked_f16_mul(a: f32, b: f32, fun: &str) -> Result<f32, ConstantEvaluatorError> {
+        Self::check_builtin_f16_intermediate(a * b, a.is_finite() && b.is_finite(), fun)
+    }
+
+    fn checked_f16_div(a: f32, b: f32, fun: &str) -> Result<f32, ConstantEvaluatorError> {
+        Self::check_builtin_f16_intermediate(a / b, a.is_finite() && b.is_finite(), fun)
+    }
+
+    fn checked_f16_dot(a: &[f16], b: &[f16], fun: &str) -> Result<f32, ConstantEvaluatorError> {
+        let mut sum = 0.0f32;
+        for (&aa, &bb) in a.iter().zip(b) {
+            let product = Self::checked_f16_mul(f32::from(aa), f32::from(bb), fun)?;
+            sum = Self::checked_f16_add(sum, product, fun)?;
+        }
+        Ok(sum)
+    }
+
+    fn checked_f16_length(e: &[f16], fun: &str) -> Result<f32, ConstantEvaluatorError> {
+        let mut sum = 0.0f32;
+        for &value in e {
+            let value = f32::from(value);
+            let product = Self::checked_f16_mul(value, value, fun)?;
+            sum = Self::checked_f16_add(sum, product, fun)?;
+        }
+        Self::check_builtin_f16_intermediate(sum.sqrt(), sum.is_finite(), fun)
+    }
+
+    fn checked_f16_distance(
+        a: &[f16],
+        b: &[f16],
+        fun: &str,
+    ) -> Result<f32, ConstantEvaluatorError> {
+        let mut diff = ArrayVec::<f16, { crate::VectorSize::MAX }>::new();
+        for (&aa, &bb) in a.iter().zip(b) {
+            diff.push(f16::from_f32(Self::checked_f16_sub(
+                f32::from(aa),
+                f32::from(bb),
+                fun,
+            )?));
+        }
+        Self::checked_f16_length(diff.as_slice(), fun)
+    }
+
+    fn checked_f16_normalize(
+        e: &[f16],
+        fun: &str,
+    ) -> Result<ArrayVec<f32, { crate::VectorSize::MAX }>, ConstantEvaluatorError> {
+        let len = Self::checked_f16_length(e, fun)?;
+        let mut out = ArrayVec::new();
+        for &value in e {
+            out.push(Self::checked_f16_div(f32::from(value), len, fun)?);
+        }
+        Ok(out)
+    }
+
     fn mix(
         &mut self,
         arg: Handle<Expression>,
@@ -2038,7 +2198,10 @@ impl<'a> ConstantEvaluator<'a> {
                 let mut out = ArrayVec::new();
                 for i in 0..$e1.len() {
                     let t = if $e3.len() == 1 { $e3[0] } else { $e3[i] };
-                    out.push($e1[i] * ($one - t) + $e2[i] * t);
+                    let c1 = Self::checked_float_sub($one, t, "mix")?;
+                    let ac1 = Self::checked_float_mul($e1[i], c1, "mix")?;
+                    let bc = Self::checked_float_mul($e2[i], t, "mix")?;
+                    out.push(Self::checked_float_add(ac1, bc, "mix")?);
                 }
                 LiteralVector::$out(out)
             }};
@@ -2056,10 +2219,17 @@ impl<'a> ConstantEvaluator<'a> {
             (LiteralVector::F16(e1), LiteralVector::F16(e2), LiteralVector::F16(e3)) => {
                 let mut out = ArrayVec::new();
                 for i in 0..e1.len() {
-                    let t = f32::from(if e3.len() == 1 { e3[0] } else { e3[i] });
-                    out.push(f16::from_f32(
-                        f32::from(e1[i]) * (1.0 - t) + f32::from(e2[i]) * t,
-                    ));
+                    let t16 = if e3.len() == 1 { e3[0] } else { e3[i] };
+                    let t = f32::from(t16);
+                    let c1 = Self::checked_f16_sub(1.0, t, "mix")?;
+                    let ac1 = Self::checked_f16_mul(f32::from(e1[i]), c1, "mix")?;
+                    let bc = Self::checked_f16_mul(f32::from(e2[i]), t, "mix")?;
+                    let result = Self::checked_f16_add(ac1, bc, "mix")?;
+                    out.push(Self::check_builtin_f16_result(
+                        result,
+                        e1[i].is_finite() && e2[i].is_finite() && t16.is_finite(),
+                        "mix",
+                    )?);
                 }
                 LiteralVector::F16(out)
             }
@@ -2086,10 +2256,7 @@ impl<'a> ConstantEvaluator<'a> {
 
         macro_rules! face_forward_vec {
             ($out:ident, $e1:expr, $e2:expr, $e3:expr, $zero:expr) => {{
-                let mut dot = $zero;
-                for i in 0..$e2.len() {
-                    dot = dot + $e2[i] * $e3[i];
-                }
+                let dot = Self::checked_float_dot($e2.as_slice(), $e3.as_slice(), "faceForward")?;
                 let mut out = ArrayVec::new();
                 if dot < $zero {
                     for &value in &$e1 {
@@ -2114,10 +2281,7 @@ impl<'a> ConstantEvaluator<'a> {
                 face_forward_vec!(F32, e1, e2, e3, 0.0)
             }
             (LiteralVector::F16(e1), LiteralVector::F16(e2), LiteralVector::F16(e3)) => {
-                let mut dot = 0.0f32;
-                for i in 0..e2.len() {
-                    dot += f32::from(e2[i]) * f32::from(e3[i]);
-                }
+                let dot = Self::checked_f16_dot(e2.as_slice(), e3.as_slice(), "faceForward")?;
                 let mut out = ArrayVec::new();
                 if dot < 0.0 {
                     for &value in &e1 {
@@ -2150,13 +2314,12 @@ impl<'a> ConstantEvaluator<'a> {
 
         macro_rules! reflect_vec {
             ($out:ident, $e1:expr, $e2:expr, $zero:expr, $two:expr) => {{
-                let mut dot = $zero;
-                for i in 0..$e1.len() {
-                    dot = dot + $e2[i] * $e1[i];
-                }
+                let dot = Self::checked_float_dot($e2.as_slice(), $e1.as_slice(), "reflect")?;
+                let scale = Self::checked_float_mul($two, dot, "reflect")?;
                 let mut out = ArrayVec::new();
                 for i in 0..$e1.len() {
-                    out.push($e1[i] - $two * dot * $e2[i]);
+                    let scaled_normal = Self::checked_float_mul(scale, $e2[i], "reflect")?;
+                    out.push(Self::checked_float_sub($e1[i], scaled_normal, "reflect")?);
                 }
                 LiteralVector::$out(out)
             }};
@@ -2170,15 +2333,18 @@ impl<'a> ConstantEvaluator<'a> {
                 reflect_vec!(F32, e1, e2, 0.0, 2.0)
             }
             (LiteralVector::F16(e1), LiteralVector::F16(e2)) => {
-                let mut dot = 0.0f32;
-                for i in 0..e1.len() {
-                    dot += f32::from(e2[i]) * f32::from(e1[i]);
-                }
+                let dot = Self::checked_f16_dot(e2.as_slice(), e1.as_slice(), "reflect")?;
+                let finite_inputs = e1.iter().chain(e2.iter()).all(|value| value.is_finite());
+                let scale = Self::checked_f16_mul(2.0, dot, "reflect")?;
                 let mut out = ArrayVec::new();
                 for i in 0..e1.len() {
-                    out.push(f16::from_f32(
-                        f32::from(e1[i]) - 2.0 * dot * f32::from(e2[i]),
-                    ));
+                    let scaled_normal = Self::checked_f16_mul(scale, f32::from(e2[i]), "reflect")?;
+                    let result = Self::checked_f16_sub(f32::from(e1[i]), scaled_normal, "reflect")?;
+                    out.push(Self::check_builtin_f16_result(
+                        result,
+                        finite_inputs,
+                        "reflect",
+                    )?);
                 }
                 LiteralVector::F16(out)
             }
@@ -2208,20 +2374,24 @@ impl<'a> ConstantEvaluator<'a> {
         macro_rules! refract_vec {
             ($out:ident, $e1:expr, $e2:expr, $e3:expr, $zero:expr, $one:expr) => {{
                 let eta = $e3[0];
-                let mut dot = $zero;
-                for i in 0..$e1.len() {
-                    dot = dot + $e2[i] * $e1[i];
-                }
-                let k = $one - eta * eta * ($one - dot * dot);
+                let dot = Self::checked_float_dot($e2.as_slice(), $e1.as_slice(), "refract")?;
+                let dot_dot = Self::checked_float_mul(dot, dot, "refract")?;
+                let one_minus_dot_dot = Self::checked_float_sub($one, dot_dot, "refract")?;
+                let eta_eta = Self::checked_float_mul(eta, eta, "refract")?;
+                let eta_eta_term = Self::checked_float_mul(eta_eta, one_minus_dot_dot, "refract")?;
+                let k = Self::checked_float_sub($one, eta_eta_term, "refract")?;
                 let mut out = ArrayVec::new();
                 if k < $zero {
                     for _ in 0..$e1.len() {
                         out.push($zero);
                     }
                 } else {
-                    let factor = eta * dot + k.sqrt();
+                    let eta_dot = Self::checked_float_mul(eta, dot, "refract")?;
+                    let factor = Self::checked_float_add(eta_dot, k.sqrt(), "refract")?;
                     for i in 0..$e1.len() {
-                        out.push(eta * $e1[i] - factor * $e2[i]);
+                        let eta_e1 = Self::checked_float_mul(eta, $e1[i], "refract")?;
+                        let factor_e2 = Self::checked_float_mul(factor, $e2[i], "refract")?;
+                        out.push(Self::checked_float_sub(eta_e1, factor_e2, "refract")?);
                     }
                 }
                 LiteralVector::$out(out)
@@ -2239,22 +2409,34 @@ impl<'a> ConstantEvaluator<'a> {
             }
             (LiteralVector::F16(e1), LiteralVector::F16(e2), LiteralVector::F16(e3)) => {
                 let eta = f32::from(e3[0]);
-                let mut dot = 0.0f32;
-                for i in 0..e1.len() {
-                    dot += f32::from(e2[i]) * f32::from(e1[i]);
-                }
-                let k = 1.0 - eta * eta * (1.0 - dot * dot);
+                let dot = Self::checked_f16_dot(e2.as_slice(), e1.as_slice(), "refract")?;
+                let finite_inputs = e1
+                    .iter()
+                    .chain(e2.iter())
+                    .chain(e3.iter())
+                    .all(|value| value.is_finite());
+                let dot_dot = Self::checked_f16_mul(dot, dot, "refract")?;
+                let one_minus_dot_dot = Self::checked_f16_sub(1.0, dot_dot, "refract")?;
+                let eta_eta = Self::checked_f16_mul(eta, eta, "refract")?;
+                let eta_eta_term = Self::checked_f16_mul(eta_eta, one_minus_dot_dot, "refract")?;
+                let k = Self::checked_f16_sub(1.0, eta_eta_term, "refract")?;
                 let mut out = ArrayVec::new();
                 if k < 0.0 {
                     for _ in 0..e1.len() {
                         out.push(f16::zero());
                     }
                 } else {
-                    let factor = eta * dot + k.sqrt();
+                    let eta_dot = Self::checked_f16_mul(eta, dot, "refract")?;
+                    let factor = Self::checked_f16_add(eta_dot, k.sqrt(), "refract")?;
                     for i in 0..e1.len() {
-                        out.push(f16::from_f32(
-                            eta * f32::from(e1[i]) - factor * f32::from(e2[i]),
-                        ));
+                        let eta_e1 = Self::checked_f16_mul(eta, f32::from(e1[i]), "refract")?;
+                        let factor_e2 = Self::checked_f16_mul(factor, f32::from(e2[i]), "refract")?;
+                        let result = Self::checked_f16_sub(eta_e1, factor_e2, "refract")?;
+                        out.push(Self::check_builtin_f16_result(
+                            result,
+                            finite_inputs,
+                            "refract",
+                        )?);
                     }
                 }
                 LiteralVector::F16(out)
@@ -2284,8 +2466,18 @@ impl<'a> ConstantEvaluator<'a> {
             ($out:ident, $low:expr, $high:expr, $x:expr, $zero:expr, $one:expr, $two:expr, $three:expr) => {{
                 let mut out = ArrayVec::new();
                 for i in 0..$low.len() {
-                    let t = (($x[i] - $low[i]) / ($high[i] - $low[i])).clamp($zero, $one);
-                    out.push(t * t * ($three - $two * t));
+                    let x_minus_low = Self::checked_float_sub($x[i], $low[i], "smoothstep")?;
+                    let high_minus_low = Self::checked_float_sub($high[i], $low[i], "smoothstep")?;
+                    let t = Self::checked_float_div(x_minus_low, high_minus_low, "smoothstep")?
+                        .clamp($zero, $one);
+                    let tt = Self::checked_float_mul(t, t, "smoothstep")?;
+                    let two_t = Self::checked_float_mul($two, t, "smoothstep")?;
+                    let three_minus_two_t = Self::checked_float_sub($three, two_t, "smoothstep")?;
+                    out.push(Self::checked_float_mul(
+                        tt,
+                        three_minus_two_t,
+                        "smoothstep",
+                    )?);
                 }
                 LiteralVector::$out(out)
             }};
@@ -2303,10 +2495,24 @@ impl<'a> ConstantEvaluator<'a> {
             (LiteralVector::F16(low), LiteralVector::F16(high), LiteralVector::F16(x)) => {
                 let mut out = ArrayVec::new();
                 for i in 0..low.len() {
-                    let t = ((f32::from(x[i]) - f32::from(low[i]))
-                        / (f32::from(high[i]) - f32::from(low[i])))
-                    .clamp(0.0, 1.0);
-                    out.push(f16::from_f32(t * t * (3.0 - 2.0 * t)));
+                    let finite_inputs =
+                        low[i].is_finite() && high[i].is_finite() && x[i].is_finite();
+                    let x_minus_low =
+                        Self::checked_f16_sub(f32::from(x[i]), f32::from(low[i]), "smoothstep")?;
+                    let high_minus_low =
+                        Self::checked_f16_sub(f32::from(high[i]), f32::from(low[i]), "smoothstep")?;
+                    let t = Self::checked_f16_div(x_minus_low, high_minus_low, "smoothstep")?
+                        .clamp(0.0, 1.0);
+                    Self::check_builtin_f16_intermediate(t, finite_inputs, "smoothstep")?;
+                    let tt = Self::checked_f16_mul(t, t, "smoothstep")?;
+                    let two_t = Self::checked_f16_mul(2.0, t, "smoothstep")?;
+                    let three_minus_two_t = Self::checked_f16_sub(3.0, two_t, "smoothstep")?;
+                    let result = Self::checked_f16_mul(tt, three_minus_two_t, "smoothstep")?;
+                    out.push(Self::check_builtin_f16_result(
+                        result,
+                        finite_inputs,
+                        "smoothstep",
+                    )?);
                 }
                 LiteralVector::F16(out)
             }
@@ -2407,17 +2613,18 @@ impl<'a> ConstantEvaluator<'a> {
             return Err(ConstantEvaluatorError::InvalidMathArg);
         }
 
-        fn determinant_impl<F>(values: &[F], size: usize) -> F
+        fn determinant_impl<F>(values: &[F], size: usize) -> Result<F, ConstantEvaluatorError>
         where
-            F: Copy
-                + core::ops::Add<Output = F>
-                + core::ops::Mul<Output = F>
-                + core::ops::Neg<Output = F>
-                + core::ops::Sub<Output = F>
-                + Zero,
+            F: num_traits::Float,
         {
             match size {
-                2 => values[0] * values[3] - values[1] * values[2],
+                2 => {
+                    let ad =
+                        ConstantEvaluator::checked_float_mul(values[0], values[3], "determinant")?;
+                    let bc =
+                        ConstantEvaluator::checked_float_mul(values[1], values[2], "determinant")?;
+                    ConstantEvaluator::checked_float_sub(ad, bc, "determinant")
+                }
                 _ => {
                     let mut determinant = F::zero();
                     for column in 0..size {
@@ -2430,15 +2637,60 @@ impl<'a> ConstantEvaluator<'a> {
                                 minor.push(values[minor_column * size + row]);
                             }
                         }
-                        let term =
-                            values[column * size] * determinant_impl(minor.as_slice(), size - 1);
+                        let minor_determinant = determinant_impl(minor.as_slice(), size - 1)?;
+                        let term = ConstantEvaluator::checked_float_mul(
+                            values[column * size],
+                            minor_determinant,
+                            "determinant",
+                        )?;
                         determinant = if column % 2 == 0 {
-                            determinant + term
+                            ConstantEvaluator::checked_float_add(determinant, term, "determinant")?
                         } else {
-                            determinant - term
+                            ConstantEvaluator::checked_float_sub(determinant, term, "determinant")?
                         };
                     }
-                    determinant
+                    Ok(determinant)
+                }
+            }
+        }
+
+        fn determinant_f16_impl(
+            values: &[f32],
+            size: usize,
+        ) -> Result<f32, ConstantEvaluatorError> {
+            match size {
+                2 => {
+                    let ad =
+                        ConstantEvaluator::checked_f16_mul(values[0], values[3], "determinant")?;
+                    let bc =
+                        ConstantEvaluator::checked_f16_mul(values[1], values[2], "determinant")?;
+                    ConstantEvaluator::checked_f16_sub(ad, bc, "determinant")
+                }
+                _ => {
+                    let mut determinant = 0.0;
+                    for column in 0..size {
+                        let mut minor = ArrayVec::<f32, 9>::new();
+                        for minor_column in 0..size {
+                            if minor_column == column {
+                                continue;
+                            }
+                            for row in 1..size {
+                                minor.push(values[minor_column * size + row]);
+                            }
+                        }
+                        let minor_determinant = determinant_f16_impl(minor.as_slice(), size - 1)?;
+                        let term = ConstantEvaluator::checked_f16_mul(
+                            values[column * size],
+                            minor_determinant,
+                            "determinant",
+                        )?;
+                        determinant = if column % 2 == 0 {
+                            ConstantEvaluator::checked_f16_add(determinant, term, "determinant")?
+                        } else {
+                            ConstantEvaluator::checked_f16_sub(determinant, term, "determinant")?
+                        };
+                    }
+                    Ok(determinant)
                 }
             }
         }
@@ -2462,19 +2714,23 @@ impl<'a> ConstantEvaluator<'a> {
         let result = match columns.as_slice() {
             [LiteralVector::AbstractFloat(_), ..] => {
                 let values = flatten_matrix!(columns, AbstractFloat, |value| value);
-                Literal::AbstractFloat(determinant_impl(values.as_slice(), size))
+                Literal::AbstractFloat(determinant_impl(values.as_slice(), size)?)
             }
             [LiteralVector::F32(_), ..] => {
                 let values = flatten_matrix!(columns, F32, |value| value);
-                Literal::F32(determinant_impl(values.as_slice(), size))
+                Literal::F32(determinant_impl(values.as_slice(), size)?)
             }
             [LiteralVector::F16(_), ..] => {
                 let values = flatten_matrix!(columns, F16, |value| f32::from(value));
-                Literal::F16(f16::from_f32(determinant_impl(values.as_slice(), size)))
+                Literal::F16(Self::check_builtin_f16_result(
+                    determinant_f16_impl(values.as_slice(), size)?,
+                    values.iter().all(|value| value.is_finite()),
+                    "determinant",
+                )?)
             }
             [LiteralVector::F64(_), ..] => {
                 let values = flatten_matrix!(columns, F64, |value| value);
-                Literal::F64(determinant_impl(values.as_slice(), size))
+                Literal::F64(determinant_impl(values.as_slice(), size)?)
             }
             _ => return Err(ConstantEvaluatorError::InvalidMathArg),
         };

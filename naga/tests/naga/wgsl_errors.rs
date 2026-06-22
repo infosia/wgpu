@@ -218,15 +218,15 @@ const_assert len_small == 5.0;
 const norm_small = normalize(vec2(3.0, 4.0));
 const_assert all(norm_small == vec2(0.6, 0.8));
 
-const len_large = length(vec2(1.0e300, 2.0e300));
-const_assert len_large > 2.23e300;
-const_assert len_large < 2.24e300;
+const len_large = length(vec2(1.0e150, 2.0e150));
+const_assert len_large > 2.23e150;
+const_assert len_large < 2.24e150;
 
-const dist_large = distance(vec2(1.0e300, 2.0e300), vec2(0.0, 0.0));
-const_assert dist_large > 2.23e300;
-const_assert dist_large < 2.24e300;
+const dist_large = distance(vec2(1.0e150, 2.0e150), vec2(0.0, 0.0));
+const_assert dist_large > 2.23e150;
+const_assert dist_large < 2.24e150;
 
-const norm_large = normalize(vec2(1.0e300, 2.0e300));
+const norm_large = normalize(vec2(1.0e150, 2.0e150));
 const_assert norm_large[0] > 0.44;
 const_assert norm_large[0] < 0.45;
 const_assert norm_large[1] > 0.89;
@@ -242,6 +242,46 @@ const refracted = refract(vec2(1.0e300, 0.0), vec2(0.0, 1.0), 0.5);
 const_assert refracted[0] == 5.0e299;
 const_assert refracted[1] < -0.86;
 const_assert refracted[1] > -0.87;
+"#,
+    );
+}
+
+#[test]
+fn const_eval_geometric_overflow() {
+    check_error_matches("const r = mix(1.0e308, 1.0e308, 2.0);", "overflowed");
+    check_error_matches("const r = length(vec2(1.3e308, 1.3e308));", "overflowed");
+    check_error_matches(
+        "const r = length(vec4(1.0e300, 0.0, 0.0, 0.0));",
+        "overflowed",
+    );
+    check_error_matches(
+        "enable f16; const r = mix(0.0h, 60000.0h, 2.0h);",
+        "overflowed",
+    );
+    check_error_matches(
+        "enable f16; const r = mix(60000.0h, 60000.0h, 2.0h);",
+        "overflowed",
+    );
+    check_error_matches(
+        "enable f16; const r = length(vec2<f16>(60000.0h, 60000.0h));",
+        "overflowed",
+    );
+
+    check_parse_and_validate_success(
+        r#"
+enable f16;
+
+const mix_small = mix(1.0, 2.0, 0.5);
+const_assert mix_small == 1.5;
+
+const mix_large = mix(1.0e300, 2.0e300, 0.5);
+const_assert mix_large == 1.5e300;
+
+const mix_f16 = mix(1.0h, 2.0h, 0.5h);
+const_assert mix_f16 == 1.5h;
+
+const len_small = length(vec2(3.0, 4.0));
+const_assert len_small == 5.0;
 "#,
     );
 }
