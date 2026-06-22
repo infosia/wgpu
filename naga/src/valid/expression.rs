@@ -387,9 +387,44 @@ impl super::Validator {
                 crate::Expression::Splat { value, .. } => {
                     any_literal(value, module, function, predicate)
                 }
+                crate::Expression::Constant(constant) => {
+                    any_global_literal(module.constants[constant].init, module, predicate)
+                }
+                crate::Expression::Override(r#override) => module.overrides[r#override]
+                    .init
+                    .is_some_and(|init| any_global_literal(init, module, predicate)),
                 crate::Expression::Compose { ref components, .. } => components
                     .iter()
                     .any(|&component| any_literal(component, module, function, predicate)),
+                _ => false,
+            }
+        }
+
+        fn any_global_literal(
+            expr: Handle<crate::Expression>,
+            module: &crate::Module,
+            predicate: impl Fn(crate::Literal) -> bool + Copy,
+        ) -> bool {
+            match module.global_expressions[expr] {
+                crate::Expression::Literal(literal) => predicate(literal),
+                crate::Expression::ZeroValue(ty) => match module.types[ty].inner {
+                    crate::TypeInner::Scalar(scalar) => {
+                        crate::Literal::zero(scalar).is_some_and(predicate)
+                    }
+                    _ => false,
+                },
+                crate::Expression::Splat { value, .. } => {
+                    any_global_literal(value, module, predicate)
+                }
+                crate::Expression::Constant(constant) => {
+                    any_global_literal(module.constants[constant].init, module, predicate)
+                }
+                crate::Expression::Override(r#override) => module.overrides[r#override]
+                    .init
+                    .is_some_and(|init| any_global_literal(init, module, predicate)),
+                crate::Expression::Compose { ref components, .. } => components
+                    .iter()
+                    .any(|&component| any_global_literal(component, module, predicate)),
                 _ => false,
             }
         }

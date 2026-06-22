@@ -442,6 +442,7 @@ fn process_function(
         }
         adjust_expr(&adjusted_local_expressions, &mut expr);
         validate_resolved_override_access(module, function, &expr)?;
+        validate_resolved_override_div_rem(module, function, &expr)?;
         let mut evaluator = ConstantEvaluator::for_wgsl_function(
             module,
             &mut function.expressions,
@@ -476,6 +477,126 @@ fn process_function(
     }
 
     Ok(())
+}
+
+fn validate_resolved_override_div_rem(
+    module: &Module,
+    function: &Function,
+    expr: &Expression,
+) -> Result<(), ConstantEvaluatorError> {
+    let &Expression::Binary { op, left, right } = expr else {
+        return Ok(());
+    };
+    if !matches!(
+        op,
+        crate::BinaryOperator::Divide | crate::BinaryOperator::Modulo
+    ) {
+        return Ok(());
+    }
+
+    let left_ty = resolve_expression_type(module, function, left)?;
+    let Some((_, scalar)) = left_ty.inner_with(&module.types).vector_size_and_scalar() else {
+        return Ok(());
+    };
+    if !matches!(
+        scalar.kind,
+        crate::ScalarKind::Sint | crate::ScalarKind::Uint | crate::ScalarKind::AbstractInt
+    ) {
+        return Ok(());
+    }
+
+    if any_resolved_literal(module, function, right, is_zero_literal) {
+        return Err(match op {
+            crate::BinaryOperator::Divide => ConstantEvaluatorError::DivisionByZero,
+            crate::BinaryOperator::Modulo => ConstantEvaluatorError::RemainderByZero,
+            _ => unreachable!(),
+        });
+    }
+
+    if matches!(
+        scalar.kind,
+        crate::ScalarKind::Sint | crate::ScalarKind::AbstractInt
+    ) && any_resolved_literal(module, function, right, is_negative_one_literal)
+        && any_resolved_literal(module, function, left, is_signed_min_literal)
+    {
+        return Err(ConstantEvaluatorError::Overflow(match op {
+            crate::BinaryOperator::Divide => "division".into(),
+            crate::BinaryOperator::Modulo => "remainder".into(),
+            _ => unreachable!(),
+        }));
+    }
+
+    Ok(())
+}
+
+fn any_resolved_literal(
+    module: &Module,
+    function: &Function,
+    expr: Handle<Expression>,
+    predicate: impl Fn(Literal) -> bool + Copy,
+) -> bool {
+    match function.expressions[expr] {
+        Expression::Literal(literal) => predicate(literal),
+        Expression::ZeroValue(ty) => match module.types[ty].inner {
+            TypeInner::Scalar(scalar) => Literal::zero(scalar).is_some_and(predicate),
+            _ => false,
+        },
+        Expression::Constant(constant) => {
+            any_global_literal(module, module.constants[constant].init, predicate)
+        }
+        Expression::Splat { value, .. } => any_resolved_literal(module, function, value, predicate),
+        Expression::Compose { ref components, .. } => components
+            .iter()
+            .any(|&component| any_resolved_literal(module, function, component, predicate)),
+        _ => false,
+    }
+}
+
+fn any_global_literal(
+    module: &Module,
+    expr: Handle<Expression>,
+    predicate: impl Fn(Literal) -> bool + Copy,
+) -> bool {
+    match module.global_expressions[expr] {
+        Expression::Literal(literal) => predicate(literal),
+        Expression::ZeroValue(ty) => match module.types[ty].inner {
+            TypeInner::Scalar(scalar) => Literal::zero(scalar).is_some_and(predicate),
+            _ => false,
+        },
+        Expression::Constant(constant) => {
+            any_global_literal(module, module.constants[constant].init, predicate)
+        }
+        Expression::Splat { value, .. } => any_global_literal(module, value, predicate),
+        Expression::Compose { ref components, .. } => components
+            .iter()
+            .any(|&component| any_global_literal(module, component, predicate)),
+        _ => false,
+    }
+}
+
+fn is_zero_literal(literal: Literal) -> bool {
+    matches!(
+        literal,
+        Literal::I32(0)
+            | Literal::U32(0)
+            | Literal::I64(0)
+            | Literal::U64(0)
+            | Literal::AbstractInt(0)
+    )
+}
+
+fn is_negative_one_literal(literal: Literal) -> bool {
+    matches!(
+        literal,
+        Literal::I32(-1) | Literal::I64(-1) | Literal::AbstractInt(-1)
+    )
+}
+
+fn is_signed_min_literal(literal: Literal) -> bool {
+    matches!(
+        literal,
+        Literal::I32(i32::MIN) | Literal::I64(i64::MIN) | Literal::AbstractInt(i64::MIN)
+    )
 }
 
 fn validate_resolved_override_access(

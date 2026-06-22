@@ -3046,6 +3046,13 @@ fn bitcast_rejects_non_numeric_source_type() {
 fn check_override_access(
     source: &str,
 ) -> Result<(), naga::back::pipeline_constants::PipelineConstantError> {
+    check_override_access_with_pipeline_constants(source, &hashbrown::HashMap::new())
+}
+
+fn check_override_access_with_pipeline_constants(
+    source: &str,
+    pipeline_constants: &naga::back::PipelineConstants,
+) -> Result<(), naga::back::pipeline_constants::PipelineConstantError> {
     let module = naga::front::wgsl::parse_str(source).expect("module should parse");
     let info = valid::Validator::new(valid::ValidationFlags::all(), valid::Capabilities::all())
         .validate(&module)
@@ -3055,7 +3062,7 @@ fn check_override_access(
         &module,
         &info,
         Some((naga::ShaderStage::Compute, "main")),
-        &hashbrown::HashMap::new(),
+        pipeline_constants,
     )
     .map(|_| ())
 }
@@ -3131,6 +3138,52 @@ fn override_matrix_index_rejects_fixed_size_oob_at_pipeline_creation() {
                 index: 3,
                 length: 3
             }
+        )
+    ));
+}
+
+#[test]
+fn override_div_rem_rejects_zero_divisor_at_pipeline_creation() {
+    let overrides = hashbrown::HashMap::from([(String::from("z"), 0.0)]);
+    let err = check_override_access_with_pipeline_constants(
+        r#"
+            override z: u32 = 1u;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                var v = vec4<u32>(1u, 2u, 3u, 4u);
+                let r = v % z;
+            }
+        "#,
+        &overrides,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        naga::back::pipeline_constants::PipelineConstantError::ConstantEvaluatorError(
+            naga::proc::ConstantEvaluatorError::RemainderByZero
+        )
+    ));
+
+    let err = check_override_access_with_pipeline_constants(
+        r#"
+            override z: u32 = 1u;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                var v = vec4<u32>(1u, 2u, 3u, 4u);
+                let r = v / vec4<u32>(1u, 1u, z, 1u);
+            }
+        "#,
+        &overrides,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        naga::back::pipeline_constants::PipelineConstantError::ConstantEvaluatorError(
+            naga::proc::ConstantEvaluatorError::DivisionByZero
         )
     ));
 }
@@ -5498,6 +5551,22 @@ fn main() {
         "Remainder by zero",
     );
     check_validation_error_matches(
+        "@compute @workgroup_size(1)
+fn main() {
+    var a = vec4<u32>(1u, 2u, 3u, 4u);
+    let r = a % vec4<u32>(1u, 0u, 2u, 3u);
+}",
+        "Remainder by zero",
+    );
+    check_validation_error_matches(
+        "@compute @workgroup_size(1)
+fn main() {
+    var a = vec4<i32>(1i, 2i, 3i, 4i);
+    let r = a / vec4<i32>(1i, 0i, 2i, 3i);
+}",
+        "Division by zero",
+    );
+    check_validation_error_matches(
         "override z: u32 = 0u;
 @compute @workgroup_size(1)
 fn main() { let v = vec4<u32>(1u); let r = v % z; }",
@@ -5526,6 +5595,8 @@ fn main() {
     let v = vec4<u32>(4u);
     let d = v / 2u;
     let r = v % 3u;
+    var runtime_v = vec4<u32>(4u);
+    let runtime_r = runtime_v % 2u;
 }",
     );
 }
