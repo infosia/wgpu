@@ -20,8 +20,8 @@ metal::float4 builtins(
     int s1_ = true ? 1 : 0;
     metal::float4 s2_ = true ? v_f32_one : v_f32_zero;
     metal::float4 s3_ = metal::float4(1.0, 1.0, 1.0, 1.0);
-    metal::float4 m1_ = metal::mix(v_f32_zero, v_f32_one, v_f32_half);
-    metal::float4 m2_ = metal::mix(v_f32_zero, v_f32_one, 0.1);
+    metal::float4 m1_ = metal::float4(0.5, 0.5, 0.5, 0.5);
+    metal::float4 m2_ = metal::float4(0.1, 0.1, 0.1, 0.1);
     metal::float4 b2_ = metal::float4(0.000000000000000000000000000000000000000000001, 0.000000000000000000000000000000000000000000001, 0.000000000000000000000000000000000000000000001, 0.000000000000000000000000000000000000000000001);
     metal::int4 v_i32_zero = metal::int4(0, 0, 0, 0);
     return ((((static_cast<metal::float4>(as_type<metal::int4>(as_type<metal::uint4>(metal::int4(s1_)) + as_type<metal::uint4>(v_i32_zero))) + s2_) + m1_) + m2_) + metal::float4(0.000000000000000000000000000000000000000000001)) + b2_;

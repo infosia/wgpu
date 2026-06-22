@@ -44,9 +44,9 @@ fn main_1() {
     var ldexpOut: f32;
     var rad: vec4<f32>;
     var deg: f32;
-    var smoothStepScalar: f32;
-    var smoothStepVector: vec4<f32>;
-    var smoothStepMixed: vec4<f32>;
+    var smoothStepScalar: f32 = 0.5f;
+    var smoothStepVector: vec4<f32> = vec4<f32>(0.5f, 0.5f, 0.5f, 0.5f);
+    var smoothStepMixed: vec4<f32> = vec4<f32>(0.5f, 0.5f, 0.5f, 0.5f);
 
     let _e6 = a;
     let _e7 = b;
@@ -146,9 +146,6 @@ fn main_1() {
     rad = radians(_e173);
     let _e176 = a;
     deg = degrees(_e176.x);
-    smoothStepScalar = smoothstep(0f, 1f, 0.5f);
-    smoothStepVector = smoothstep(vec4(0f), vec4(1f), vec4(0.5f));
-    smoothStepMixed = smoothstep(vec4(0f), vec4(1f), vec4(0.5f));
     return;
 }
 

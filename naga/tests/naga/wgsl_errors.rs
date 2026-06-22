@@ -166,6 +166,48 @@ const_assert all(fv == vec2f(0.5, 0.5));
     );
 }
 
+#[test]
+fn const_eval_transpose() {
+    check_parse_and_validate_success(
+        r#"
+const a = transpose(mat2x3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0));
+const_assert all(a[0] == vec2(1.0, 4.0));
+const_assert all(a[1] == vec2(2.0, 5.0));
+const_assert all(a[2] == vec2(3.0, 6.0));
+
+const huge = transpose(mat2x2(1.0e300, 2.0, 3.0, 4.0));
+const_assert huge[0][0] == 1.0e300;
+
+const f = transpose(mat2x3<f32>(1.0, 2.0, 3.0, 4.0, 5.0, 6.0));
+const_assert all(f[0] == vec2f(1.0, 4.0));
+const_assert all(f[1] == vec2f(2.0, 5.0));
+const_assert all(f[2] == vec2f(3.0, 6.0));
+"#,
+    );
+}
+
+#[test]
+fn const_eval_determinant() {
+    check_parse_and_validate_success(
+        r#"
+const a = determinant(mat2x2(1.0, 2.0, 3.0, 4.0));
+const_assert a == -2.0;
+
+const av = determinant(mat3x3(1.0, 2.0, 3.0, 0.0, 1.0, 4.0, 5.0, 6.0, 0.0));
+const_assert av == 1.0;
+
+const huge = determinant(mat2x2(1.0e300, 0.0, 0.0, 1.0));
+const_assert huge == 1.0e300;
+
+const f = determinant(mat2x2<f32>(1.0, 2.0, 3.0, 4.0));
+const_assert f == -2.0f;
+
+const fv = determinant(mat3x3<f32>(1.0, 2.0, 3.0, 0.0, 1.0, 4.0, 5.0, 6.0, 0.0));
+const_assert fv == 1.0f;
+"#,
+    );
+}
+
 #[track_caller]
 fn check_error_matches(input: &str, expected_substring: &str) {
     let result = naga::front::wgsl::parse_str(input);

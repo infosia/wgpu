@@ -1944,12 +1944,12 @@ impl<'a> ConstantEvaluator<'a> {
             crate::MathFunction::SmoothStep => {
                 self.smooth_step(arg, arg1.unwrap(), arg2.unwrap(), span)
             }
+            crate::MathFunction::Transpose => self.transpose(arg, span),
+            crate::MathFunction::Determinant => self.determinant(arg, span),
 
             // unimplemented
             crate::MathFunction::Outer
             | crate::MathFunction::Inverse
-            | crate::MathFunction::Transpose
-            | crate::MathFunction::Determinant
             | crate::MathFunction::QuantizeToF16
             | crate::MathFunction::ExtractBits
             | crate::MathFunction::Pack4x8snorm
@@ -2288,6 +2288,170 @@ impl<'a> ConstantEvaluator<'a> {
             _ => return Err(ConstantEvaluatorError::InvalidMathArg),
         };
         result.register_as_evaluated_expr(self, span)
+    }
+
+    fn extract_matrix(
+        &mut self,
+        expr: Handle<Expression>,
+    ) -> Result<
+        (
+            ArrayVec<LiteralVector, { crate::VectorSize::MAX }>,
+            crate::VectorSize,
+            crate::VectorSize,
+            crate::Scalar,
+        ),
+        ConstantEvaluatorError,
+    > {
+        let span = self.expressions.get_span(expr);
+        let expr = self.eval_zero_value_and_splat(expr, span)?;
+        let Expression::Compose { ty, ref components } = self.expressions[expr] else {
+            return Err(ConstantEvaluatorError::InvalidMathArg);
+        };
+        let TypeInner::Matrix {
+            columns,
+            rows,
+            scalar,
+        } = self.types[ty].inner
+        else {
+            return Err(ConstantEvaluatorError::InvalidMathArg);
+        };
+
+        let components = components.clone();
+        let mut column_values = ArrayVec::new();
+        for component in components {
+            let column = self.extract_vec(component, false)?;
+            if column.len() != rows as usize {
+                return Err(ConstantEvaluatorError::InvalidMathArg);
+            }
+            column_values.push(column);
+        }
+        if column_values.len() != columns as usize {
+            return Err(ConstantEvaluatorError::InvalidMathArg);
+        }
+
+        Ok((column_values, columns, rows, scalar))
+    }
+
+    fn transpose(
+        &mut self,
+        arg: Handle<Expression>,
+        span: Span,
+    ) -> Result<Handle<Expression>, ConstantEvaluatorError> {
+        let (columns, column_count, row_count, scalar) = self.extract_matrix(arg)?;
+        let result_ty = self.types.insert(
+            Type {
+                name: None,
+                inner: TypeInner::Matrix {
+                    columns: row_count,
+                    rows: column_count,
+                    scalar,
+                },
+            },
+            span,
+        );
+
+        let mut result_columns = Vec::with_capacity(row_count as usize);
+        for row in 0..row_count as usize {
+            let mut literals = ArrayVec::<Literal, { crate::VectorSize::MAX }>::new();
+            for column in &columns {
+                literals.push(column.to_literal_vec()[row]);
+            }
+            let column = LiteralVector::from_literal_vec(literals)?;
+            result_columns.push(column.register_as_evaluated_expr(self, span)?);
+        }
+
+        self.register_evaluated_expr(
+            Expression::Compose {
+                ty: result_ty,
+                components: result_columns,
+            },
+            span,
+        )
+    }
+
+    fn determinant(
+        &mut self,
+        arg: Handle<Expression>,
+        span: Span,
+    ) -> Result<Handle<Expression>, ConstantEvaluatorError> {
+        let (columns, column_count, row_count, _) = self.extract_matrix(arg)?;
+        if column_count != row_count {
+            return Err(ConstantEvaluatorError::InvalidMathArg);
+        }
+
+        fn determinant_impl<F>(values: &[F], size: usize) -> F
+        where
+            F: Copy
+                + core::ops::Add<Output = F>
+                + core::ops::Mul<Output = F>
+                + core::ops::Neg<Output = F>
+                + core::ops::Sub<Output = F>
+                + Zero,
+        {
+            match size {
+                2 => values[0] * values[3] - values[1] * values[2],
+                _ => {
+                    let mut determinant = F::zero();
+                    for column in 0..size {
+                        let mut minor = ArrayVec::<F, 9>::new();
+                        for minor_column in 0..size {
+                            if minor_column == column {
+                                continue;
+                            }
+                            for row in 1..size {
+                                minor.push(values[minor_column * size + row]);
+                            }
+                        }
+                        let term =
+                            values[column * size] * determinant_impl(minor.as_slice(), size - 1);
+                        determinant = if column % 2 == 0 {
+                            determinant + term
+                        } else {
+                            determinant - term
+                        };
+                    }
+                    determinant
+                }
+            }
+        }
+
+        macro_rules! flatten_matrix {
+            ($columns:expr, $variant:ident, $map:expr) => {{
+                let mut values = ArrayVec::<_, 16>::new();
+                for column in &$columns {
+                    let LiteralVector::$variant(column) = column else {
+                        return Err(ConstantEvaluatorError::InvalidMathArg);
+                    };
+                    for &value in column {
+                        values.push($map(value));
+                    }
+                }
+                values
+            }};
+        }
+
+        let size = column_count as usize;
+        let result = match columns.as_slice() {
+            [LiteralVector::AbstractFloat(_), ..] => {
+                let values = flatten_matrix!(columns, AbstractFloat, |value| value);
+                Literal::AbstractFloat(determinant_impl(values.as_slice(), size))
+            }
+            [LiteralVector::F32(_), ..] => {
+                let values = flatten_matrix!(columns, F32, |value| value);
+                Literal::F32(determinant_impl(values.as_slice(), size))
+            }
+            [LiteralVector::F16(_), ..] => {
+                let values = flatten_matrix!(columns, F16, |value| f32::from(value));
+                Literal::F16(f16::from_f32(determinant_impl(values.as_slice(), size)))
+            }
+            [LiteralVector::F64(_), ..] => {
+                let values = flatten_matrix!(columns, F64, |value| value);
+                Literal::F64(determinant_impl(values.as_slice(), size))
+            }
+            _ => return Err(ConstantEvaluatorError::InvalidMathArg),
+        };
+
+        self.register_evaluated_expr(Expression::Literal(result), span)
     }
 
     fn ldexp(

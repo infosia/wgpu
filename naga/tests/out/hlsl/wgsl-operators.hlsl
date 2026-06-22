@@ -14,8 +14,8 @@ float4 builtins()
     int s1_ = (true ? int(1) : int(0));
     float4 s2_ = (true ? v_f32_one : v_f32_zero);
     float4 s3_ = float4(1.0, 1.0, 1.0, 1.0);
-    float4 m1_ = lerp(v_f32_zero, v_f32_one, v_f32_half);
-    float4 m2_ = lerp(v_f32_zero, v_f32_one, 0.1);
+    float4 m1_ = float4(0.5, 0.5, 0.5, 0.5);
+    float4 m2_ = float4(0.1, 0.1, 0.1, 0.1);
     float4 b2_ = float4(1e-45, 1e-45, 1e-45, 1e-45);
     int4 v_i32_zero = int4(int(0), int(0), int(0), int(0));
     return (((((float4(asint(asuint((s1_).xxxx) + asuint(v_i32_zero))) + s2_) + m1_) + m2_) + (1e-45).xxxx) + b2_);

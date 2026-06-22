@@ -21,8 +21,8 @@ vec4 builtins() {
     int s1_ = (true ? 1 : 0);
     vec4 s2_ = (true ? v_f32_one : v_f32_zero);
     vec4 s3_ = vec4(1.0, 1.0, 1.0, 1.0);
-    vec4 m1_ = mix(v_f32_zero, v_f32_one, v_f32_half);
-    vec4 m2_ = mix(v_f32_zero, v_f32_one, 0.1);
+    vec4 m1_ = vec4(0.5, 0.5, 0.5, 0.5);
+    vec4 m2_ = vec4(0.1, 0.1, 0.1, 0.1);
     vec4 b2_ = vec4(1e-45, 1e-45, 1e-45, 1e-45);
     ivec4 v_i32_zero = ivec4(0, 0, 0, 0);
     return (((((vec4((ivec4(s1_) + v_i32_zero)) + s2_) + m1_) + m2_) + vec4(1e-45)) + b2_);
