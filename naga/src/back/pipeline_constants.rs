@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use super::PipelineConstants;
 use crate::{
-    arena::HandleVec,
+    arena::{HandleSet, HandleVec},
     compact::{compact, KeepUnused},
     ir,
     proc::{ConstantEvaluator, ConstantEvaluatorError, Emitter, IndexableLength},
@@ -423,6 +423,8 @@ fn process_function(
     let mut adjusted_local_expressions = HandleVec::with_capacity(function.expressions.len());
 
     let mut local_expression_kind_tracker = crate::proc::ExpressionKindTracker::new();
+    let mut named_expressions = HandleSet::for_arena(&function.expressions);
+    named_expressions.insert_iter(function.named_expressions.keys().copied());
 
     let mut expressions = mem::take(&mut function.expressions);
 
@@ -454,6 +456,9 @@ fn process_function(
             false,
         );
         let h = evaluator.try_eval_and_append(expr, span)?;
+        if named_expressions.contains(old_h) {
+            local_expression_kind_tracker.force_non_const(h);
+        }
         adjusted_local_expressions.insert(old_h, h);
     }
 
@@ -1273,13 +1278,23 @@ fn adjust_stmt(new_pos: &HandleVec<Expression, Handle<Expression>>, stmt: &mut S
 /// [`needs_pre_emit`]: Expression::needs_pre_emit
 /// [`Override`]: Expression::Override
 fn filter_emits_in_block(block: &mut Block, expressions: &Arena<Expression>) {
+    let mut in_scope = HandleSet::for_arena(expressions);
+    filter_emits_in_block_impl(block, expressions, &mut in_scope);
+}
+
+fn filter_emits_in_block_impl(
+    block: &mut Block,
+    expressions: &Arena<Expression>,
+    in_scope: &mut HandleSet<Expression>,
+) {
+    let mut added = Vec::new();
     let original = mem::replace(block, Block::with_capacity(block.len()));
     for (stmt, span) in original.span_into_iter() {
         match stmt {
             Statement::Emit(range) => {
                 let mut current = None;
                 for expr_h in range {
-                    if expressions[expr_h].needs_pre_emit() {
+                    if expressions[expr_h].needs_pre_emit() || in_scope.contains(expr_h) {
                         if let Some((first, last)) = current {
                             block.push(Statement::Emit(Range::new_from_bounds(first, last)), span);
                         }
@@ -1287,8 +1302,12 @@ fn filter_emits_in_block(block: &mut Block, expressions: &Arena<Expression>) {
                         current = None;
                     } else if let Some((_, ref mut last)) = current {
                         *last = expr_h;
+                        in_scope.insert(expr_h);
+                        added.push(expr_h);
                     } else {
                         current = Some((expr_h, expr_h));
+                        in_scope.insert(expr_h);
+                        added.push(expr_h);
                     }
                 }
                 if let Some((first, last)) = current {
@@ -1296,7 +1315,7 @@ fn filter_emits_in_block(block: &mut Block, expressions: &Arena<Expression>) {
                 }
             }
             Statement::Block(mut child) => {
-                filter_emits_in_block(&mut child, expressions);
+                filter_emits_in_block_impl(&mut child, expressions, in_scope);
                 block.push(Statement::Block(child), span);
             }
             Statement::If {
@@ -1304,8 +1323,8 @@ fn filter_emits_in_block(block: &mut Block, expressions: &Arena<Expression>) {
                 mut accept,
                 mut reject,
             } => {
-                filter_emits_in_block(&mut accept, expressions);
-                filter_emits_in_block(&mut reject, expressions);
+                filter_emits_in_block_impl(&mut accept, expressions, in_scope);
+                filter_emits_in_block_impl(&mut reject, expressions, in_scope);
                 block.push(
                     Statement::If {
                         condition,
@@ -1320,7 +1339,7 @@ fn filter_emits_in_block(block: &mut Block, expressions: &Arena<Expression>) {
                 mut cases,
             } => {
                 for case in &mut cases {
-                    filter_emits_in_block(&mut case.body, expressions);
+                    filter_emits_in_block_impl(&mut case.body, expressions, in_scope);
                 }
                 block.push(Statement::Switch { selector, cases }, span);
             }
@@ -1329,8 +1348,8 @@ fn filter_emits_in_block(block: &mut Block, expressions: &Arena<Expression>) {
                 mut continuing,
                 break_if,
             } => {
-                filter_emits_in_block(&mut body, expressions);
-                filter_emits_in_block(&mut continuing, expressions);
+                filter_emits_in_block_impl(&mut body, expressions, in_scope);
+                filter_emits_in_block_impl(&mut continuing, expressions, in_scope);
                 block.push(
                     Statement::Loop {
                         body,
@@ -1342,6 +1361,9 @@ fn filter_emits_in_block(block: &mut Block, expressions: &Arena<Expression>) {
             }
             stmt => block.push(stmt.clone(), span),
         }
+    }
+    for expr_h in added {
+        in_scope.remove(expr_h);
     }
 }
 

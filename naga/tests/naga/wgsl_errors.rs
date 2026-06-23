@@ -3727,6 +3727,85 @@ fn override_smoothstep_rejects_vector_splat_edges_at_pipeline_creation() {
 }
 
 #[test]
+fn override_let_composite_does_not_fold_through_let() {
+    let overrides = hashbrown::HashMap::from([(String::from("override_1e30"), 1e30)]);
+
+    check_override_access_with_pipeline_constants(
+        r#"
+            const const_1e30 = f32(1e30);
+            override override_1e30 : f32;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                let let_1e30 = f32(1e30);
+                let tmp = vec4(override_1e30) * vec4(vec3(override_1e30), let_1e30);
+            }
+        "#,
+        &overrides,
+    )
+    .expect("composite using a let-bound value should not be early-evaluated");
+
+    check_override_access_with_pipeline_constants(
+        r#"
+            struct S { x : f32, y : f32, }
+            const const_1e30 = f32(1e30);
+            override override_1e30 : f32;
+
+            fn foo() -> u32 {
+                let let_1e30 = f32(1e30);
+                let tmp = mat2x2(vec2(override_1e30), vec2(override_1e30))[0] * mat2x2(vec2(override_1e30), vec2(let_1e30))[0];
+                return 0;
+            }
+
+            @compute @workgroup_size(1)
+            fn main() {
+                _ = foo();
+            }
+        "#,
+        &overrides,
+    )
+    .expect("matrix column expression using a let-bound value should resolve");
+
+    let err = check_override_access_with_pipeline_constants(
+        r#"
+            override override_1e30 : f32;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                let tmp = override_1e30 * override_1e30;
+            }
+        "#,
+        &overrides,
+    )
+    .expect_err("wholly-override overflow should still be rejected");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("overflow") || message.contains("infinite"),
+        "unexpected error: {message}"
+    );
+
+    let err = check_override_access_with_pipeline_constants(
+        r#"
+            override override_1e30 : f32;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                let tmp = vec4(override_1e30) * vec4(override_1e30);
+            }
+        "#,
+        &overrides,
+    )
+    .expect_err("wholly-override vector overflow should still be rejected");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("overflow") || message.contains("infinite"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
 fn override_array_index_accepts_in_bounds_at_pipeline_creation() {
     check_override_access(
         r#"
