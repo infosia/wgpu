@@ -4623,6 +4623,13 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                     }
                     _ => {
                         (image, image_span) = get_image_and_span(self, &mut args, ctx)?;
+                        if let (ir::ImageClass::Depth { .. }, _) =
+                            ctx.image_data(image, image_span)?
+                        {
+                            return Err(Box::new(Error::DepthTextureGatherComponent(
+                                image_or_component_span,
+                            )));
+                        }
                         gather = Some(ctx.gather_component(
                             lowered_image_or_component,
                             image_or_component_span,

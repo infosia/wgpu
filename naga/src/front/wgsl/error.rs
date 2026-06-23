@@ -211,6 +211,7 @@ pub(crate) enum Error<'a> {
     /// A break if appeared outside of a continuing block
     InvalidBreakIf(Span),
     InvalidGatherComponent(Span),
+    DepthTextureGatherComponent(Span),
     InvalidConstructorComponentType(Span, i32),
     InvalidIdentifierUnderscore(Span),
     ReservedIdentifierPrefix(Span),
@@ -702,6 +703,12 @@ impl<'a> Error<'a> {
                     &source[bad_span]
                 ),
                 labels: vec![(bad_span, "invalid component".into())],
+                notes: vec![],
+            },
+            Error::DepthTextureGatherComponent(bad_span) => ParseError {
+                message: "textureGather on a depth texture does not accept a component argument"
+                    .to_string(),
+                labels: vec![(bad_span, "component not allowed for depth texture".into())],
                 notes: vec![],
             },
             Error::InvalidConstructorComponentType(bad_span, component) => ParseError {

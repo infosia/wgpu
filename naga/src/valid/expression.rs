@@ -871,6 +871,10 @@ impl super::Validator {
 
                 // check constant offset
                 if let Some(const_expr) = offset {
+                    if dim == crate::ImageDimension::Cube {
+                        return Err(ExpressionError::InvalidSampleOffset(dim, const_expr));
+                    }
+
                     fn sample_offset_out_of_range(
                         expr: Handle<crate::Expression>,
                         module: &crate::Module,
@@ -1110,6 +1114,13 @@ impl super::Validator {
                             _ => {
                                 return Err(ExpressionError::InvalidSampleLevelGradientType(dim, y))
                             }
+                        }
+                        match class {
+                            crate::ImageClass::Sampled {
+                                kind: Sk::Float,
+                                multi: false,
+                            } => {}
+                            _ => return Err(ExpressionError::InvalidImageClass(class)),
                         }
                         ShaderStages::all()
                     }

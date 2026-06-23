@@ -449,6 +449,114 @@ fn main() -> @location(0) vec4f {
 }
 
 #[test]
+fn texture_gather_depth_rejects_component_argument() {
+    check_error_matches(
+        r#"
+@group(0) @binding(0) var tex: texture_depth_2d;
+@group(0) @binding(1) var samp: sampler;
+
+@fragment
+fn main() -> @location(0) vec4f {
+    return textureGather(0, tex, samp, vec2f(0.0));
+}
+"#,
+        "depth texture does not accept a component argument",
+    );
+
+    check_parse_and_validate_success(
+        r#"
+@group(0) @binding(0) var tex: texture_depth_2d;
+@group(0) @binding(1) var samp: sampler;
+
+@fragment
+fn main() -> @location(0) vec4f {
+    return textureGather(tex, samp, vec2f(0.0));
+}
+"#,
+    );
+
+    check_parse_and_validate_success(
+        r#"
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+@fragment
+fn main() -> @location(0) vec4f {
+    return textureGather(0, tex, samp, vec2f(0.0));
+}
+"#,
+    );
+}
+
+#[test]
+fn texture_sample_offset_rejects_cube_dimension() {
+    check_validation_error_matches(
+        r#"
+@group(0) @binding(0) var tex: texture_cube<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+@fragment
+fn main() -> @location(0) vec4f {
+    return textureSample(tex, samp, vec3f(0.0), vec3i(0));
+}
+"#,
+        "doesn't match the image dimension Cube",
+    );
+
+    check_parse_and_validate_success(
+        r#"
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+@fragment
+fn main() -> @location(0) vec4f {
+    return textureSample(tex, samp, vec2f(0.0), vec2i(0));
+}
+"#,
+    );
+
+    check_parse_and_validate_success(
+        r#"
+@group(0) @binding(0) var tex: texture_3d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+@fragment
+fn main() -> @location(0) vec4f {
+    return textureSample(tex, samp, vec3f(0.0), vec3i(0));
+}
+"#,
+    );
+}
+
+#[test]
+fn texture_sample_grad_rejects_depth_texture() {
+    check_validation_error_matches(
+        r#"
+@group(0) @binding(0) var tex: texture_depth_2d;
+@group(0) @binding(1) var samp: sampler;
+
+@fragment
+fn main() -> @location(0) vec4f {
+    return textureSampleGrad(tex, samp, vec2f(0.0), vec2f(0.0), vec2f(0.0));
+}
+"#,
+        "Unable to operate on image class Depth",
+    );
+
+    check_parse_and_validate_success(
+        r#"
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+@fragment
+fn main() -> @location(0) vec4f {
+    return textureSampleGrad(tex, samp, vec2f(0.0), vec2f(0.0), vec2f(0.0));
+}
+"#,
+    );
+}
+
+#[test]
 fn binary_expression_precedence_requires_parentheses() {
     for source in [
         "fn f(a: u32, b: u32, c: u32) { let r = a * b << c; }",
