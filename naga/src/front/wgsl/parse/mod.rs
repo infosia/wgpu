@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{boxed::Box, string::String, vec, vec::Vec};
 use directive::enable_extension::ImplementedEnableExtension;
 
 use crate::diagnostic_filter::{
@@ -477,6 +477,7 @@ impl Options {
 pub struct Parser {
     rules: Vec<(Rule, usize)>,
     recursion_depth: u32,
+    warnings: Vec<diagnostic_filter::WgslWarning>,
 }
 
 impl Parser {
@@ -484,12 +485,18 @@ impl Parser {
         Parser {
             rules: Vec::new(),
             recursion_depth: 0,
+            warnings: Vec::new(),
         }
     }
 
     fn reset(&mut self) {
         self.rules.clear();
         self.recursion_depth = 0;
+        self.warnings.clear();
+    }
+
+    pub fn take_warnings(&mut self) -> Vec<diagnostic_filter::WgslWarning> {
+        core::mem::take(&mut self.warnings)
     }
 
     fn push_rule_span(&mut self, rule: Rule, lexer: &mut Lexer<'_>) {
@@ -1234,10 +1241,9 @@ impl Parser {
                 lexer.expect(Token::Operation('='))?;
                 let expr = self.expression(lexer, ctx)?;
                 let span = lexer.span_with_start(span);
-                block.stmts.push(ast::Statement {
-                    kind: ast::StatementKind::Phony(expr),
-                    span,
-                });
+                block
+                    .stmts
+                    .push(ast::Statement::new(ast::StatementKind::Phony(expr), span));
                 return Ok(());
             }
             _ => {}
@@ -1277,20 +1283,17 @@ impl Parser {
                 };
 
                 let span = lexer.span_with_start(token.1);
-                block.stmts.push(ast::Statement {
-                    kind: op(target),
-                    span,
-                });
+                block.stmts.push(ast::Statement::new(op(target), span));
                 return Ok(());
             }
             (_, span) => return Err(Box::new(Error::Unexpected(span, ExpectedToken::Assignment))),
         };
 
         let span = lexer.span_with_start(token.1);
-        block.stmts.push(ast::Statement {
-            kind: ast::StatementKind::Assign { target, op, value },
+        block.stmts.push(ast::Statement::new(
+            ast::StatementKind::Assign { target, op, value },
             span,
-        });
+        ));
         Ok(())
     }
 
@@ -1321,13 +1324,13 @@ impl Parser {
         let arguments = self.arguments(lexer, context)?;
         let span = lexer.span_with_start(name_span);
 
-        block.stmts.push(ast::Statement {
-            kind: ast::StatementKind::Call(ast::CallPhrase {
+        block.stmts.push(ast::Statement::new(
+            ast::StatementKind::Call(ast::CallPhrase {
                 function: ident,
                 arguments,
             }),
             span,
-        });
+        ));
 
         self.pop_rule_span(lexer);
 
@@ -1443,10 +1446,10 @@ impl Parser {
         };
 
         let span = lexer.span_with_start(token.1);
-        block.stmts.push(ast::Statement {
-            kind: ast::StatementKind::LocalDecl(local_decl),
+        block.stmts.push(ast::Statement::new(
+            ast::StatementKind::LocalDecl(local_decl),
             span,
-        });
+        ));
 
         Ok(())
     }
@@ -1461,17 +1464,21 @@ impl Parser {
         self.track_recursion(|this| {
             this.push_rule_span(Rule::Statement, lexer);
 
+            let diagnostic_filters = this.diagnostic_filter_attributes(lexer)?;
+            let has_diagnostic_filters = !diagnostic_filters.is_empty();
+
             // We peek here instead of eagerly getting the next token since
             // `Parser::block` expects its first token to be `{`.
             //
             // Most callers have a single path leading to the start of the block;
             // `statement` is the only exception where there are multiple choices.
             match lexer.peek() {
-                (token, _) if is_start_of_compound_statement(token) => {
+                (Token::Paren('{'), _) => {
                     let (inner, span) = this.block(lexer, ctx, brace_nesting_level)?;
                     block.stmts.push(ast::Statement {
                         kind: ast::StatementKind::Block(inner),
                         span,
+                        diagnostic_filters,
                     });
                     this.pop_rule_span(lexer);
                     return Ok(());
@@ -1481,10 +1488,22 @@ impl Parser {
 
             let kind = match lexer.next() {
                 (Token::Separator(';'), _) => {
+                    if has_diagnostic_filters {
+                        return Err(Box::new(Error::DiagnosticAttributeNotSupported {
+                            on_what: "semicolons".into(),
+                            spans: diagnostic_filters.spans().collect(),
+                        }));
+                    }
                     this.pop_rule_span(lexer);
                     return Ok(());
                 }
                 (Token::Word("return"), _) => {
+                    if has_diagnostic_filters {
+                        return Err(Box::new(Error::DiagnosticAttributeNotSupported {
+                            on_what: "`return` statements".into(),
+                            spans: diagnostic_filters.spans().collect(),
+                        }));
+                    }
                     let value = if lexer.peek().0 != Token::Separator(';') {
                         let handle = this.expression(lexer, ctx)?;
                         Some(handle)
@@ -1529,10 +1548,7 @@ impl Parser {
                         };
                         reject = ast::Block::default();
                         let span = lexer.span_from(other_span_start);
-                        reject.stmts.push(ast::Statement {
-                            kind: sub_stmt,
-                            span,
-                        })
+                        reject.stmts.push(ast::Statement::new(sub_stmt, span))
                     }
 
                     ast::StatementKind::If {
@@ -1543,6 +1559,8 @@ impl Parser {
                 }
                 (Token::Word("switch"), _) => {
                     let selector = this.expression(lexer, ctx)?;
+                    let switch_body_diagnostic_filters =
+                        this.diagnostic_filter_attributes(lexer)?;
                     let brace_span = lexer.expect_span(Token::Paren('{'))?;
                     let brace_nesting_level =
                         Self::increase_brace_nesting(brace_nesting_level, brace_span)?;
@@ -1568,14 +1586,24 @@ impl Parser {
                                     }
                                     cases.push(ast::SwitchCase {
                                         value,
-                                        body: ast::Block::default(),
+                                        body: ast::Block {
+                                            stmts: Vec::new(),
+                                            diagnostic_filters: switch_body_diagnostic_filters
+                                                .clone(),
+                                        },
                                         fall_through: true,
                                     });
                                 };
 
                                 lexer.next_if(Token::Separator(':'));
 
-                                let body = this.block(lexer, ctx, brace_nesting_level)?.0;
+                                let (body, body_span) =
+                                    this.block(lexer, ctx, brace_nesting_level)?;
+                                let body = Self::wrap_block_diagnostic_filters(
+                                    body,
+                                    switch_body_diagnostic_filters.clone(),
+                                    body_span,
+                                );
 
                                 cases.push(ast::SwitchCase {
                                     value,
@@ -1585,7 +1613,13 @@ impl Parser {
                             }
                             (Token::Word("default"), _) => {
                                 lexer.next_if(Token::Separator(':'));
-                                let body = this.block(lexer, ctx, brace_nesting_level)?.0;
+                                let (body, body_span) =
+                                    this.block(lexer, ctx, brace_nesting_level)?;
+                                let body = Self::wrap_block_diagnostic_filters(
+                                    body,
+                                    switch_body_diagnostic_filters.clone(),
+                                    body_span,
+                                );
                                 cases.push(ast::SwitchCase {
                                     value: ast::SwitchValue::Default,
                                     body,
@@ -1611,25 +1645,22 @@ impl Parser {
                     let (condition, span) =
                         lexer.capture_span(|lexer| this.expression(lexer, ctx))?;
                     let mut reject = ast::Block::default();
-                    reject.stmts.push(ast::Statement {
-                        kind: ast::StatementKind::Break,
-                        span,
-                    });
+                    reject
+                        .stmts
+                        .push(ast::Statement::new(ast::StatementKind::Break, span));
 
-                    body.stmts.push(ast::Statement {
-                        kind: ast::StatementKind::If {
+                    body.stmts.push(ast::Statement::new(
+                        ast::StatementKind::If {
                             condition,
                             accept: ast::Block::default(),
                             reject,
                         },
                         span,
-                    });
+                    ));
 
                     let (block, span) = this.block(lexer, ctx, brace_nesting_level)?;
-                    body.stmts.push(ast::Statement {
-                        kind: ast::StatementKind::Block(block),
-                        span,
-                    });
+                    body.stmts
+                        .push(ast::Statement::new(ast::StatementKind::Block(block), span));
 
                     ast::StatementKind::Loop {
                         body,
@@ -1662,18 +1693,17 @@ impl Parser {
                             Ok(condition)
                         })?;
                         let mut reject = ast::Block::default();
-                        reject.stmts.push(ast::Statement {
-                            kind: ast::StatementKind::Break,
-                            span,
-                        });
-                        body.stmts.push(ast::Statement {
-                            kind: ast::StatementKind::If {
+                        reject
+                            .stmts
+                            .push(ast::Statement::new(ast::StatementKind::Break, span));
+                        body.stmts.push(ast::Statement::new(
+                            ast::StatementKind::If {
                                 condition,
                                 accept: ast::Block::default(),
                                 reject,
                             },
                             span,
-                        });
+                        ));
                     };
 
                     let mut continuing = ast::Block::default();
@@ -1690,10 +1720,8 @@ impl Parser {
                     }
 
                     let (block, span) = this.block(lexer, ctx, brace_nesting_level)?;
-                    body.stmts.push(ast::Statement {
-                        kind: ast::StatementKind::Block(block),
-                        span,
-                    });
+                    body.stmts
+                        .push(ast::Statement::new(ast::StatementKind::Block(block), span));
 
                     ctx.local_table.pop_scope();
 
@@ -1704,6 +1732,12 @@ impl Parser {
                     }
                 }
                 (Token::Word("break"), span) => {
+                    if has_diagnostic_filters {
+                        return Err(Box::new(Error::DiagnosticAttributeNotSupported {
+                            on_what: "`break` statements".into(),
+                            spans: diagnostic_filters.spans().collect(),
+                        }));
+                    }
                     // Check if the next token is an `if`, this indicates
                     // that the user tried to type out a `break if` which
                     // is illegal in this position.
@@ -1716,15 +1750,33 @@ impl Parser {
                     ast::StatementKind::Break
                 }
                 (Token::Word("continue"), _) => {
+                    if has_diagnostic_filters {
+                        return Err(Box::new(Error::DiagnosticAttributeNotSupported {
+                            on_what: "`continue` statements".into(),
+                            spans: diagnostic_filters.spans().collect(),
+                        }));
+                    }
                     lexer.expect(Token::Separator(';'))?;
                     ast::StatementKind::Continue
                 }
                 (Token::Word("discard"), _) => {
+                    if has_diagnostic_filters {
+                        return Err(Box::new(Error::DiagnosticAttributeNotSupported {
+                            on_what: "`discard` statements".into(),
+                            spans: diagnostic_filters.spans().collect(),
+                        }));
+                    }
                     lexer.expect(Token::Separator(';'))?;
                     ast::StatementKind::Kill
                 }
                 // https://www.w3.org/TR/WGSL/#const-assert-statement
                 (Token::Word("const_assert"), _) => {
+                    if has_diagnostic_filters {
+                        return Err(Box::new(Error::DiagnosticAttributeNotSupported {
+                            on_what: "`const_assert` statements".into(),
+                            spans: diagnostic_filters.spans().collect(),
+                        }));
+                    }
                     // parentheses are optional
                     let paren = lexer.next_if(Token::Paren('('));
 
@@ -1737,6 +1789,12 @@ impl Parser {
                     ast::StatementKind::ConstAssert(condition)
                 }
                 token => {
+                    if has_diagnostic_filters {
+                        return Err(Box::new(Error::DiagnosticAttributeNotSupported {
+                            on_what: "these statements".into(),
+                            spans: diagnostic_filters.spans().collect(),
+                        }));
+                    }
                     this.variable_or_value_or_func_call_or_variable_updating_statement(
                         lexer,
                         ctx,
@@ -1751,10 +1809,56 @@ impl Parser {
             };
 
             let span = this.pop_rule_span(lexer);
-            block.stmts.push(ast::Statement { kind, span });
+            block.stmts.push(ast::Statement {
+                kind,
+                span,
+                diagnostic_filters,
+            });
 
             Ok(())
         })
+    }
+
+    fn wrap_block_diagnostic_filters<'a>(
+        block: ast::Block<'a>,
+        diagnostic_filters: DiagnosticFilterMap,
+        span: Span,
+    ) -> ast::Block<'a> {
+        if diagnostic_filters.is_empty() {
+            block
+        } else {
+            ast::Block {
+                stmts: vec![ast::Statement::new(ast::StatementKind::Block(block), span)],
+                diagnostic_filters,
+            }
+        }
+    }
+
+    fn diagnostic_filter_attributes<'a>(
+        &mut self,
+        lexer: &mut Lexer<'a>,
+    ) -> Result<'a, DiagnosticFilterMap> {
+        let mut diagnostic_filters = DiagnosticFilterMap::new();
+
+        self.push_rule_span(Rule::Attribute, lexer);
+        while lexer.next_if(Token::Attribute) {
+            let (name, name_span) = lexer.next_ident_with_span()?;
+            if let Some(DirectiveKind::Diagnostic) = DirectiveKind::from_ident(name) {
+                let filter = self.diagnostic_filter(lexer)?;
+                let span = self.peek_rule_span(lexer);
+                diagnostic_filters
+                    .add(filter, span, ShouldConflictOnFullDuplicate::Yes)
+                    .map_err(|e| Box::new(e.into()))?;
+            } else {
+                return Err(Box::new(Error::Unexpected(
+                    name_span,
+                    ExpectedToken::DiagnosticAttribute,
+                )));
+            }
+        }
+        self.pop_rule_span(lexer);
+
+        Ok(diagnostic_filters)
     }
 
     fn r#loop<'a>(
@@ -1767,6 +1871,7 @@ impl Parser {
         let mut continuing = ast::Block::default();
         let mut break_if = None;
 
+        body.diagnostic_filters = self.diagnostic_filter_attributes(lexer)?;
         let brace_span = lexer.expect_span(Token::Paren('{'))?;
         let brace_nesting_level = Self::increase_brace_nesting(brace_nesting_level, brace_span)?;
 
@@ -1781,6 +1886,7 @@ impl Parser {
                 ctx.local_table.push_scope();
 
                 // Expect a opening brace to start the continuing block
+                continuing.diagnostic_filters = self.diagnostic_filter_attributes(lexer)?;
                 let brace_span = lexer.expect_span(Token::Paren('{'))?;
                 let brace_nesting_level =
                     Self::increase_brace_nesting(brace_nesting_level, brace_span)?;
@@ -1851,38 +1957,14 @@ impl Parser {
 
         ctx.local_table.push_scope();
 
-        let mut diagnostic_filters = DiagnosticFilterMap::new();
-
-        self.push_rule_span(Rule::Attribute, lexer);
-        while lexer.next_if(Token::Attribute) {
-            let (name, name_span) = lexer.next_ident_with_span()?;
-            if let Some(DirectiveKind::Diagnostic) = DirectiveKind::from_ident(name) {
-                let filter = self.diagnostic_filter(lexer)?;
-                let span = self.peek_rule_span(lexer);
-                diagnostic_filters
-                    .add(filter, span, ShouldConflictOnFullDuplicate::Yes)
-                    .map_err(|e| Box::new(e.into()))?;
-            } else {
-                return Err(Box::new(Error::Unexpected(
-                    name_span,
-                    ExpectedToken::DiagnosticAttribute,
-                )));
-            }
-        }
-        self.pop_rule_span(lexer);
-
-        if !diagnostic_filters.is_empty() {
-            return Err(Box::new(
-                Error::DiagnosticAttributeNotYetImplementedAtParseSite {
-                    site_name_plural: "compound statements",
-                    spans: diagnostic_filters.spans().collect(),
-                },
-            ));
-        }
+        let diagnostic_filters = self.diagnostic_filter_attributes(lexer)?;
 
         let brace_span = lexer.expect_span(Token::Paren('{'))?;
         let brace_nesting_level = Self::increase_brace_nesting(brace_nesting_level, brace_span)?;
-        let mut block = ast::Block::default();
+        let mut block = ast::Block {
+            stmts: Vec::new(),
+            diagnostic_filters,
+        };
         while !lexer.next_if(Token::Paren('}')) {
             self.statement(lexer, ctx, &mut block, brace_nesting_level)?;
         }
@@ -2604,7 +2686,7 @@ impl Parser {
         Ok(brace_nesting_level + 1)
     }
 
-    fn diagnostic_filter<'a>(&self, lexer: &mut Lexer<'a>) -> Result<'a, DiagnosticFilter> {
+    fn diagnostic_filter<'a>(&mut self, lexer: &mut Lexer<'a>) -> Result<'a, DiagnosticFilter> {
         lexer.expect(Token::Paren('('))?;
 
         let (severity_control_name, severity_control_name_span) = lexer.next_ident_with_span()?;
@@ -2627,10 +2709,14 @@ impl Parser {
             {
                 FilterableTriggeringRule::Standard(triggering_rule)
             } else {
-                diagnostic_filter::Severity::Warning.report_wgsl_parse_diag(
-                    Box::new(Error::UnknownDiagnosticRuleName(diagnostic_rule_name_span)),
-                    lexer.source,
-                )?;
+                let error = Error::UnknownDiagnosticRuleName(diagnostic_rule_name_span);
+                let message = String::from(error.as_parse_error(lexer.source).message());
+                diagnostic_filter::Severity::Warning
+                    .report_wgsl_parse_diag(Box::new(error), lexer.source)?;
+                self.warnings.push(diagnostic_filter::WgslWarning {
+                    span: diagnostic_rule_name_span,
+                    message,
+                });
                 FilterableTriggeringRule::Unknown(diagnostic_rule_name.into())
             }
         };

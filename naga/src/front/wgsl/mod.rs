@@ -24,6 +24,7 @@ pub use crate::front::wgsl::parse::Options;
 use alloc::boxed::Box;
 use thiserror::Error;
 
+pub use crate::diagnostic_filter::WgslWarning;
 use crate::front::wgsl::error::Error;
 use crate::front::wgsl::lower::Lowerer;
 use crate::front::wgsl::parse::Parser;
@@ -62,12 +63,29 @@ impl Frontend {
         self.inner(source).map_err(|x| x.as_parse_error(source))
     }
 
+    pub fn parse_with_warnings(
+        &mut self,
+        source: &str,
+    ) -> core::result::Result<(crate::Module, alloc::vec::Vec<WgslWarning>), ParseError> {
+        self.inner_with_warnings(source)
+            .map_err(|x| x.as_parse_error(source))
+    }
+
     fn inner<'a>(&mut self, source: &'a str) -> Result<'a, crate::Module> {
+        let (module, _) = self.inner_with_warnings(source)?;
+        Ok(module)
+    }
+
+    fn inner_with_warnings<'a>(
+        &mut self,
+        source: &'a str,
+    ) -> Result<'a, (crate::Module, alloc::vec::Vec<WgslWarning>)> {
         let tu = self.parser.parse(source, &self.options)?;
+        let warnings = self.parser.take_warnings();
         let index = index::Index::generate(&tu)?;
         let module = Lowerer::new(&index).lower(tu)?;
 
-        Ok(module)
+        Ok((module, warnings))
     }
 }
 
@@ -84,6 +102,12 @@ impl Frontend {
 /// </div>
 pub fn parse_str(source: &str) -> core::result::Result<crate::Module, ParseError> {
     Frontend::new().parse(source)
+}
+
+pub fn parse_str_with_warnings(
+    source: &str,
+) -> core::result::Result<(crate::Module, alloc::vec::Vec<WgslWarning>), ParseError> {
+    Frontend::new().parse_with_warnings(source)
 }
 
 #[cfg(test)]

@@ -1322,6 +1322,7 @@ impl super::Validator {
         ep: &crate::EntryPoint,
         module: &crate::Module,
         mod_info: &ModuleInfo,
+        warnings: &mut Vec<crate::diagnostic_filter::WgslWarning>,
     ) -> Result<FunctionInfo, WithSpan<EntryPointError>> {
         match ep.stage {
             crate::ShaderStage::Task | crate::ShaderStage::Mesh
@@ -1384,7 +1385,7 @@ impl super::Validator {
         }
 
         let mut info = self
-            .validate_function(&ep.function, module, mod_info, true)
+            .validate_function(&ep.function, module, mod_info, true, warnings)
             .map_err(WithSpan::into_other)?;
 
         // Validate the task shader payload.

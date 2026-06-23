@@ -7,11 +7,12 @@ use alloc::{
 };
 use core::num::NonZeroU32;
 
+use crate::diagnostic_filter::DiagnosticFilterNode;
 use crate::front::wgsl::error::{Error, ExpectedToken, InvalidAssignmentType};
 use crate::front::wgsl::index::Index;
 use crate::front::wgsl::parse::directive::enable_extension::EnableExtensions;
 use crate::front::wgsl::parse::number::Number;
-use crate::front::wgsl::parse::{ast, conv};
+use crate::front::wgsl::parse::{ast, conv, Parser};
 use crate::front::wgsl::Result;
 use crate::front::Typifier;
 use crate::{
@@ -189,6 +190,7 @@ pub struct StatementContext<'source, 'temp, 'out> {
     /// Also stores the spans of the names, for use in errors.
     named_expressions: &'out mut FastIndexMap<Handle<ir::Expression>, (String, Span)>,
     module: &'out mut ir::Module,
+    diagnostic_filter_leaf: Option<Handle<DiagnosticFilterNode>>,
 
     /// Which `Expression`s in `self.naga_expressions` are const expressions, in
     /// the WGSL sense.
@@ -1712,6 +1714,7 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
             function: &mut function,
             named_expressions: &mut named_expressions,
             module: ctx.module,
+            diagnostic_filter_leaf: f.diagnostic_filter_leaf,
             local_expression_kind_tracker: &mut local_expression_kind_tracker,
             global_expression_kind_tracker: ctx.global_expression_kind_tracker,
         };
@@ -1895,15 +1898,55 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
         ctx: &mut StatementContext<'source, '_, '_>,
     ) -> Result<'source, ir::Block> {
         let mut block = ir::Block::default();
-
-        for stmt in b.stmts.iter() {
-            self.statement(stmt, &mut block, is_inside_loop, ctx)?;
+        let previous_leaf = ctx.diagnostic_filter_leaf;
+        if !b.diagnostic_filters.is_empty() {
+            let leaf = Parser::write_diagnostic_filters(
+                &mut ctx.module.diagnostic_filters,
+                b.diagnostic_filters.clone(),
+                previous_leaf,
+            );
+            block.set_diagnostic_filter_leaf(leaf);
+            ctx.diagnostic_filter_leaf = leaf;
         }
+
+        let result = b
+            .stmts
+            .iter()
+            .try_for_each(|stmt| self.statement(stmt, &mut block, is_inside_loop, ctx));
+        ctx.diagnostic_filter_leaf = previous_leaf;
+        result?;
 
         Ok(block)
     }
 
     fn statement(
+        &mut self,
+        stmt: &ast::Statement<'source>,
+        block: &mut ir::Block,
+        is_inside_loop: bool,
+        ctx: &mut StatementContext<'source, '_, '_>,
+    ) -> Result<'source, ()> {
+        if !stmt.diagnostic_filters.is_empty() {
+            let previous_leaf = ctx.diagnostic_filter_leaf;
+            let leaf = Parser::write_diagnostic_filters(
+                &mut ctx.module.diagnostic_filters,
+                stmt.diagnostic_filters.clone(),
+                previous_leaf,
+            );
+            let mut scoped_block = ir::Block::default();
+            scoped_block.set_diagnostic_filter_leaf(leaf);
+            ctx.diagnostic_filter_leaf = leaf;
+            let result = self.statement_inner(stmt, &mut scoped_block, is_inside_loop, ctx);
+            ctx.diagnostic_filter_leaf = previous_leaf;
+            result?;
+            block.push(ir::Statement::Block(scoped_block), stmt.span);
+            return Ok(());
+        }
+
+        self.statement_inner(stmt, block, is_inside_loop, ctx)
+    }
+
+    fn statement_inner(
         &mut self,
         stmt: &ast::Statement<'source>,
         block: &mut ir::Block,

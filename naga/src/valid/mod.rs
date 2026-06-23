@@ -330,6 +330,15 @@ pub struct ModuleInfo {
     functions: Vec<FunctionInfo>,
     entry_points: Vec<FunctionInfo>,
     const_expression_types: Box<[TypeResolution]>,
+    #[cfg_attr(feature = "serialize", serde(skip_serializing))]
+    #[cfg_attr(feature = "deserialize", serde(skip_deserializing))]
+    warnings: Vec<crate::diagnostic_filter::WgslWarning>,
+}
+
+impl ModuleInfo {
+    pub fn warnings(&self) -> &[crate::diagnostic_filter::WgslWarning] {
+        &self.warnings
+    }
 }
 
 impl ops::Index<Handle<crate::Type>> for ModuleInfo {
@@ -761,7 +770,9 @@ impl Validator {
             entry_points: Vec::with_capacity(module.entry_points.len()),
             const_expression_types: vec![placeholder; module.global_expressions.len()]
                 .into_boxed_slice(),
+            warnings: Vec::new(),
         };
+        let mut warnings = Vec::new();
 
         for (handle, ty) in module.types.iter() {
             let ty_info = self
@@ -849,7 +860,7 @@ impl Validator {
         }
 
         for (handle, fun) in module.functions.iter() {
-            match self.validate_function(fun, module, &mod_info, false) {
+            match self.validate_function(fun, module, &mod_info, false, &mut warnings) {
                 Ok(info) => mod_info.functions.push(info),
                 Err(error) => {
                     return Err(error.and_then(|source| {
@@ -875,7 +886,7 @@ impl Validator {
                 .with_span()); // TODO: keep some EP span information?
             }
 
-            match self.validate_entry_point(ep, module, &mod_info) {
+            match self.validate_entry_point(ep, module, &mod_info, &mut warnings) {
                 Ok(info) => mod_info.entry_points.push(info),
                 Err(error) => {
                     return Err(error.and_then(|source| {
@@ -890,6 +901,7 @@ impl Validator {
             }
         }
 
+        mod_info.warnings = warnings;
         Ok(mod_info)
     }
 }

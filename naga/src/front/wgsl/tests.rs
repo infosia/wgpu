@@ -801,49 +801,105 @@ error: `@diagnostic(…)` attribute(s) on semicolons are not supported
         );
     }
 
-    mod parse_sites_not_yet_supported {
-        use crate::front::wgsl::assert_parse_err;
+    mod statement_and_block_attributes {
+        use crate::front::wgsl::{assert_parse_err, parse_str};
 
         #[test]
-        fn user_rules() {
-            let shader = "
+        fn valid_locations() {
+            let shader = r#"
 fn myfunc() {
-    if (true) @diagnostic(off, my.lint) {
-        //    ^^^^^^^^^^^^^^^^^^^^^^^^^ not yet supported, should report an error
+    @diagnostic(off, derivative_uniformity) {}
+    @diagnostic(off, derivative_uniformity) if (true) {}
+    if (true) @diagnostic(off, derivative_uniformity) {}
+    @diagnostic(off, derivative_uniformity) switch (1) {
+        case 1: {}
+        default: {}
     }
+    switch (1) @diagnostic(off, derivative_uniformity) {
+        case 1: @diagnostic(warning, derivative_uniformity) {}
+        default: {}
+    }
+    @diagnostic(off, derivative_uniformity) loop {
+        continuing @diagnostic(off, derivative_uniformity) {
+            break if true;
+        }
+    }
+    loop @diagnostic(off, derivative_uniformity) {
+        break;
+    }
+    @diagnostic(off, derivative_uniformity) while (false) {}
+    @diagnostic(off, derivative_uniformity) for (; false;) {}
 }
-";
+"#;
+            parse_str(shader).unwrap();
+        }
+
+        #[test]
+        fn nested_override_is_not_a_conflict() {
+            let shader = r#"
+@diagnostic(error, derivative_uniformity)
+fn myfunc() {
+    @diagnostic(off, derivative_uniformity) {}
+}
+"#;
+            parse_str(shader).unwrap();
+        }
+
+        #[test]
+        fn duplicate_same_rule_at_same_location_is_rejected() {
+            let shader = r#"
+fn myfunc() {
+    @diagnostic(off, derivative_uniformity)
+    @diagnostic(off, derivative_uniformity)
+    if (true) {}
+}
+"#;
             assert_parse_err(shader, "\
-error: `@diagnostic(…)` attribute(s) not yet implemented
-  ┌─ wgsl:3:15
-  │
-3 │     if (true) @diagnostic(off, my.lint) {
-  │               ^^^^^^^^^^^^^^^^^^^^^^^^^ can't use this on compound statements (yet)
-  │
-  = note: Let Naga maintainers know that you ran into this at <https://github.com/gfx-rs/wgpu/issues/5320>, so they can prioritize it!
+error: found conflicting `diagnostic(…)` rule(s)
+  ┌─ wgsl:3:5
+  │  
+3 │ ╭     @diagnostic(off, derivative_uniformity)
+  │       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ first rule
+4 │ │     @diagnostic(off, derivative_uniformity)
+  │ ╰───────────────────────────────────────────^ second rule
+  │  
+  = note: Multiple `diagnostic(…)` rules with the same rule name conflict unless they are directives and the severity is the same.
+  = note: You should delete the rule you don't want.
 
 ");
         }
 
         #[test]
-        fn unknown_rules() {
-            let shader = "
+        fn invalid_statement_locations_are_rejected() {
+            let shader = r#"
 fn myfunc() {
-	if (true) @diagnostic(off, wat_is_this) {
-		//    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ should emit a warning
-	}
+    @diagnostic(off, derivative_uniformity) let x = 1;
 }
-";
+"#;
             assert_parse_err(shader, "\
-error: `@diagnostic(…)` attribute(s) not yet implemented
-  ┌─ wgsl:3:12
+error: `@diagnostic(…)` attribute(s) on these statements are not supported
+  ┌─ wgsl:3:5
   │
-3 │     if (true) @diagnostic(off, wat_is_this) {
-  │               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ can't use this on compound statements (yet)
+3 │     @diagnostic(off, derivative_uniformity) let x = 1;
+  │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   │
-  = note: Let Naga maintainers know that you ran into this at <https://github.com/gfx-rs/wgpu/issues/5320>, so they can prioritize it!
+  = note: `@diagnostic(…)` attributes are only permitted on `fn`s, some statements, and `switch`/`loop` bodies.
+  = note: These attributes are well-formed, you likely just need to move them.
 
 ");
+        }
+
+        #[test]
+        fn invalid_locations_are_rejected() {
+            for shader in [
+                "fn myfunc() { @diagnostic(off, derivative_uniformity) var x = 1; }",
+                "fn myfunc() { @diagnostic(off, derivative_uniformity) const x = 1; }",
+                "fn myfunc() { if (true) {} @diagnostic(off, derivative_uniformity) else {} }",
+                "fn myfunc() { switch (1) { @diagnostic(off, derivative_uniformity) case 1: {} default: {} } }",
+                "fn myfunc() { loop { @diagnostic(off, derivative_uniformity) continuing {} } }",
+            ] {
+                assert!(parse_str(shader).is_err(), "{shader}");
+            }
         }
     }
 

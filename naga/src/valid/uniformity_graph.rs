@@ -1,4 +1,4 @@
-use alloc::{collections::VecDeque, vec, vec::Vec};
+use alloc::{collections::VecDeque, string::ToString, vec, vec::Vec};
 
 use crate::diagnostic_filter::{DiagnosticFilterNode, Severity, StandardFilterableTriggeringRule};
 use crate::span::{AddSpan as _, WithSpan};
@@ -129,6 +129,7 @@ struct Builder<'a> {
     other_functions: &'a [FunctionInfo],
     resolve_context: &'a ResolveContext<'a>,
     diagnostic_filter_leaf: Option<Handle<DiagnosticFilterNode>>,
+    warnings: &'a mut Vec<crate::diagnostic_filter::WgslWarning>,
 }
 
 pub(super) fn validate_function(
@@ -137,8 +138,9 @@ pub(super) fn validate_function(
     other_functions: &[FunctionInfo],
     info: &FunctionInfo,
     resolve_context: &ResolveContext,
+    warnings: &mut Vec<crate::diagnostic_filter::WgslWarning>,
 ) -> Result<Summary, WithSpan<FunctionError>> {
-    let mut builder = Builder::new(fun, module, other_functions, resolve_context);
+    let mut builder = Builder::new(fun, module, other_functions, resolve_context, warnings);
     builder.initialize_parameters();
     builder.initialize_locals();
     builder.process_block(&fun.body, builder.cf_start);
@@ -153,6 +155,7 @@ impl<'a> Builder<'a> {
         module: &'a crate::Module,
         other_functions: &'a [FunctionInfo],
         resolve_context: &'a ResolveContext<'a>,
+        warnings: &'a mut Vec<crate::diagnostic_filter::WgslWarning>,
     ) -> Self {
         let mut nodes = Vec::new();
         let required_error = add_node(&mut nodes, false, None);
@@ -185,6 +188,7 @@ impl<'a> Builder<'a> {
             other_functions,
             resolve_context,
             diagnostic_filter_leaf: fun.diagnostic_filter_leaf,
+            warnings,
         }
     }
 
@@ -238,6 +242,11 @@ impl<'a> Builder<'a> {
     }
 
     fn process_block(&mut self, block: &crate::Block, mut cf: NodeId) -> Flow {
+        let previous_leaf = self.diagnostic_filter_leaf;
+        if let Some(leaf) = block.diagnostic_filter_leaf() {
+            self.diagnostic_filter_leaf = Some(leaf);
+        }
+
         let mut escapes_function = false;
         for statement in block.iter() {
             let mut flow = self.process_statement(statement, cf);
@@ -245,9 +254,11 @@ impl<'a> Builder<'a> {
             cf = flow.cf;
             if !flow.next {
                 flow.escapes_function = escapes_function;
+                self.diagnostic_filter_leaf = previous_leaf;
                 return flow;
             }
         }
+        self.diagnostic_filter_leaf = previous_leaf;
         Flow {
             cf,
             next: true,
@@ -1630,15 +1641,33 @@ impl<'a> Builder<'a> {
         severity: Severity,
     ) -> Result<(), WithSpan<FunctionError>> {
         if let Some(cause) = self.find_cause_if_reaches_non_uniform(start) {
-            severity.report_diag(
-                FunctionError::NonUniformControlFlow(
-                    requirements,
-                    cause,
-                    UniformityDisruptor::Expression(cause),
-                )
-                .with_span_handle(cause, &self.fun.expressions),
-                |e, level| log::log!(level, "{e}"),
-            )?;
+            let error = FunctionError::NonUniformControlFlow(
+                requirements,
+                cause,
+                UniformityDisruptor::Expression(cause),
+            )
+            .with_span_handle(cause, &self.fun.expressions);
+            match severity {
+                Severity::Error => return Err(error),
+                Severity::Warning | Severity::Info => {
+                    let span = error
+                        .spans()
+                        .next()
+                        .map(|(span, _)| *span)
+                        .unwrap_or(crate::Span::UNDEFINED);
+                    self.warnings.push(crate::diagnostic_filter::WgslWarning {
+                        span,
+                        message: error.to_string(),
+                    });
+                    let level = match severity {
+                        Severity::Warning => log::Level::Warn,
+                        Severity::Info => log::Level::Info,
+                        _ => unreachable!(),
+                    };
+                    log::log!(level, "{error}");
+                }
+                Severity::Off => {}
+            }
         }
         Ok(())
     }

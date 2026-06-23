@@ -5,7 +5,7 @@
 //! - texture/sampler pairs
 //! - expression reference counts
 
-use alloc::{boxed::Box, vec};
+use alloc::{boxed::Box, vec, vec::Vec};
 use core::ops;
 
 use super::{ExpressionError, FunctionError, ModuleInfo, ShaderStages, ValidationFlags};
@@ -996,6 +996,29 @@ impl FunctionInfo {
         &mut self,
         statements: &crate::Block,
         other_functions: &[FunctionInfo],
+        disruptor: Option<UniformityDisruptor>,
+        expression_arena: &Arena<crate::Expression>,
+        diagnostic_filter_arena: &Arena<DiagnosticFilterNode>,
+    ) -> Result<FunctionUniformity, WithSpan<FunctionError>> {
+        let previous_leaf = self.diagnostic_filter_leaf;
+        if let Some(leaf) = statements.diagnostic_filter_leaf() {
+            self.diagnostic_filter_leaf = Some(leaf);
+        }
+        let result = self.process_block_inner(
+            statements,
+            other_functions,
+            disruptor,
+            expression_arena,
+            diagnostic_filter_arena,
+        );
+        self.diagnostic_filter_leaf = previous_leaf;
+        result
+    }
+
+    fn process_block_inner(
+        &mut self,
+        statements: &crate::Block,
+        other_functions: &[FunctionInfo],
         mut disruptor: Option<UniformityDisruptor>,
         expression_arena: &Arena<crate::Expression>,
         diagnostic_filter_arena: &Arena<DiagnosticFilterNode>,
@@ -1321,6 +1344,7 @@ impl ModuleInfo {
         module: &crate::Module,
         flags: ValidationFlags,
         capabilities: super::Capabilities,
+        warnings: &mut Vec<crate::diagnostic_filter::WgslWarning>,
     ) -> Result<FunctionInfo, WithSpan<FunctionError>> {
         let mut info = FunctionInfo {
             flags,
@@ -1376,6 +1400,7 @@ impl ModuleInfo {
                 &self.functions,
                 &info,
                 &resolve_context,
+                warnings,
             )?);
         }
 

@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::hash::Hash;
 
-use crate::diagnostic_filter::DiagnosticFilterNode;
+use crate::diagnostic_filter::{DiagnosticFilterMap, DiagnosticFilterNode};
 use crate::front::wgsl::parse::directive::enable_extension::EnableExtensions;
 use crate::front::wgsl::parse::number::Number;
 use crate::{Arena, FastIndexSet, Handle, Span};
@@ -327,12 +327,24 @@ pub struct Override<'a> {
 #[derive(Debug, Default)]
 pub struct Block<'a> {
     pub stmts: Vec<Statement<'a>>,
+    pub diagnostic_filters: DiagnosticFilterMap,
 }
 
 #[derive(Debug)]
 pub struct Statement<'a> {
     pub kind: StatementKind<'a>,
     pub span: Span,
+    pub diagnostic_filters: DiagnosticFilterMap,
+}
+
+impl<'a> Statement<'a> {
+    pub fn new(kind: StatementKind<'a>, span: Span) -> Self {
+        Self {
+            kind,
+            span,
+            diagnostic_filters: DiagnosticFilterMap::new(),
+        }
+    }
 }
 
 #[derive(Debug)]

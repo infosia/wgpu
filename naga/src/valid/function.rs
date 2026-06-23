@@ -1,5 +1,7 @@
 use alloc::{format, string::String};
 
+use alloc::vec::Vec;
+
 use super::{
     analyzer::{PointerUse, UniformityDisruptor, UniformityRequirements},
     ExpressionError, FunctionInfo, GlobalUse, ModuleInfo,
@@ -2000,8 +2002,10 @@ impl super::Validator {
         module: &crate::Module,
         mod_info: &ModuleInfo,
         entry_point: bool,
+        warnings: &mut Vec<crate::diagnostic_filter::WgslWarning>,
     ) -> Result<FunctionInfo, WithSpan<FunctionError>> {
-        let mut info = mod_info.process_function(fun, module, self.flags, self.capabilities)?;
+        let mut info =
+            mod_info.process_function(fun, module, self.flags, self.capabilities, warnings)?;
 
         let local_expr_kind = crate::proc::ExpressionKindTracker::from_arena(&fun.expressions);
 

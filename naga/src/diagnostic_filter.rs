@@ -1,19 +1,24 @@
 //! [`DiagnosticFilter`]s and supporting functionality.
 
-use alloc::boxed::Box;
+use alloc::{boxed::Box, string::String};
 
-use crate::{Arena, Handle};
+use crate::{Arena, Handle, Span};
 
 #[cfg(feature = "wgsl-in")]
 use crate::FastIndexMap;
-#[cfg(feature = "wgsl-in")]
-use crate::Span;
 #[cfg(feature = "arbitrary")]
 use arbitrary::Arbitrary;
 #[cfg(feature = "deserialize")]
 use serde::Deserialize;
 #[cfg(feature = "serialize")]
 use serde::Serialize;
+
+/// A non-fatal WGSL diagnostic (warning) carrying its raw source span.
+#[derive(Clone, Debug)]
+pub struct WgslWarning {
+    pub span: Span,
+    pub message: String,
+}
 
 /// A severity set on a [`DiagnosticFilter`].
 ///

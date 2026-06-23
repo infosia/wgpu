@@ -1,7 +1,8 @@
 use alloc::vec::Vec;
 use core::ops::{Deref, DerefMut, RangeBounds};
 
-use crate::{Span, Statement};
+use crate::diagnostic_filter::DiagnosticFilterNode;
+use crate::{Handle, Span, Statement};
 
 /// A code block is a vector of statements, with maybe a vector of spans.
 #[derive(Debug, Clone, Default)]
@@ -12,6 +13,9 @@ pub struct Block {
     body: Vec<Statement>,
     #[cfg_attr(feature = "serialize", serde(skip))]
     span_info: Vec<Span>,
+    #[cfg_attr(feature = "serialize", serde(skip))]
+    #[cfg_attr(feature = "arbitrary", arbitrary(default))]
+    diagnostic_filter_leaf: Option<Handle<DiagnosticFilterNode>>,
 }
 
 impl Block {
@@ -19,18 +23,24 @@ impl Block {
         Self {
             body: Vec::new(),
             span_info: Vec::new(),
+            diagnostic_filter_leaf: None,
         }
     }
 
     pub fn from_vec(body: Vec<Statement>) -> Self {
         let span_info = core::iter::repeat_n(Span::default(), body.len()).collect();
-        Self { body, span_info }
+        Self {
+            body,
+            span_info,
+            diagnostic_filter_leaf: None,
+        }
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             body: Vec::with_capacity(capacity),
             span_info: Vec::with_capacity(capacity),
+            diagnostic_filter_leaf: None,
         }
     }
 
@@ -67,7 +77,9 @@ impl Block {
     }
 
     pub fn span_into_iter(self) -> impl Iterator<Item = (Statement, Span)> {
-        let Block { body, span_info } = self;
+        let Block {
+            body, span_info, ..
+        } = self;
         body.into_iter().zip(span_info)
     }
 
@@ -87,6 +99,14 @@ impl Block {
 
     pub const fn len(&self) -> usize {
         self.body.len()
+    }
+
+    pub const fn diagnostic_filter_leaf(&self) -> Option<Handle<DiagnosticFilterNode>> {
+        self.diagnostic_filter_leaf
+    }
+
+    pub const fn set_diagnostic_filter_leaf(&mut self, leaf: Option<Handle<DiagnosticFilterNode>>) {
+        self.diagnostic_filter_leaf = leaf;
     }
 }
 

@@ -519,6 +519,61 @@ fn check_parse_and_validate_success(input: &str) {
         .unwrap_or_else(|err| panic!("{}", err.emit_to_string(input)));
 }
 
+#[test]
+fn diagnostic_unknown_rule_is_parse_warning() {
+    let source = "diagnostic(info, not_a_real_rule);";
+    let (_module, warnings) = naga::front::wgsl::parse_str_with_warnings(source)
+        .unwrap_or_else(|err| panic!("{}", err.emit_to_string(source)));
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].message.contains("unknown `diagnostic"));
+
+    let clean = "@compute @workgroup_size(1) fn main() {}";
+    let (_module, warnings) = naga::front::wgsl::parse_str_with_warnings(clean)
+        .unwrap_or_else(|err| panic!("{}", err.emit_to_string(clean)));
+    assert!(warnings.is_empty());
+}
+
+#[track_caller]
+fn validate_uniformity_warning_shader(source: &str) -> Result<valid::ModuleInfo, String> {
+    let module = naga::front::wgsl::parse_str(source).map_err(|err| err.emit_to_string(source))?;
+    valid::Validator::new(valid::ValidationFlags::all(), Capabilities::all())
+        .validate(&module)
+        .map_err(|err| err.emit_to_string(source))
+}
+
+#[test]
+fn graph_uniformity_diagnostic_warning_is_collected() {
+    let warn_source = r#"
+diagnostic(warning, derivative_uniformity);
+
+@group(0) @binding(0) var<storage, read_write> s: u32;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+
+@fragment
+fn m() {
+    if s > 0u {
+        let t = textureSample(tex, samp, vec2f(0.0));
+    }
+}
+"#;
+    let info = validate_uniformity_warning_shader(warn_source).expect("warning shader validates");
+    assert!(!info.warnings().is_empty());
+
+    let off_source = warn_source.replace(
+        "diagnostic(warning, derivative_uniformity);",
+        "diagnostic(off, derivative_uniformity);",
+    );
+    let info = validate_uniformity_warning_shader(&off_source).expect("off shader validates");
+    assert!(info.warnings().is_empty());
+
+    let error_source = warn_source.replace(
+        "diagnostic(warning, derivative_uniformity);",
+        "diagnostic(error, derivative_uniformity);",
+    );
+    assert!(validate_uniformity_warning_shader(&error_source).is_err());
+}
+
 #[track_caller]
 fn check_validation_error_matches(input: &str, expected_substring: &str) {
     let module = naga::front::wgsl::parse_str(input)
@@ -652,6 +707,84 @@ fn texture_case() {
 fn derivative_case() {
     if s > 0u {
         let d = dpdx(1.0);
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_statement_diagnostic_scopes_condition() {
+    check_parse_and_validate_success(
+        r#"
+diagnostic(error, derivative_uniformity);
+
+@group(0) @binding(0) var<storage, read_write> s: u32;
+
+@fragment
+fn m() {
+    if s > 0u {
+        @diagnostic(off, derivative_uniformity) if dpdx(1.0) > 0.0 {}
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_body_diagnostic_does_not_scope_condition() {
+    check_parse_or_validate_error(
+        r#"
+diagnostic(error, derivative_uniformity);
+
+@group(0) @binding(0) var<storage, read_write> s: u32;
+
+@fragment
+fn m() {
+    if s > 0u {
+        if dpdx(1.0) > 0.0 @diagnostic(off, derivative_uniformity) {}
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_block_diagnostic_overrides_global_error() {
+    check_parse_and_validate_success(
+        r#"
+diagnostic(error, derivative_uniformity);
+
+@group(0) @binding(0) var<storage, read_write> s: u32;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+
+@fragment
+fn m() {
+    if s > 0u {
+        @diagnostic(off, derivative_uniformity) {
+            let t = textureSample(tex, samp, vec2f(0.0));
+        }
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn graph_uniformity_statement_diagnostic_overrides_global_off() {
+    check_parse_or_validate_error(
+        r#"
+diagnostic(off, derivative_uniformity);
+
+@group(0) @binding(0) var<storage, read_write> s: u32;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+
+@fragment
+fn m() {
+    @diagnostic(error, derivative_uniformity) if s > 0u {
+        let t = textureSample(tex, samp, vec2f(0.0));
     }
 }
 "#,
@@ -5392,7 +5525,7 @@ fn limit_braced_statement_nesting() {
     // depending on the platform and the `RUST_MIN_STACK` env. var. Use a thread with a custom
     // stack size that works on all platforms.
     std::thread::Builder::new()
-        .stack_size(1024 * 1024 * 2 /* MB */)
+        .stack_size(1024 * 1024 * 16 /* MB */)
         .spawn(|| check(too_many_braces, expected_diagnostic))
         .unwrap()
         .join()
@@ -5546,7 +5679,7 @@ fn too_many_unclosed_loops() {
     // depending on the platform and the `RUST_MIN_STACK` env. var. Use a thread with a custom
     // stack size that works on all platforms.
     std::thread::Builder::new()
-        .stack_size(1024 * 1024 * 2 /* MB */)
+        .stack_size(1024 * 1024 * 16 /* MB */)
         .spawn(|| check(too_many_braces, expected_diagnostic))
         .unwrap()
         .join()

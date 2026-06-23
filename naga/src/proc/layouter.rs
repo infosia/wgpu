@@ -53,6 +53,14 @@ impl Alignment {
     }
 }
 
+#[cfg(feature = "arbitrary")]
+impl<'a> arbitrary::Arbitrary<'a> for Alignment {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let shift = u.int_in_range(0..=31)?;
+        Ok(Self(NonZeroU32::new(1 << shift).unwrap()))
+    }
+}
+
 impl Display for Alignment {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.0.get().fmt(f)

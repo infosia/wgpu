@@ -416,6 +416,7 @@ pub(crate) enum Error<'a> {
         severity_control_name_span: Span,
     },
     DiagnosticDuplicateTriggeringRule(ConflictingDiagnosticRuleError),
+    #[allow(dead_code)]
     DiagnosticAttributeNotYetImplementedAtParseSite {
         site_name_plural: &'static str,
         spans: Vec<Span>,
