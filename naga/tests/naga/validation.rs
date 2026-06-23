@@ -1374,6 +1374,58 @@ fn main() {
     );
 }
 
+#[test]
+fn discard_then_derivative_is_uniform() {
+    // F-129(1): WGSL `discard` is demote-to-helper — the invocation stays alive
+    // and continues — so a non-uniform conditional `discard` must NOT poison the
+    // post-merge control flow's uniformity. A derivative (`fwidth`) after such a
+    // `discard` is valid (Dawn/tint accept it). Before the fix the uniformity
+    // analysis modelled `discard` like `return` (escaping the function) and
+    // wrongly rejected this with "Required uniformity of control flow ... not
+    // fulfilled".
+    let source = "
+@fragment
+fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    let inv_idx = u32(position.x) % 2u;
+    let input = f32(inv_idx) + position.y;
+    if inv_idx == 0u { discard; }
+    let v = fwidth(input);
+    return vec4<f32>(v, 0.0, 0.0, 1.0);
+}
+    ";
+
+    let module = naga::front::wgsl::parse_str(source).expect("module should parse");
+    valid::Validator::new(Default::default(), valid::Capabilities::all())
+        .validate(&module)
+        .expect("discard then derivative must validate (F-129(1))");
+}
+
+#[test]
+fn derivative_inside_non_uniform_branch_is_rejected() {
+    // F-129(1) over-accept guard: relaxing `discard` uniformity must not relax
+    // the genuine rule that a derivative taken *inside* non-uniform control flow
+    // is illegal. A `fwidth` directly within a non-uniform `if` branch must
+    // still be rejected.
+    let source = "
+@fragment
+fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    let inv_idx = u32(position.x) % 2u;
+    let input = f32(inv_idx) + position.y;
+    var out = vec4<f32>(0.0);
+    if inv_idx == 0u { out = vec4<f32>(fwidth(input), 0.0, 0.0, 1.0); }
+    return out;
+}
+    ";
+
+    let module = naga::front::wgsl::parse_str(source).expect("module should parse");
+    let result =
+        valid::Validator::new(Default::default(), valid::Capabilities::all()).validate(&module);
+    assert!(
+        result.is_err(),
+        "a derivative inside a non-uniform branch must still be rejected (no over-accept)"
+    );
+}
+
 /// Parse and validate the module defined in `source`.
 ///
 /// Panics if unsuccessful.

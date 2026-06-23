@@ -312,11 +312,13 @@ impl<'a> Builder<'a> {
                     escapes_function: false,
                 }
             }
-            S::Kill => Flow {
-                cf,
-                next: false,
-                escapes_function: true,
-            },
+            S::Kill => {
+                // F-129(1): discard is demote-to-helper — the invocation stays
+                // alive and continues, so it does not escape the function for
+                // uniformity purposes. (Unlike `return`, control falls through
+                // to the rest of the function.)
+                next(cf)
+            }
             S::Return { value } => {
                 if let Some(value) = value {
                     let value_node = self.value_node(value);

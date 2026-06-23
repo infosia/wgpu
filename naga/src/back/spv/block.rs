@@ -3961,8 +3961,28 @@ impl BlockContext<'_> {
                     return Ok(BlockExitDisposition::Discarded);
                 }
                 Statement::Kill => {
-                    self.function.consume(block, Instruction::kill());
-                    return Ok(BlockExitDisposition::Discarded);
+                    // WGSL `discard` has demote-to-helper semantics: the
+                    // invocation must stay alive so neighbouring invocations'
+                    // derivatives (`fwidth`/`dpdx`/`dpdy`) remain well-defined
+                    // after a non-uniform discard. `OpKill` terminates the
+                    // invocation, which is ill-defined for that case, so emit
+                    // `OpDemoteToHelperInvocation` instead.
+                    //
+                    // Unlike `OpKill`, `OpDemoteToHelperInvocation` is *not* a
+                    // block terminator: the invocation continues executing, so
+                    // the instruction is appended to the current block's body
+                    // and control falls through to the rest of the block.
+                    self.writer.require_any(
+                        "WGSL `discard`",
+                        &[spirv::Capability::DemoteToHelperInvocation],
+                    )?;
+                    if self.writer.lang_version() < (1, 6) {
+                        // `DemoteToHelperInvocation` is core in SPIR-V 1.6; for
+                        // earlier versions the EXT extension provides it.
+                        self.writer
+                            .use_extension("SPV_EXT_demote_to_helper_invocation");
+                    }
+                    block.body.push(Instruction::demote_to_helper_invocation());
                 }
                 Statement::ControlBarrier(flags) => {
                     self.writer.write_control_barrier(flags, &mut block.body);

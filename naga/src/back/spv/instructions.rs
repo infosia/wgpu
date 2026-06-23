@@ -1144,8 +1144,13 @@ impl super::Instruction {
         instruction
     }
 
-    pub(super) const fn kill() -> Self {
-        Self::new(Op::Kill)
+    /// `OpDemoteToHelperInvocation`: demote the current fragment invocation to a
+    /// helper invocation instead of terminating it. Unlike `OpKill`, the
+    /// invocation stays alive so that neighbouring invocations' derivatives
+    /// (e.g. `fwidth`/`dpdx`/`dpdy`) remain well-defined after a non-uniform
+    /// `discard`. This matches WGSL `discard` demote-to-helper semantics.
+    pub(super) const fn demote_to_helper_invocation() -> Self {
+        Self::new(Op::DemoteToHelperInvocation)
     }
 
     pub(super) const fn return_void() -> Self {

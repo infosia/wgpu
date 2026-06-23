@@ -3,6 +3,8 @@
 ; Generator: rspirv
 ; Bound: 65
 OpCapability Shader
+OpCapability DemoteToHelperInvocation
+OpExtension "SPV_EXT_demote_to_helper_invocation"
 %1 = OpExtInstImport "GLSL.std.450"
 OpMemoryModel Logical GLSL450
 OpEntryPoint Vertex %25 "vert_main" %16 %19 %21 %23
@@ -148,7 +150,8 @@ OpLine %3 24 3
 OpSelectionMerge %55 None
 OpBranchConditional %54 %56 %55
 %56 = OpLabel
-OpKill
+OpDemoteToHelperInvocation
+OpBranch %55
 %55 = OpLabel
 OpLine %3 29 23
 %57 = OpCompositeExtract  %4  %51 3
