@@ -604,12 +604,7 @@ fn any_equal_resolved_literal_pair(
                 _ => false,
             },
             Expression::Constant(constant) => {
-                if let Some(literal) = global_literal(module, module.constants[constant].init) {
-                    out.push(literal);
-                    true
-                } else {
-                    false
-                }
+                flatten_global_literals(module, module.constants[constant].init, out)
             }
             Expression::Splat { value, .. } => {
                 flatten_function_literals(module, function, value, out)
@@ -632,15 +627,35 @@ fn any_equal_resolved_literal_pair(
             .any(|(left, right)| left == right)
 }
 
-fn global_literal(module: &Module, expr: Handle<Expression>) -> Option<Literal> {
+fn flatten_global_literals(
+    module: &Module,
+    expr: Handle<Expression>,
+    out: &mut Vec<Literal>,
+) -> bool {
     match module.global_expressions[expr] {
-        Expression::Literal(literal) => Some(literal),
+        Expression::Literal(literal) => {
+            out.push(literal);
+            true
+        }
         Expression::ZeroValue(ty) => match module.types[ty].inner {
-            TypeInner::Scalar(scalar) => Literal::zero(scalar),
-            _ => None,
+            TypeInner::Scalar(scalar) => {
+                if let Some(literal) = Literal::zero(scalar) {
+                    out.push(literal);
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
         },
-        Expression::Constant(constant) => global_literal(module, module.constants[constant].init),
-        _ => None,
+        Expression::Constant(constant) => {
+            flatten_global_literals(module, module.constants[constant].init, out)
+        }
+        Expression::Splat { value, .. } => flatten_global_literals(module, value, out),
+        Expression::Compose { ref components, .. } => components
+            .iter()
+            .all(|&component| flatten_global_literals(module, component, out)),
+        _ => false,
     }
 }
 

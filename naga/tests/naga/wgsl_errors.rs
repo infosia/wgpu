@@ -3323,6 +3323,99 @@ fn override_div_rem_rejects_zero_divisor_at_pipeline_creation() {
 
 #[test]
 fn override_smoothstep_rejects_equal_edges_at_pipeline_creation() {
+    let mut overrides = hashbrown::HashMap::new();
+    overrides.insert("lo".to_string(), 2.0);
+    let err = check_override_access_with_pipeline_constants(
+        r#"
+            override lo: f32;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                var x = 0.5f;
+                let r = smoothstep(lo, 2.0, x);
+            }
+        "#,
+        &overrides,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        naga::back::pipeline_constants::PipelineConstantError::ConstantEvaluatorError(
+            naga::proc::ConstantEvaluatorError::DivisionByZero
+        )
+    ));
+
+    let mut overrides = hashbrown::HashMap::new();
+    overrides.insert("hi".to_string(), 2.0);
+    let err = check_override_access_with_pipeline_constants(
+        r#"
+            override hi: f32;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                var x = 0.5f;
+                let r = smoothstep(2.0, hi, x);
+            }
+        "#,
+        &overrides,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        naga::back::pipeline_constants::PipelineConstantError::ConstantEvaluatorError(
+            naga::proc::ConstantEvaluatorError::DivisionByZero
+        )
+    ));
+
+    let mut overrides = hashbrown::HashMap::new();
+    overrides.insert("lo".to_string(), 1.0);
+    let err = check_override_access_with_pipeline_constants(
+        r#"
+            override lo: f32;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                var x = vec2f(0.5, 0.5);
+                let r = smoothstep(vec2f(lo, 2.0), vec2f(1.0, 3.0), x);
+            }
+        "#,
+        &overrides,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        naga::back::pipeline_constants::PipelineConstantError::ConstantEvaluatorError(
+            naga::proc::ConstantEvaluatorError::DivisionByZero
+        )
+    ));
+
+    let mut overrides = hashbrown::HashMap::new();
+    overrides.insert("lo".to_string(), 1.0);
+    let err = check_override_access_with_pipeline_constants(
+        r#"
+            override lo: f32;
+            const hi = vec2f(1.0, 3.0);
+
+            @compute @workgroup_size(1)
+            fn main() {
+                var x = vec2f(0.5, 0.5);
+                let r = smoothstep(vec2f(lo, 2.0), hi, x);
+            }
+        "#,
+        &overrides,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        naga::back::pipeline_constants::PipelineConstantError::ConstantEvaluatorError(
+            naga::proc::ConstantEvaluatorError::DivisionByZero
+        )
+    ));
+
     let err = check_override_access(
         r#"
             override lo: f32 = 2.0;
@@ -3332,6 +3425,66 @@ fn override_smoothstep_rejects_equal_edges_at_pipeline_creation() {
             fn main() {
                 var x = 0.5f;
                 let r = smoothstep(lo, hi, x);
+            }
+        "#,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        naga::back::pipeline_constants::PipelineConstantError::ConstantEvaluatorError(
+            naga::proc::ConstantEvaluatorError::DivisionByZero
+        )
+    ));
+
+    let err = check_override_access(
+        r#"
+            override lo: f32 = 2.0;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                var x = 0.5f;
+                let r = smoothstep(lo, 2.0, x);
+            }
+        "#,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        naga::back::pipeline_constants::PipelineConstantError::ConstantEvaluatorError(
+            naga::proc::ConstantEvaluatorError::DivisionByZero
+        )
+    ));
+
+    let err = check_override_access(
+        r#"
+            override hi: f32 = 2.0;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                var x = 0.5f;
+                let r = smoothstep(2.0, hi, x);
+            }
+        "#,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        naga::back::pipeline_constants::PipelineConstantError::ConstantEvaluatorError(
+            naga::proc::ConstantEvaluatorError::DivisionByZero
+        )
+    ));
+
+    let err = check_override_access(
+        r#"
+            override lo: f32 = 1.0;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                var x = vec2f(0.5, 0.5);
+                let r = smoothstep(vec2f(lo, 2.0), vec2f(1.0, 3.0), x);
             }
         "#,
     )
@@ -3357,6 +3510,22 @@ fn override_smoothstep_rejects_equal_edges_at_pipeline_creation() {
         "#,
     )
     .expect("distinct smoothstep override edges should resolve");
+
+    let mut overrides = hashbrown::HashMap::new();
+    overrides.insert("lo".to_string(), 0.0);
+    check_override_access_with_pipeline_constants(
+        r#"
+            override lo: f32;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                var x = 0.5f;
+                let r = smoothstep(lo, 1.0, x);
+            }
+        "#,
+        &overrides,
+    )
+    .expect("distinct mixed smoothstep edges should resolve");
 }
 
 #[test]
