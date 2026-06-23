@@ -5130,30 +5130,65 @@ impl<'a> ConstantEvaluator<'a> {
                         if condition_vec_size != expected_vec_size {
                             return Err(ConstantEvaluatorError::SelectConditionVecSizeMismatch);
                         }
-                        condition_components
-                            .iter()
-                            .copied()
-                            .map(|component| match &self.expressions[component] {
-                                &Expression::Literal(Literal::Bool(condition)) => condition,
-                                _ => unreachable!(),
-                            })
-                            .collect()
+                        crate::proc::flatten_compose(
+                            condition_ty,
+                            condition_components,
+                            self.expressions,
+                            self.types,
+                        )
+                        .map(|component| match self.expressions[component] {
+                            Expression::Literal(Literal::Bool(condition)) => Ok(condition),
+                            Expression::ZeroValue(ty) => match self.types[ty].inner {
+                                TypeInner::Scalar(scalar) if scalar.kind == ScalarKind::Bool => {
+                                    Ok(false)
+                                }
+                                _ => Err(ConstantEvaluatorError::SelectConditionNotAVecBool),
+                            },
+                            _ => Err(ConstantEvaluatorError::SelectConditionNotAVecBool),
+                        })
+                        .collect::<Result<_, _>>()?
                     }
 
                     _ => return Err(ConstantEvaluatorError::SelectConditionNotAVecBool),
                 };
 
+                let reject_components: Vec<_> = crate::proc::flatten_compose(
+                    reject_ty,
+                    reject_components,
+                    self.expressions,
+                    self.types,
+                )
+                .collect();
+                let accept_components: Vec<_> = crate::proc::flatten_compose(
+                    accept_ty,
+                    accept_components,
+                    self.expressions,
+                    self.types,
+                )
+                .collect();
+
                 let evaluated = Expression::Compose {
                     ty: reject_ty,
                     components: reject_components
-                        .clone()
                         .into_iter()
-                        .zip(accept_components.clone().into_iter())
+                        .zip(accept_components)
                         .zip(condition_components.into_iter())
                         .map(|((reject, accept), condition)| {
-                            let reject_scalar = match &self.expressions[reject] {
-                                &Expression::Literal(lit) => lit.scalar(),
-                                _ => unreachable!(),
+                            let reject_scalar = match self.expressions[reject] {
+                                Expression::Literal(lit) => lit.scalar(),
+                                Expression::ZeroValue(ty) => match self.types[ty].inner {
+                                    TypeInner::Scalar(scalar) => scalar,
+                                    _ => {
+                                        return Err(
+                                            ConstantEvaluatorError::SelectAcceptRejectTypeMismatch,
+                                        );
+                                    }
+                                },
+                                _ => {
+                                    return Err(
+                                        ConstantEvaluatorError::SelectAcceptRejectTypeMismatch,
+                                    );
+                                }
                             };
                             select_single_component(self, reject_scalar, reject, accept, condition)
                         })
@@ -5567,6 +5602,275 @@ mod tests {
     };
 
     use super::{Behavior, ConstantEvaluator, ExpressionKindTracker, WgslRestrictions};
+
+    #[test]
+    fn select_accepts_zero_value_components() {
+        enum Component {
+            Literal(Literal),
+            Vector(Vec<Component>),
+            Zero,
+        }
+
+        use Component::{Literal as Lit, Zero};
+
+        fn eval_select(
+            reject: Vec<Component>,
+            accept: Vec<Component>,
+            condition: Vec<Component>,
+            value_scalar: crate::Scalar,
+            expected: &[Literal],
+        ) {
+            let mut types = UniqueArena::new();
+            let constants = Arena::new();
+            let overrides = Arena::new();
+            let mut global_expressions = Arena::new();
+
+            let span = Span::UNDEFINED;
+            let value_ty = types.insert(
+                Type {
+                    name: None,
+                    inner: TypeInner::Scalar(value_scalar),
+                },
+                span,
+            );
+            let condition_ty = types.insert(
+                Type {
+                    name: None,
+                    inner: TypeInner::Scalar(crate::Scalar::BOOL),
+                },
+                span,
+            );
+            let value_vec_ty = types.insert(
+                Type {
+                    name: None,
+                    inner: TypeInner::Vector {
+                        size: VectorSize::Tri,
+                        scalar: value_scalar,
+                    },
+                },
+                span,
+            );
+            let condition_vec_ty = types.insert(
+                Type {
+                    name: None,
+                    inner: TypeInner::Vector {
+                        size: VectorSize::Tri,
+                        scalar: crate::Scalar::BOOL,
+                    },
+                },
+                span,
+            );
+
+            fn size_from_len(len: usize) -> VectorSize {
+                match len {
+                    2 => VectorSize::Bi,
+                    3 => VectorSize::Tri,
+                    4 => VectorSize::Quad,
+                    _ => panic!("invalid test vector size"),
+                }
+            }
+
+            fn append_component(
+                component: Component,
+                scalar: crate::Scalar,
+                scalar_ty: Handle<Type>,
+                types: &mut UniqueArena<Type>,
+                expressions: &mut Arena<Expression>,
+                span: Span,
+            ) -> Handle<Expression> {
+                match component {
+                    Lit(literal) => expressions.append(Expression::Literal(literal), span),
+                    Zero => expressions.append(Expression::ZeroValue(scalar_ty), span),
+                    Component::Vector(components) => {
+                        let size = size_from_len(components.len());
+                        let ty = types.insert(
+                            Type {
+                                name: None,
+                                inner: TypeInner::Vector { size, scalar },
+                            },
+                            span,
+                        );
+                        let components = components
+                            .into_iter()
+                            .map(|component| {
+                                append_component(
+                                    component,
+                                    scalar,
+                                    scalar_ty,
+                                    types,
+                                    expressions,
+                                    span,
+                                )
+                            })
+                            .collect();
+                        expressions.append(Expression::Compose { ty, components }, span)
+                    }
+                }
+            }
+
+            let reject_components = reject
+                .into_iter()
+                .map(|component| {
+                    append_component(
+                        component,
+                        value_scalar,
+                        value_ty,
+                        &mut types,
+                        &mut global_expressions,
+                        span,
+                    )
+                })
+                .collect();
+            let reject = global_expressions.append(
+                Expression::Compose {
+                    ty: value_vec_ty,
+                    components: reject_components,
+                },
+                span,
+            );
+            let accept_components = accept
+                .into_iter()
+                .map(|component| {
+                    append_component(
+                        component,
+                        value_scalar,
+                        value_ty,
+                        &mut types,
+                        &mut global_expressions,
+                        span,
+                    )
+                })
+                .collect();
+            let accept = global_expressions.append(
+                Expression::Compose {
+                    ty: value_vec_ty,
+                    components: accept_components,
+                },
+                span,
+            );
+            let condition_components = condition
+                .into_iter()
+                .map(|component| {
+                    append_component(
+                        component,
+                        crate::Scalar::BOOL,
+                        condition_ty,
+                        &mut types,
+                        &mut global_expressions,
+                        span,
+                    )
+                })
+                .collect();
+            let condition = global_expressions.append(
+                Expression::Compose {
+                    ty: condition_vec_ty,
+                    components: condition_components,
+                },
+                span,
+            );
+
+            let root = Expression::Select {
+                reject,
+                accept,
+                condition,
+            };
+
+            let expression_kind_tracker =
+                &mut ExpressionKindTracker::from_arena(&global_expressions);
+            let mut solver = ConstantEvaluator {
+                behavior: Behavior::Wgsl(WgslRestrictions::Const(None)),
+                types: &mut types,
+                constants: &constants,
+                overrides: &overrides,
+                expressions: &mut global_expressions,
+                expression_kind_tracker,
+                layouter: &mut crate::proc::Layouter::default(),
+            };
+
+            let result = solver.try_eval_and_append(root, span).unwrap();
+            let Expression::Compose { ty, ref components } = solver.expressions[result] else {
+                panic!("expected a vector result");
+            };
+            let result: Vec<_> =
+                crate::proc::flatten_compose(ty, components, solver.expressions, solver.types)
+                    .map(|component| match solver.expressions[component] {
+                        Expression::Literal(literal) => literal,
+                        ref other => panic!("expected literal component, got {other:?}"),
+                    })
+                    .collect();
+            assert_eq!(result, expected);
+        }
+        eval_select(
+            vec![
+                Lit(Literal::U32(0)),
+                Lit(Literal::U32(0)),
+                Lit(Literal::U32(0)),
+            ],
+            vec![
+                Lit(Literal::U32(1)),
+                Lit(Literal::U32(1)),
+                Lit(Literal::U32(1)),
+            ],
+            vec![Lit(Literal::Bool(true)), Zero, Lit(Literal::Bool(true))],
+            crate::Scalar::U32,
+            &[Literal::U32(1), Literal::U32(0), Literal::U32(1)],
+        );
+
+        eval_select(
+            vec![
+                Lit(Literal::U32(0)),
+                Lit(Literal::U32(0)),
+                Lit(Literal::U32(0)),
+            ],
+            vec![
+                Lit(Literal::U32(1)),
+                Lit(Literal::U32(1)),
+                Lit(Literal::U32(1)),
+            ],
+            vec![
+                Component::Vector(vec![Lit(Literal::Bool(false)), Lit(Literal::Bool(true))]),
+                Lit(Literal::Bool(false)),
+            ],
+            crate::Scalar::U32,
+            &[Literal::U32(0), Literal::U32(1), Literal::U32(0)],
+        );
+
+        eval_select(
+            vec![Zero, Lit(Literal::I32(5)), Lit(Literal::I32(7))],
+            vec![
+                Lit(Literal::I32(1)),
+                Lit(Literal::I32(6)),
+                Lit(Literal::I32(8)),
+            ],
+            vec![
+                Lit(Literal::Bool(true)),
+                Lit(Literal::Bool(false)),
+                Lit(Literal::Bool(true)),
+            ],
+            crate::Scalar::I32,
+            &[Literal::I32(1), Literal::I32(5), Literal::I32(8)],
+        );
+
+        eval_select(
+            vec![
+                Lit(Literal::F32(1.0)),
+                Lit(Literal::F32(2.0)),
+                Lit(Literal::F32(3.0)),
+            ],
+            vec![
+                Lit(Literal::F32(4.0)),
+                Lit(Literal::F32(5.0)),
+                Lit(Literal::F32(6.0)),
+            ],
+            vec![
+                Lit(Literal::Bool(false)),
+                Lit(Literal::Bool(false)),
+                Lit(Literal::Bool(false)),
+            ],
+            crate::Scalar::F32,
+            &[Literal::F32(1.0), Literal::F32(2.0), Literal::F32(3.0)],
+        );
+    }
 
     #[test]
     fn unary_op() {
