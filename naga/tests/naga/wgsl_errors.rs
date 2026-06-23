@@ -431,7 +431,9 @@ fn binary_expression_precedence_requires_parentheses() {
         "fn f(a: u32, b: u32, c: u32) { let r = a & b ^ c; }",
         "fn f(a: u32, b: u32, c: u32) { let r = a | b & c; }",
         "fn f(a: u32, b: u32, c: u32) { let r = a == b != c; }",
+        "fn f(a: u32, b: u32, c: u32) { let r = a < b < c; }",
         "fn f(a: bool, b: bool, c: bool) { let r = a && b || c; }",
+        "fn f(a: bool, b: bool, c: bool) { let r = a || b && c; }",
     ] {
         check_error_matches(source, "binary expression requires parentheses");
     }
@@ -450,6 +452,8 @@ fn logical(a: u32, b: u32, c: bool, x: bool, y: bool, z: bool) {
     let p = a < b && c;
     let q = x && (y || z);
     let r = (x && y) || z;
+    let s = x && y && z;
+    let t = x || y || z;
 }
 "#,
     );

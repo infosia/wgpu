@@ -180,7 +180,10 @@ impl<'a> ExpressionContext<'a, '_, '_> {
     ) -> Result<'a, ()> {
         let previous_group = BinaryOperatorGroup::from_op(previous.0);
         let next_group = BinaryOperatorGroup::from_op(next.0);
-        if previous_group.can_precede_without_parens(next_group) {
+        let same_logical_operator = previous_group == BinaryOperatorGroup::Logical
+            && next_group == BinaryOperatorGroup::Logical
+            && previous.0 == next.0;
+        if same_logical_operator || previous_group.can_precede_without_parens(next_group) {
             Ok(())
         } else {
             Err(Box::new(Error::BinaryOperatorRequiresParentheses {
