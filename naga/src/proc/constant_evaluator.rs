@@ -2485,6 +2485,9 @@ impl<'a> ConstantEvaluator<'a> {
         let x = self.extract_vec(arg2, true)?;
         Self::check_same_len(&low, &high)?;
         Self::check_same_len(&low, &x)?;
+        if Self::smooth_step_has_equal_edge(&low, &high) {
+            return Err(ConstantEvaluatorError::DivisionByZero);
+        }
 
         macro_rules! smooth_step_vec {
             ($out:ident, $low:expr, $high:expr, $x:expr, $zero:expr, $one:expr, $two:expr, $three:expr) => {{
@@ -2546,6 +2549,24 @@ impl<'a> ConstantEvaluator<'a> {
             _ => return Err(ConstantEvaluatorError::InvalidMathArg),
         };
         result.register_as_evaluated_expr(self, span)
+    }
+
+    fn smooth_step_has_equal_edge(low: &LiteralVector, high: &LiteralVector) -> bool {
+        match (low, high) {
+            (LiteralVector::AbstractFloat(low), LiteralVector::AbstractFloat(high)) => {
+                low.iter().zip(high).any(|(low, high)| low == high)
+            }
+            (LiteralVector::F32(low), LiteralVector::F32(high)) => {
+                low.iter().zip(high).any(|(low, high)| low == high)
+            }
+            (LiteralVector::F16(low), LiteralVector::F16(high)) => {
+                low.iter().zip(high).any(|(low, high)| low == high)
+            }
+            (LiteralVector::F64(low), LiteralVector::F64(high)) => {
+                low.iter().zip(high).any(|(low, high)| low == high)
+            }
+            _ => false,
+        }
     }
 
     fn extract_matrix(

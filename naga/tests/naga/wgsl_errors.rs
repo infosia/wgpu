@@ -149,6 +149,24 @@ const_assert all(f == vec2f(0.0, 0.0));
 
 #[test]
 fn const_eval_smooth_step() {
+    check_error_matches("const r = smoothstep(2.0, 2.0, 0.5);", "Division by zero");
+    check_validation_error_matches(
+        "@compute @workgroup_size(1)
+fn main() {
+    var x = 0.5f;
+    let r = smoothstep(2.0f, 2.0f, x);
+}",
+        "smoothstep low and high must not be equal",
+    );
+    check_validation_error_matches(
+        "@compute @workgroup_size(1)
+fn main() {
+    var x = vec2f(0.5, 0.5);
+    let r = smoothstep(vec2f(1.0, 2.0), vec2f(1.0, 3.0), x);
+}",
+        "smoothstep low and high must not be equal",
+    );
+
     check_parse_and_validate_success(
         r#"
 const a = smoothstep(0.0, 1.0, 0.5);
@@ -162,6 +180,14 @@ const_assert f == 0.5f;
 
 const fv = smoothstep(vec2f(0.0, 0.0), vec2f(1.0, 2.0), vec2f(0.5, 1.0));
 const_assert all(fv == vec2f(0.5, 0.5));
+
+@compute @workgroup_size(1)
+fn runtime_x_valid() {
+    var x = 0.5f;
+    let a = smoothstep(0.0f, 1.0f, x);
+    var xv = vec2f(0.5, 0.5);
+    let av = smoothstep(vec2f(0.0, 1.0), vec2f(1.0, 2.0), xv);
+}
 "#,
     );
 }
@@ -3293,6 +3319,44 @@ fn override_div_rem_rejects_zero_divisor_at_pipeline_creation() {
             naga::proc::ConstantEvaluatorError::DivisionByZero
         )
     ));
+}
+
+#[test]
+fn override_smoothstep_rejects_equal_edges_at_pipeline_creation() {
+    let err = check_override_access(
+        r#"
+            override lo: f32 = 2.0;
+            override hi: f32 = 2.0;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                var x = 0.5f;
+                let r = smoothstep(lo, hi, x);
+            }
+        "#,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        naga::back::pipeline_constants::PipelineConstantError::ConstantEvaluatorError(
+            naga::proc::ConstantEvaluatorError::DivisionByZero
+        )
+    ));
+
+    check_override_access(
+        r#"
+            override lo: f32 = 0.0;
+            override hi: f32 = 1.0;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                var x = 0.5f;
+                let r = smoothstep(lo, hi, x);
+            }
+        "#,
+    )
+    .expect("distinct smoothstep override edges should resolve");
 }
 
 #[test]

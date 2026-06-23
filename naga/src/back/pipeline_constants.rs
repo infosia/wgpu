@@ -443,6 +443,7 @@ fn process_function(
         adjust_expr(&adjusted_local_expressions, &mut expr);
         validate_resolved_override_access(module, function, &expr)?;
         validate_resolved_override_div_rem(module, function, &expr)?;
+        validate_resolved_override_smooth_step(module, function, &expr)?;
         let mut evaluator = ConstantEvaluator::for_wgsl_function(
             module,
             &mut function.expressions,
@@ -529,6 +530,28 @@ fn validate_resolved_override_div_rem(
     Ok(())
 }
 
+fn validate_resolved_override_smooth_step(
+    module: &Module,
+    function: &Function,
+    expr: &Expression,
+) -> Result<(), ConstantEvaluatorError> {
+    let &Expression::Math {
+        fun: crate::MathFunction::SmoothStep,
+        arg: low,
+        arg1: Some(high),
+        ..
+    } = expr
+    else {
+        return Ok(());
+    };
+
+    if any_equal_resolved_literal_pair(module, function, low, high) {
+        Err(ConstantEvaluatorError::DivisionByZero)
+    } else {
+        Ok(())
+    }
+}
+
 fn any_resolved_literal(
     module: &Module,
     function: &Function,
@@ -549,6 +572,75 @@ fn any_resolved_literal(
             .iter()
             .any(|&component| any_resolved_literal(module, function, component, predicate)),
         _ => false,
+    }
+}
+
+fn any_equal_resolved_literal_pair(
+    module: &Module,
+    function: &Function,
+    left: Handle<Expression>,
+    right: Handle<Expression>,
+) -> bool {
+    fn flatten_function_literals(
+        module: &Module,
+        function: &Function,
+        expr: Handle<Expression>,
+        out: &mut Vec<Literal>,
+    ) -> bool {
+        match function.expressions[expr] {
+            Expression::Literal(literal) => {
+                out.push(literal);
+                true
+            }
+            Expression::ZeroValue(ty) => match module.types[ty].inner {
+                TypeInner::Scalar(scalar) => {
+                    if let Some(literal) = Literal::zero(scalar) {
+                        out.push(literal);
+                        true
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            },
+            Expression::Constant(constant) => {
+                if let Some(literal) = global_literal(module, module.constants[constant].init) {
+                    out.push(literal);
+                    true
+                } else {
+                    false
+                }
+            }
+            Expression::Splat { value, .. } => {
+                flatten_function_literals(module, function, value, out)
+            }
+            Expression::Compose { ref components, .. } => components
+                .iter()
+                .all(|&component| flatten_function_literals(module, function, component, out)),
+            _ => false,
+        }
+    }
+
+    let mut left_values = Vec::new();
+    let mut right_values = Vec::new();
+    flatten_function_literals(module, function, left, &mut left_values)
+        && flatten_function_literals(module, function, right, &mut right_values)
+        && left_values.len() == right_values.len()
+        && left_values
+            .iter()
+            .zip(&right_values)
+            .any(|(left, right)| left == right)
+}
+
+fn global_literal(module: &Module, expr: Handle<Expression>) -> Option<Literal> {
+    match module.global_expressions[expr] {
+        Expression::Literal(literal) => Some(literal),
+        Expression::ZeroValue(ty) => match module.types[ty].inner {
+            TypeInner::Scalar(scalar) => Literal::zero(scalar),
+            _ => None,
+        },
+        Expression::Constant(constant) => global_literal(module, module.constants[constant].init),
+        _ => None,
     }
 }
 

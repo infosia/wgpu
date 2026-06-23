@@ -5,6 +5,7 @@ use crate::{
     proc::OverloadSet as _,
     proc::{IndexableLengthError, ResolveError},
 };
+use alloc::vec::Vec;
 
 #[derive(Clone, Debug, thiserror::Error)]
 #[cfg_attr(test, derive(PartialEq))]
@@ -172,6 +173,11 @@ pub enum ExpressionError {
         function: crate::MathFunction,
         offset_expr: Handle<crate::Expression>,
         count_expr: Handle<crate::Expression>,
+    },
+    #[error("smoothstep low and high must not be equal")]
+    SmoothStepEdgeEqual {
+        low_expr: Handle<crate::Expression>,
+        high_expr: Handle<crate::Expression>,
     },
 }
 
@@ -362,6 +368,95 @@ impl super::Validator {
                 offset_expr: offset,
                 count_expr: count,
             })
+        }
+    }
+
+    fn validate_smooth_step_edges(
+        low: Handle<crate::Expression>,
+        high: Handle<crate::Expression>,
+        module: &crate::Module,
+        function: &crate::Function,
+    ) -> Result<(), ExpressionError> {
+        fn global_literal(
+            module: &crate::Module,
+            expr: Handle<crate::Expression>,
+        ) -> Option<crate::Literal> {
+            match module.global_expressions[expr] {
+                crate::Expression::Literal(literal) => Some(literal),
+                crate::Expression::ZeroValue(ty) => match module.types[ty].inner {
+                    crate::TypeInner::Scalar(scalar) => crate::Literal::zero(scalar),
+                    _ => None,
+                },
+                crate::Expression::Constant(constant) => {
+                    global_literal(module, module.constants[constant].init)
+                }
+                _ => None,
+            }
+        }
+
+        fn flatten_literals(
+            module: &crate::Module,
+            function: &crate::Function,
+            expr: Handle<crate::Expression>,
+            out: &mut Vec<crate::Literal>,
+        ) -> bool {
+            match function.expressions[expr] {
+                crate::Expression::Literal(literal) => {
+                    out.push(literal);
+                    true
+                }
+                crate::Expression::ZeroValue(ty) => match module.types[ty].inner {
+                    crate::TypeInner::Scalar(scalar) => {
+                        if let Some(literal) = crate::Literal::zero(scalar) {
+                            out.push(literal);
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                },
+                crate::Expression::Constant(constant) => {
+                    if let Some(literal) = global_literal(module, module.constants[constant].init) {
+                        out.push(literal);
+                        true
+                    } else {
+                        false
+                    }
+                }
+                crate::Expression::Splat { value, .. } => {
+                    flatten_literals(module, function, value, out)
+                }
+                crate::Expression::Compose {
+                    ty: _,
+                    ref components,
+                } => components
+                    .iter()
+                    .all(|&component| flatten_literals(module, function, component, out)),
+                _ => false,
+            }
+        }
+
+        let mut low_values = Vec::new();
+        let mut high_values = Vec::new();
+        if !flatten_literals(module, function, low, &mut low_values)
+            || !flatten_literals(module, function, high, &mut high_values)
+            || low_values.len() != high_values.len()
+        {
+            return Ok(());
+        }
+
+        if low_values
+            .iter()
+            .zip(&high_values)
+            .any(|(low, high)| low == high)
+        {
+            Err(ExpressionError::SmoothStepEdgeEqual {
+                low_expr: low,
+                high_expr: high,
+            })
+        } else {
+            Ok(())
         }
     }
 
@@ -1493,6 +1588,9 @@ impl super::Validator {
                         Self::validate_constant_bitfield_range(
                             fun, *offset, *count, module, function,
                         )?;
+                    }
+                    (crate::MathFunction::SmoothStep, [low, high, _]) => {
+                        Self::validate_smooth_step_edges(*low, *high, module, function)?;
                     }
                     _ => {}
                 }
