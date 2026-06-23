@@ -181,6 +181,10 @@ pub enum InvalidAssignmentType {
 #[derive(Clone, Debug)]
 pub(crate) enum Error<'a> {
     Unexpected(Span, ExpectedToken<'a>),
+    BinaryOperatorRequiresParentheses {
+        first: Span,
+        second: Span,
+    },
     UnexpectedComponents(Span),
     UnexpectedOperationInConstContext(Span),
     BadNumber(Span, NumberError),
@@ -569,6 +573,18 @@ impl<'a> Error<'a> {
                     notes: vec![],
                 }
             }
+            Error::BinaryOperatorRequiresParentheses { first, second } => ParseError {
+                message: "binary expression requires parentheses".to_string(),
+                labels: vec![
+                    (
+                        second,
+                        "this operator cannot follow the previous binary operator without parentheses"
+                            .into(),
+                    ),
+                    (first, "previous binary operator".into()),
+                ],
+                notes: Vec::new(),
+            },
             Error::UnexpectedComponents(bad_span) => ParseError {
                 message: "unexpected components".to_string(),
                 labels: vec![(bad_span, "unexpected components".into())],

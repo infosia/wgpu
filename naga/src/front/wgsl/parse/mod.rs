@@ -80,9 +80,132 @@ struct ExpressionContext<'input, 'temp, 'out> {
     /// [`GlobalDecl`]: ast::GlobalDecl
     /// [`dependencies`]: ast::GlobalDecl::dependencies
     unresolved: &'out mut FastIndexSet<ast::Dependency<'input>>,
+
+    /// Expression handles that were produced by a parenthesized expression.
+    ///
+    /// WGSL restricts unparenthesized binary operator sequences, but parentheses
+    /// are not represented in the AST. Keep a side table while parsing so the
+    /// binary parser can distinguish `a * b << c` from `(a * b) << c`.
+    parenthesized_expressions: FastHashSet<Handle<ast::Expression<'input>>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BinaryOperatorGroup {
+    Multiplicative,
+    Additive,
+    Shift,
+    Relational,
+    BinaryAnd,
+    BinaryXor,
+    BinaryOr,
+    Logical,
+}
+
+impl BinaryOperatorGroup {
+    const fn from_op(op: crate::BinaryOperator) -> Self {
+        use crate::BinaryOperator as Bo;
+        match op {
+            Bo::Multiply | Bo::Divide | Bo::Modulo => Self::Multiplicative,
+            Bo::Add | Bo::Subtract => Self::Additive,
+            Bo::ShiftLeft | Bo::ShiftRight => Self::Shift,
+            Bo::Less
+            | Bo::Greater
+            | Bo::LessEqual
+            | Bo::GreaterEqual
+            | Bo::Equal
+            | Bo::NotEqual => Self::Relational,
+            Bo::And => Self::BinaryAnd,
+            Bo::ExclusiveOr => Self::BinaryXor,
+            Bo::InclusiveOr => Self::BinaryOr,
+            Bo::LogicalAnd | Bo::LogicalOr => Self::Logical,
+        }
+    }
+
+    const fn can_precede_without_parens(self, next: Self) -> bool {
+        use BinaryOperatorGroup as Bg;
+        match self {
+            Bg::Multiplicative | Bg::Additive => {
+                matches!(next, Bg::Multiplicative | Bg::Additive | Bg::Relational)
+            }
+            Bg::Shift => matches!(next, Bg::Relational | Bg::Logical),
+            Bg::Relational => {
+                matches!(
+                    next,
+                    Bg::Multiplicative | Bg::Additive | Bg::Shift | Bg::Logical
+                )
+            }
+            Bg::BinaryAnd => matches!(next, Bg::BinaryAnd),
+            Bg::BinaryXor => matches!(next, Bg::BinaryXor),
+            Bg::BinaryOr => matches!(next, Bg::BinaryOr),
+            Bg::Logical => matches!(next, Bg::Relational),
+        }
+    }
 }
 
 impl<'a> ExpressionContext<'a, '_, '_> {
+    fn rightmost_binary_op(
+        &self,
+        handle: Handle<ast::Expression<'a>>,
+    ) -> Option<(crate::BinaryOperator, Span)> {
+        if self.parenthesized_expressions.contains(&handle) {
+            return None;
+        }
+        match self.expressions[handle] {
+            ast::Expression::Binary { op, right, .. } => self
+                .rightmost_binary_op(right)
+                .or_else(|| Some((op, self.expressions.get_span(handle)))),
+            _ => None,
+        }
+    }
+
+    fn leftmost_binary_op(
+        &self,
+        handle: Handle<ast::Expression<'a>>,
+    ) -> Option<(crate::BinaryOperator, Span)> {
+        if self.parenthesized_expressions.contains(&handle) {
+            return None;
+        }
+        match self.expressions[handle] {
+            ast::Expression::Binary { op, left, .. } => self
+                .leftmost_binary_op(left)
+                .or_else(|| Some((op, self.expressions.get_span(handle)))),
+            _ => None,
+        }
+    }
+
+    fn validate_binary_operator_sequence(
+        &self,
+        previous: (crate::BinaryOperator, Span),
+        next: (crate::BinaryOperator, Span),
+    ) -> Result<'a, ()> {
+        let previous_group = BinaryOperatorGroup::from_op(previous.0);
+        let next_group = BinaryOperatorGroup::from_op(next.0);
+        if previous_group.can_precede_without_parens(next_group) {
+            Ok(())
+        } else {
+            Err(Box::new(Error::BinaryOperatorRequiresParentheses {
+                first: previous.1,
+                second: next.1,
+            }))
+        }
+    }
+
+    fn validate_binary_expression(
+        &self,
+        op: crate::BinaryOperator,
+        op_span: Span,
+        left: Handle<ast::Expression<'a>>,
+        right: Handle<ast::Expression<'a>>,
+    ) -> Result<'a, ()> {
+        if let Some(previous) = self.rightmost_binary_op(left) {
+            self.validate_binary_operator_sequence(previous, (op, op_span))?;
+        }
+        if let Some(next) = self.leftmost_binary_op(right) {
+            self.validate_binary_operator_sequence((op, op_span), next)?;
+        }
+        Ok(())
+    }
+
     fn parse_binary_op(
         &mut self,
         lexer: &mut Lexer<'a>,
@@ -104,6 +227,7 @@ impl<'a> ExpressionContext<'a, '_, '_> {
             }
             let left = accumulator;
             let right = parser(lexer, self)?;
+            self.validate_binary_expression(op, token.1, left, right)?;
             accumulator = self.expressions.append(
                 ast::Expression::Binary { op, left, right },
                 lexer.span_from(start),
@@ -490,6 +614,7 @@ impl Parser {
             (Token::Paren('('), _) => {
                 let expr = self.enclosed_expression(lexer, ctx)?;
                 lexer.expect(Token::Paren(')'))?;
+                ctx.parenthesized_expressions.insert(expr);
                 self.pop_rule_span(lexer);
                 return Ok(expr);
             }
@@ -707,6 +832,7 @@ impl Parser {
                     let expr =
                         this.lhs_expression(lexer, ctx, None, ExpectedToken::LhsExpression)?;
                     lexer.expect(Token::Paren(')'))?;
+                    ctx.parenthesized_expressions.insert(expr);
                     this.component_or_swizzle_specifier(span, lexer, ctx, expr)?
                 }
                 (Token::Word(word), span) => {
@@ -1808,6 +1934,7 @@ impl Parser {
             local_table: &mut SymbolTable::default(),
             locals: &mut locals,
             unresolved: dependencies,
+            parenthesized_expressions: FastHashSet::default(),
         };
 
         // start a scope that contains arguments as well as the function body
@@ -1956,6 +2083,7 @@ impl Parser {
             local_table: &mut SymbolTable::default(),
             locals: &mut Arena::new(),
             unresolved: &mut dependencies,
+            parenthesized_expressions: FastHashSet::default(),
         };
         let mut diagnostic_filters = DiagnosticFilterMap::new();
         let ensure_no_diag_attrs = |on_what, filters: DiagnosticFilterMap| -> Result<()> {

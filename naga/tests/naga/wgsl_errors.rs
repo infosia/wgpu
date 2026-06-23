@@ -422,6 +422,39 @@ fn main() -> @location(0) vec4f {
     );
 }
 
+#[test]
+fn binary_expression_precedence_requires_parentheses() {
+    for source in [
+        "fn f(a: u32, b: u32, c: u32) { let r = a * b << c; }",
+        "fn f(a: u32, b: u32, c: u32) { let r = a << b * c; }",
+        "fn f(a: u32, b: u32, c: u32) { let r = a & b | c; }",
+        "fn f(a: u32, b: u32, c: u32) { let r = a & b ^ c; }",
+        "fn f(a: u32, b: u32, c: u32) { let r = a | b & c; }",
+        "fn f(a: u32, b: u32, c: u32) { let r = a == b != c; }",
+        "fn f(a: bool, b: bool, c: bool) { let r = a && b || c; }",
+    ] {
+        check_error_matches(source, "binary expression requires parentheses");
+    }
+
+    check_parse_and_validate_success(
+        r#"
+fn arithmetic(a: u32, b: u32, c: u32) {
+    let p = (a * b) << c;
+    let q = a * b + c;
+    let r = a + b * c;
+    let s = a & b & c;
+    let t = a | b | c;
+}
+
+fn logical(a: u32, b: u32, c: bool, x: bool, y: bool, z: bool) {
+    let p = a < b && c;
+    let q = x && (y || z);
+    let r = (x && y) || z;
+}
+"#,
+    );
+}
+
 #[track_caller]
 fn check_error_matches(input: &str, expected_substring: &str) {
     let result = naga::front::wgsl::parse_str(input);
