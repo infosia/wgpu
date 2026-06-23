@@ -3153,6 +3153,7 @@ impl<'a> ConstantEvaluator<'a> {
         let (&[offset], &[count]) = (offset.as_slice(), count.as_slice()) else {
             return Err(ConstantEvaluatorError::InvalidMathArg);
         };
+        validate_bitfield_range(offset, count, "extractBits")?;
 
         fn extract_bits_u32(e: u32, offset: u32, count: u32) -> u32 {
             let offset = offset.min(32);
@@ -3462,6 +3463,7 @@ impl<'a> ConstantEvaluator<'a> {
         let (&[offset], &[count]) = (offset.as_slice(), count.as_slice()) else {
             return Err(ConstantEvaluatorError::InvalidMathArg);
         };
+        validate_bitfield_range(offset, count, "insertBits")?;
 
         let result = match (e, newbits) {
             (LiteralVector::U32(e), LiteralVector::U32(newbits)) if e.len() == newbits.len() => {
@@ -5171,6 +5173,20 @@ const fn insert_bits_u32(e: u32, newbits: u32, offset: u32, count: u32) -> u32 {
         (u32::MAX >> (32 - count)).wrapping_shl(offset)
     };
     (e & !mask) | (newbits.wrapping_shl(offset) & mask)
+}
+
+fn validate_bitfield_range(
+    offset: u32,
+    count: u32,
+    function: &'static str,
+) -> Result<(), ConstantEvaluatorError> {
+    if offset.checked_add(count).is_some_and(|end| end <= 32) {
+        Ok(())
+    } else {
+        Err(ConstantEvaluatorError::InvalidMathArgValue(
+            function.to_string(),
+        ))
+    }
 }
 
 #[test]

@@ -318,13 +318,43 @@ const_assert all(smooth_finite == vec3<f32>(0.5f));
 
 #[test]
 fn const_eval_bit_pack_unpack() {
+    check_error_matches(
+        "const r = insertBits(1u, 2u, 20u, 20u);",
+        "insertBits built-in function argument is out of valid range",
+    );
+    check_error_matches(
+        "const r = extractBits(1u, 20u, 20u);",
+        "extractBits built-in function argument is out of valid range",
+    );
+    check_validation_error_matches(
+        "@compute @workgroup_size(1)
+fn main() {
+    var x = 1u;
+    let r = insertBits(x, 2u, 20u, 20u);
+}",
+        "offset + count exceeds the bit width",
+    );
+    check_validation_error_matches(
+        "@compute @workgroup_size(1)
+fn main() {
+    var x = 1u;
+    let r = extractBits(x, 20u, 20u);
+}",
+        "offset + count exceeds the bit width",
+    );
+
     check_parse_and_validate_success(
         r#"
 const extracted = extractBits(0xF0u, 4u, 4u);
 const_assert extracted == 15u;
+const extracted_full = extractBits(1u, 0u, 32u);
+const_assert extracted_full == 1u;
 
 const extracted_signed = extractBits(-16i, 4u, 4u);
 const_assert extracted_signed == -1i;
+
+const inserted = insertBits(1u, 2u, 4u, 8u);
+const_assert inserted == 33u;
 
 const quantized = quantizeToF16(1.0001f);
 const_assert quantized == 1.0f;
@@ -348,6 +378,46 @@ const_assert all(unpack4xI8(i8) == vec4i(-128, -1, 127, 127));
 
 const u8 = pack4xU8Clamp(vec4u(0, 255, 256, 1024));
 const_assert all(unpack4xU8(u8) == vec4u(0, 255, 255, 255));
+"#,
+    );
+}
+
+#[test]
+fn texture_sample_offset_range() {
+    check_validation_error_matches(
+        r#"
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+@fragment
+fn main() -> @location(0) vec4f {
+    return textureSample(tex, samp, vec2f(0.0), vec2i(9, 0));
+}
+"#,
+        "outside the valid range [-8, 7]",
+    );
+    check_validation_error_matches(
+        r#"
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+@fragment
+fn main() -> @location(0) vec4f {
+    return textureSample(tex, samp, vec2f(0.0), vec2i(-9, 0));
+}
+"#,
+        "outside the valid range [-8, 7]",
+    );
+
+    check_parse_and_validate_success(
+        r#"
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+@fragment
+fn main() -> @location(0) vec4f {
+    return textureSample(tex, samp, vec2f(0.0), vec2i(7, -8));
+}
 "#,
     );
 }

@@ -94,37 +94,37 @@ void logical() {
     bool bitwise_and0_ = (true && false);
     bvec4 bitwise_and1_ = bvec4(bvec4(true).x && bvec4(false).x, bvec4(true).y && bvec4(false).y, bvec4(true).z && bvec4(false).z, bvec4(true).w && bvec4(false).w);
     if (!(false)) {
-        local_2 = false;
+        local_2 = any(bvec3(false, false, false));
     } else {
         local_2 = true;
     }
-    bool _e27 = local_2;
-    bool short_circuit_5_ = !(_e27);
-    bool _e29 = p();
-    if (!(_e29)) {
-        bool _e33 = q();
-        local_3 = _e33;
+    bool _e31 = local_2;
+    bool short_circuit_5_ = !(_e31);
+    bool _e33 = p();
+    if (!(_e33)) {
+        bool _e37 = q();
+        local_3 = _e37;
     } else {
         local_3 = true;
     }
-    bool _e35 = local_3;
-    if (_e35) {
-        bool _e38 = r();
-        if (!(_e38)) {
-            bool _e42 = s();
-            local_5 = _e42;
+    bool _e39 = local_3;
+    if (_e39) {
+        bool _e42 = r();
+        if (!(_e42)) {
+            bool _e46 = s();
+            local_5 = _e46;
         } else {
             local_5 = true;
         }
-        bool _e44 = local_5;
-        local_4 = _e44;
+        bool _e48 = local_5;
+        local_4 = _e48;
     } else {
         local_4 = false;
     }
     bool short_circuit_6_ = local_4;
     if (false) {
-        bool _e50 = q();
-        local_6 = _e50;
+        bool _e54 = q();
+        local_6 = _e54;
     } else {
         local_6 = true;
     }

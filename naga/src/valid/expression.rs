@@ -113,6 +113,8 @@ pub enum ExpressionError {
     InvalidSampleOffsetExprType,
     #[error("Sample offset constant {1:?} doesn't match the image dimension {0:?}")]
     InvalidSampleOffset(crate::ImageDimension, Handle<crate::Expression>),
+    #[error("Sample offset constant {0:?} is outside the valid range [-8, 7]")]
+    InvalidSampleOffsetValue(Handle<crate::Expression>),
     #[error("Depth reference {0:?} is not a scalar float")]
     InvalidDepthReference(Handle<crate::Expression>),
     #[error("Depth sample level can only be Auto or Zero")]
@@ -164,6 +166,12 @@ pub enum ExpressionError {
     IntegerDivisionOverflow {
         lhs_expr: Handle<crate::Expression>,
         rhs_expr: Handle<crate::Expression>,
+    },
+    #[error("{function:?} offset + count exceeds the bit width")]
+    BitfieldRangeTooLarge {
+        function: crate::MathFunction,
+        offset_expr: Handle<crate::Expression>,
+        count_expr: Handle<crate::Expression>,
     },
 }
 
@@ -325,6 +333,35 @@ impl super::Validator {
             })
         } else {
             Ok(())
+        }
+    }
+
+    fn validate_constant_bitfield_range(
+        function_name: crate::MathFunction,
+        offset: Handle<crate::Expression>,
+        count: Handle<crate::Expression>,
+        module: &crate::Module,
+        function: &crate::Function,
+    ) -> Result<(), ExpressionError> {
+        let gctx = module.to_ctx();
+        let offset_value = gctx.get_const_val_from::<u32, _>(offset, &function.expressions);
+        let count_value = gctx.get_const_val_from::<u32, _>(count, &function.expressions);
+
+        let (Ok(offset_value), Ok(count_value)) = (offset_value, count_value) else {
+            return Ok(());
+        };
+
+        if offset_value
+            .checked_add(count_value)
+            .is_some_and(|end| end <= 32)
+        {
+            Ok(())
+        } else {
+            Err(ExpressionError::BitfieldRangeTooLarge {
+                function: function_name,
+                offset_expr: offset,
+                count_expr: count,
+            })
         }
     }
 
@@ -739,6 +776,62 @@ impl super::Validator {
 
                 // check constant offset
                 if let Some(const_expr) = offset {
+                    fn sample_offset_out_of_range(
+                        expr: Handle<crate::Expression>,
+                        module: &crate::Module,
+                        function: &crate::Function,
+                    ) -> bool {
+                        fn scalar_out_of_range(
+                            expr: Handle<crate::Expression>,
+                            module: &crate::Module,
+                            function: &crate::Function,
+                        ) -> bool {
+                            fn literal_i32(literal: crate::Literal) -> Option<i32> {
+                                match literal {
+                                    crate::Literal::I32(value) => Some(value),
+                                    crate::Literal::U32(value) => value.try_into().ok(),
+                                    _ => None,
+                                }
+                            }
+
+                            fn global_expr_i32(
+                                expr: Handle<crate::Expression>,
+                                module: &crate::Module,
+                            ) -> Option<i32> {
+                                match module.global_expressions[expr] {
+                                    crate::Expression::Literal(literal) => literal_i32(literal),
+                                    crate::Expression::ZeroValue(_) => Some(0),
+                                    _ => None,
+                                }
+                            }
+
+                            let value = match function.expressions[expr] {
+                                crate::Expression::Literal(literal) => literal_i32(literal),
+                                crate::Expression::ZeroValue(_) => Some(0),
+                                crate::Expression::Constant(constant) => {
+                                    global_expr_i32(module.constants[constant].init, module)
+                                }
+                                _ => None,
+                            };
+
+                            value.is_some_and(|value| !(-8..=7).contains(&value))
+                        }
+
+                        match function.expressions[expr] {
+                            crate::Expression::ZeroValue(_) => false,
+                            crate::Expression::Splat { value, .. } => {
+                                scalar_out_of_range(value, module, function)
+                            }
+                            crate::Expression::Compose {
+                                ty: _,
+                                ref components,
+                            } => components
+                                .iter()
+                                .any(|&component| scalar_out_of_range(component, module, function)),
+                            _ => scalar_out_of_range(expr, module, function),
+                        }
+                    }
+
                     if !expr_kind.is_const(const_expr) {
                         return Err(ExpressionError::InvalidSampleOffsetExprType);
                     }
@@ -752,6 +845,10 @@ impl super::Validator {
                         _ => {
                             return Err(ExpressionError::InvalidSampleOffset(dim, const_expr));
                         }
+                    }
+
+                    if sample_offset_out_of_range(const_expr, module, function) {
+                        return Err(ExpressionError::InvalidSampleOffsetValue(const_expr));
                     }
                 }
 
@@ -1388,6 +1485,16 @@ impl super::Validator {
 
                 if actuals.len() < overloads.min_arguments() {
                     return Err(ExpressionError::WrongArgumentCount(fun));
+                }
+
+                match (fun, actuals) {
+                    (crate::MathFunction::InsertBits, [_, _, offset, count])
+                    | (crate::MathFunction::ExtractBits, [_, offset, count]) => {
+                        Self::validate_constant_bitfield_range(
+                            fun, *offset, *count, module, function,
+                        )?;
+                    }
+                    _ => {}
                 }
 
                 ShaderStages::all()
