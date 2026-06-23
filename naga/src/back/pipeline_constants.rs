@@ -601,13 +601,29 @@ fn any_equal_resolved_literal_pair(
                         false
                     }
                 }
+                TypeInner::Vector { size, scalar } => {
+                    if let Some(literal) = Literal::zero(scalar) {
+                        out.extend(core::iter::repeat_n(literal, size as usize));
+                        true
+                    } else {
+                        false
+                    }
+                }
                 _ => false,
             },
             Expression::Constant(constant) => {
                 flatten_global_literals(module, module.constants[constant].init, out)
             }
-            Expression::Splat { value, .. } => {
-                flatten_function_literals(module, function, value, out)
+            Expression::Splat { value, size } => {
+                let mut value_literals = Vec::new();
+                if flatten_function_literals(module, function, value, &mut value_literals)
+                    && value_literals.len() == 1
+                {
+                    out.extend(core::iter::repeat_n(value_literals[0], size as usize));
+                    true
+                } else {
+                    false
+                }
             }
             Expression::Compose { ref components, .. } => components
                 .iter()
@@ -646,12 +662,30 @@ fn flatten_global_literals(
                     false
                 }
             }
+            TypeInner::Vector { size, scalar } => {
+                if let Some(literal) = Literal::zero(scalar) {
+                    out.extend(core::iter::repeat_n(literal, size as usize));
+                    true
+                } else {
+                    false
+                }
+            }
             _ => false,
         },
         Expression::Constant(constant) => {
             flatten_global_literals(module, module.constants[constant].init, out)
         }
-        Expression::Splat { value, .. } => flatten_global_literals(module, value, out),
+        Expression::Splat { value, size } => {
+            let mut value_literals = Vec::new();
+            if flatten_global_literals(module, value, &mut value_literals)
+                && value_literals.len() == 1
+            {
+                out.extend(core::iter::repeat_n(value_literals[0], size as usize));
+                true
+            } else {
+                false
+            }
+        }
         Expression::Compose { ref components, .. } => components
             .iter()
             .all(|&component| flatten_global_literals(module, component, out)),

@@ -3662,6 +3662,71 @@ fn override_smoothstep_rejects_equal_edges_at_pipeline_creation() {
 }
 
 #[test]
+fn override_smoothstep_rejects_vector_splat_edges_at_pipeline_creation() {
+    let mut overrides = hashbrown::HashMap::new();
+    overrides.insert("o_high".to_string(), 0.0);
+    let err = check_override_access_with_pipeline_constants(
+        r#"
+            override o_high: f32;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                var x = vec2<f32>(0.5);
+                let t = smoothstep(vec2<f32>(0), vec2<f32>(o_high), x);
+            }
+        "#,
+        &overrides,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        naga::back::pipeline_constants::PipelineConstantError::ConstantEvaluatorError(
+            naga::proc::ConstantEvaluatorError::DivisionByZero
+        )
+    ));
+
+    let mut overrides = hashbrown::HashMap::new();
+    overrides.insert("o_low".to_string(), 0.0);
+    let err = check_override_access_with_pipeline_constants(
+        r#"
+            override o_low: f32;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                var x = vec2<f32>(0.5);
+                let t = smoothstep(vec2<f32>(o_low), vec2<f32>(0), x);
+            }
+        "#,
+        &overrides,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        naga::back::pipeline_constants::PipelineConstantError::ConstantEvaluatorError(
+            naga::proc::ConstantEvaluatorError::DivisionByZero
+        )
+    ));
+
+    let mut overrides = hashbrown::HashMap::new();
+    overrides.insert("o_high".to_string(), 10.0);
+    check_override_access_with_pipeline_constants(
+        r#"
+            override o_high: f32;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                var x = vec2<f32>(0.5);
+                let t = smoothstep(vec2<f32>(0), vec2<f32>(o_high), x);
+            }
+        "#,
+        &overrides,
+    )
+    .expect("distinct vector smoothstep edges should resolve");
+}
+
+#[test]
 fn override_array_index_accepts_in_bounds_at_pipeline_creation() {
     check_override_access(
         r#"
