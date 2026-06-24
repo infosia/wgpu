@@ -16,6 +16,7 @@ use crate::front::wgsl::parse::{ast, conv, Parser};
 use crate::front::wgsl::Result;
 use crate::front::Typifier;
 use crate::{
+    arena::HandleSet,
     common::wgsl::{TryToWgsl, TypeContext},
     compact::KeepUnused,
 };
@@ -543,17 +544,15 @@ impl<'source, 'temp, 'out> ExpressionContext<'source, 'temp, 'out> {
         if self.suppress_runtime_rhs_const_eval
             && matches!(self.expr_type, ExpressionContextType::Runtime(_))
         {
-            let expr = match expr {
-                ir::Expression::Literal(ir::Literal::AbstractInt(value)) => {
-                    ir::Expression::Literal(ir::Literal::F32(value as f32))
-                }
-                ir::Expression::Literal(ir::Literal::AbstractFloat(value)) => {
-                    ir::Expression::Literal(ir::Literal::F32(value as f32))
-                }
-                expr => expr,
-            };
+            let fallback = expr.clone();
             let mut eval = self.as_const_evaluator();
-            return Ok(eval.append_unevaluated_runtime(expr, span));
+            return match eval.try_eval_and_append(expr, span) {
+                Ok(handle) => Ok(handle),
+                Err(_) => {
+                    let mut eval = self.as_const_evaluator();
+                    Ok(eval.append_unevaluated_runtime(fallback, span))
+                }
+            };
         }
 
         let mut eval = self.as_const_evaluator();
@@ -1346,6 +1345,125 @@ fn has_creation_fixed_footprint(types: &UniqueArena<ir::Type>, ty: Handle<ir::Ty
             .iter()
             .all(|member| has_creation_fixed_footprint(types, member.ty)),
         _ => true,
+    }
+}
+
+fn concretize_reachable_abstract_literals(
+    root: Handle<ir::Expression>,
+    expressions: &mut Arena<ir::Expression>,
+) {
+    let mut visited = HandleSet::for_arena(expressions);
+    let mut pending = Vec::new();
+    pending.push(root);
+
+    while let Some(expr) = pending.pop() {
+        if !visited.insert(expr) {
+            continue;
+        }
+
+        match expressions[expr].clone() {
+            ir::Expression::Literal(ir::Literal::AbstractInt(value)) => {
+                expressions[expr] = ir::Expression::Literal(ir::Literal::I32(value as i32));
+            }
+            ir::Expression::Literal(ir::Literal::AbstractFloat(value)) => {
+                expressions[expr] = ir::Expression::Literal(ir::Literal::F32(value as f32));
+            }
+            ir::Expression::Compose { components, .. } => pending.extend(components),
+            ir::Expression::Access { base, index } => pending.extend([base, index]),
+            ir::Expression::AccessIndex { base, .. } => pending.push(base),
+            ir::Expression::Splat { value, .. } => pending.push(value),
+            ir::Expression::Swizzle { vector, .. } => pending.push(vector),
+            ir::Expression::Load { pointer } => pending.push(pointer),
+            ir::Expression::ImageSample {
+                image,
+                sampler,
+                coordinate,
+                array_index,
+                offset,
+                level,
+                depth_ref,
+                ..
+            } => {
+                pending.extend([image, sampler, coordinate]);
+                pending.extend(array_index);
+                pending.extend(offset);
+                match level {
+                    ir::SampleLevel::Auto | ir::SampleLevel::Zero => {}
+                    ir::SampleLevel::Exact(expr) | ir::SampleLevel::Bias(expr) => {
+                        pending.push(expr);
+                    }
+                    ir::SampleLevel::Gradient { x, y } => pending.extend([x, y]),
+                }
+                pending.extend(depth_ref);
+            }
+            ir::Expression::ImageLoad {
+                image,
+                coordinate,
+                array_index,
+                sample,
+                level,
+            } => {
+                pending.extend([image, coordinate]);
+                pending.extend(array_index);
+                pending.extend(sample);
+                pending.extend(level);
+            }
+            ir::Expression::ImageQuery { image, query } => {
+                pending.push(image);
+                if let ir::ImageQuery::Size { level: Some(level) } = query {
+                    pending.push(level);
+                }
+            }
+            ir::Expression::Unary { expr, .. }
+            | ir::Expression::Derivative { expr, .. }
+            | ir::Expression::Relational { argument: expr, .. }
+            | ir::Expression::As { expr, .. }
+            | ir::Expression::ArrayLength(expr)
+            | ir::Expression::RayQueryVertexPositions { query: expr, .. }
+            | ir::Expression::RayQueryGetIntersection { query: expr, .. } => pending.push(expr),
+            ir::Expression::Binary { left, right, .. } => pending.extend([left, right]),
+            ir::Expression::Select {
+                condition,
+                accept,
+                reject,
+            } => pending.extend([condition, accept, reject]),
+            ir::Expression::Math {
+                arg,
+                arg1,
+                arg2,
+                arg3,
+                ..
+            } => {
+                pending.push(arg);
+                pending.extend(arg1);
+                pending.extend(arg2);
+                pending.extend(arg3);
+            }
+            ir::Expression::CooperativeLoad { data, .. } => {
+                pending.extend([data.pointer, data.stride]);
+            }
+            ir::Expression::CooperativeMultiplyAdd { a, b, c } => pending.extend([a, b, c]),
+            ir::Expression::SubpassLoad {
+                image,
+                sample_index,
+            } => {
+                pending.push(image);
+                pending.extend(sample_index);
+            }
+            ir::Expression::Literal(_)
+            | ir::Expression::Constant(_)
+            | ir::Expression::Override(_)
+            | ir::Expression::ZeroValue(_)
+            | ir::Expression::FunctionArgument(_)
+            | ir::Expression::GlobalVariable(_)
+            | ir::Expression::LocalVariable(_)
+            | ir::Expression::CallResult(_)
+            | ir::Expression::AtomicResult { .. }
+            | ir::Expression::WorkGroupUniformLoadResult { .. }
+            | ir::Expression::RayQueryProceedResult
+            | ir::Expression::SubgroupBallotResult
+            | ir::Expression::SubgroupOperationResult { .. } => {}
+        }
     }
 }
 
@@ -2787,6 +2905,11 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                 ctx.grow_types(right)?;
                 Ok(right)
             })?;
+
+            concretize_reachable_abstract_literals(
+                right,
+                &mut ctx.runtime_expression_ctx(span)?.function.expressions,
+            );
 
             accept.push(
                 crate::Statement::Store {

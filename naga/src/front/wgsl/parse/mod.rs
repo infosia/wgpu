@@ -143,7 +143,7 @@ impl BinaryOperatorGroup {
 }
 
 impl<'a> ExpressionContext<'a, '_, '_> {
-    fn rightmost_binary_op(
+    fn top_binary_op(
         &self,
         handle: Handle<ast::Expression<'a>>,
     ) -> Option<(crate::BinaryOperator, Span)> {
@@ -151,24 +151,7 @@ impl<'a> ExpressionContext<'a, '_, '_> {
             return None;
         }
         match self.expressions[handle] {
-            ast::Expression::Binary { op, right, .. } => self
-                .rightmost_binary_op(right)
-                .or_else(|| Some((op, self.expressions.get_span(handle)))),
-            _ => None,
-        }
-    }
-
-    fn leftmost_binary_op(
-        &self,
-        handle: Handle<ast::Expression<'a>>,
-    ) -> Option<(crate::BinaryOperator, Span)> {
-        if self.parenthesized_expressions.contains(&handle) {
-            return None;
-        }
-        match self.expressions[handle] {
-            ast::Expression::Binary { op, left, .. } => self
-                .leftmost_binary_op(left)
-                .or_else(|| Some((op, self.expressions.get_span(handle)))),
+            ast::Expression::Binary { op, .. } => Some((op, self.expressions.get_span(handle))),
             _ => None,
         }
     }
@@ -200,10 +183,10 @@ impl<'a> ExpressionContext<'a, '_, '_> {
         left: Handle<ast::Expression<'a>>,
         right: Handle<ast::Expression<'a>>,
     ) -> Result<'a, ()> {
-        if let Some(previous) = self.rightmost_binary_op(left) {
+        if let Some(previous) = self.top_binary_op(left) {
             self.validate_binary_operator_sequence(previous, (op, op_span))?;
         }
-        if let Some(next) = self.leftmost_binary_op(right) {
+        if let Some(next) = self.top_binary_op(right) {
             self.validate_binary_operator_sequence((op, op_span), next)?;
         }
         Ok(())

@@ -102,37 +102,37 @@ void logical()
     bool bitwise_and0_ = (true & false);
     bool4 bitwise_and1_ = ((true).xxxx & (false).xxxx);
     if (!(false)) {
-        local_2 = any(bool3(false, false, false));
+        local_2 = false;
     } else {
         local_2 = true;
     }
-    bool _e31 = local_2;
-    bool short_circuit_5_ = !(_e31);
-    const bool _e33 = p();
-    if (!(_e33)) {
-        const bool _e37 = q();
-        local_3 = _e37;
+    bool _e27 = local_2;
+    bool short_circuit_5_ = !(_e27);
+    const bool _e29 = p();
+    if (!(_e29)) {
+        const bool _e33 = q();
+        local_3 = _e33;
     } else {
         local_3 = true;
     }
-    bool _e39 = local_3;
-    if (_e39) {
-        const bool _e42 = r();
-        if (!(_e42)) {
-            const bool _e46 = s();
-            local_5 = _e46;
+    bool _e35 = local_3;
+    if (_e35) {
+        const bool _e38 = r();
+        if (!(_e38)) {
+            const bool _e42 = s();
+            local_5 = _e42;
         } else {
             local_5 = true;
         }
-        bool _e48 = local_5;
-        local_4 = _e48;
+        bool _e44 = local_5;
+        local_4 = _e44;
     } else {
         local_4 = false;
     }
     bool short_circuit_6_ = local_4;
     if (false) {
-        const bool _e54 = q();
-        local_6 = _e54;
+        const bool _e50 = q();
+        local_6 = _e50;
     } else {
         local_6 = true;
     }

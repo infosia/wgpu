@@ -566,6 +566,7 @@ fn binary_expression_precedence_requires_parentheses() {
         "fn f(a: u32, b: u32, c: u32) { let r = a | b & c; }",
         "fn f(a: u32, b: u32, c: u32) { let r = a == b != c; }",
         "fn f(a: u32, b: u32, c: u32) { let r = a < b < c; }",
+        "fn f(a: u32, b: u32, c: u32) { let r = a < b * c < c; }",
         "fn f(a: bool, b: bool, c: bool) { let r = a && b || c; }",
         "fn f(a: bool, b: bool, c: bool) { let r = a || b && c; }",
     ] {
@@ -588,6 +589,34 @@ fn logical(a: u32, b: u32, c: bool, x: bool, y: bool, z: bool) {
     let r = (x && y) || z;
     let s = x && y && z;
     let t = x || y || z;
+}
+
+fn cmp(a: f32, b: f32) -> bool {
+    let p = a >= b * 2.0 || b >= a * 2.0;
+    let q = a <= b / 2.0 && b <= a / 2.0;
+    let r = a + b * 2.0 < b;
+    return p && q && r;
+}
+
+fn short_circuit_int(a: i32, b: i32) -> bool {
+    let p = a <= 64 / 2 && b <= 64 / 2;
+    let q = a >= 64 / 2 || b >= 64 / 2;
+    return p && q;
+}
+
+fn short_circuit_mixed(a: i32, b: i32, c: f32, d: f32) -> bool {
+    let p = a <= 64 / 2 && b <= 64 / 2;
+    let q = c >= 0.5 * 64 || d >= 0.5 * 64;
+    let r = a == 1 && (1 < 2);
+    return p && q && r;
+}
+
+fn short_circuit_sqrt(x: bool) -> bool {
+    return x || (sqrt(-1.0) != 0.0);
+}
+
+fn short_circuit_div_by_zero(x: bool) -> bool {
+    return x || (1.0 / 0.0 > 0.0);
 }
 "#,
     );

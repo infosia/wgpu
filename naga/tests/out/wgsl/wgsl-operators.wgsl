@@ -88,37 +88,37 @@ fn logical() {
     let bitwise_and0_ = (true & false);
     let bitwise_and1_ = (vec4(true) & vec4(false));
     if !(false) {
-        local_2 = any(vec3<bool>(false, false, false));
+        local_2 = false;
     } else {
         local_2 = true;
     }
-    let _e31 = local_2;
-    let short_circuit_5_ = !(_e31);
-    let _e33 = p();
-    if !(_e33) {
-        let _e37 = q();
-        local_3 = _e37;
+    let _e27 = local_2;
+    let short_circuit_5_ = !(_e27);
+    let _e29 = p();
+    if !(_e29) {
+        let _e33 = q();
+        local_3 = _e33;
     } else {
         local_3 = true;
     }
-    let _e39 = local_3;
-    if _e39 {
-        let _e42 = r();
-        if !(_e42) {
-            let _e46 = s();
-            local_5 = _e46;
+    let _e35 = local_3;
+    if _e35 {
+        let _e38 = r();
+        if !(_e38) {
+            let _e42 = s();
+            local_5 = _e42;
         } else {
             local_5 = true;
         }
-        let _e48 = local_5;
-        local_4 = _e48;
+        let _e44 = local_5;
+        local_4 = _e44;
     } else {
         local_4 = false;
     }
     let short_circuit_6_ = local_4;
     if false {
-        let _e54 = q();
-        local_6 = _e54;
+        let _e50 = q();
+        local_6 = _e50;
     } else {
         local_6 = true;
     }
